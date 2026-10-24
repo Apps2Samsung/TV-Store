@@ -27,10 +27,10 @@ Developer Mode's Host PC IP is set to the TV's own address.
 | SDB client: connect, push, `vd_appinstall` | done, proven against a fake sdbd (`node test/run.js`) |
 | Catalog UI from `resolved.json` | done |
 | Service control plane (`/ping`, `/catalog`, `/install`) | done, smoke-tested |
-| On-TV package signing | **in progress** — full W3C XML-DSig (SHA-512 digests, exclusive-c14n + c14n11, RSA-SHA512, embedded cert chain), ported from TizenSdb.Core and verified against its output before shipping |
-| Certificate hand-over from a head | to do (a head gives the signing cert once, like the debug agent) |
+| On-TV package signing | **done** — full W3C XML-DSig ported to Node (`service/signer.js`), output **byte-for-byte identical** to TizenSdb.Core's C# signer on the same input/keys (verified during the port); self-contained test in `test/sign.test.js` |
+| Certificate hand-over from a head | endpoint ready (`POST /cert` takes author/distributor key+cert as **PEM**); a head still needs to call it (it holds the decrypted material) |
 
-Until the signer lands, Install downloads and prepares the package, then reports that signing isn't ready.
+Install now downloads, signs (once a head has handed over the certificate via `POST /cert`), pushes and runs `vd_appinstall`. Without a certificate yet, it reports that cleanly. The one thing not exercised off-TV is the final `vd_appinstall` on real hardware.
 
 ## Build
 A `.wgt` is just a zip of `tizen-app/` with `config.xml` at the root (no Tizen Studio needed):

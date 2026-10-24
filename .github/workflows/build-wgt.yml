@@ -14,11 +14,13 @@ jobs:
           node-version: '20'
       - name: Syntax-check the service and UI
         run: |
-          for f in tizen-app/service/sdb.js tizen-app/service/index.js tizen-app/service/signer.js tizen-app/js/app.js test/fake-sdbd.js test/run.js; do
+          for f in tizen-app/service/sdb.js tizen-app/service/zip.js tizen-app/service/index.js tizen-app/service/signer.js tizen-app/js/app.js test/fake-sdbd.js test/run.js test/sign.test.js; do
             node --check "$f"
           done
       - name: End-to-end sdb transport test (fake sdbd)
         run: node test/run.js
+      - name: Signer test (valid signed package)
+        run: node test/sign.test.js
       - name: Build the .wgt
         run: scripts/build-wgt.sh
       - uses: actions/upload-artifact@v4

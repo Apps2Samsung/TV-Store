@@ -1,21 +1,98 @@
-/* Tizen .wgt signer — the remaining gate for native installs (#844).
+/* Tizen .wgt signer, ported from TizenSdb.Core TizenWgtSigner and verified byte-for-byte against its
+ * output (test/sign.test.js). Produces author-signature.xml + signature1.xml: W3C XML Signature with a
+ * SHA-512 digest per package file, a SignedProperties object digested under c14n11, SignedInfo signed
+ * under exclusive-c14n with RSA-SHA512, and the signing cert embedded in KeyInfo.
  *
- * sdbd installs only a package whose author-signature.xml + signature1.xml validate and whose
- * distributor signature covers THIS TV's DUID. The desktop/phone/CLI do this in C#
- * (TizenSdb.Core TizenWgtSigner): full W3C XML Signature — SHA-512 digests over every package file,
- * exclusive-c14n over SignedInfo, c14n11 over the SignedProperties object, RSA-SHA512, with the
- * author/distributor cert chain embedded in KeyInfo.
- *
- * Porting that to the TV's Node needs a byte-exact canonicalizer; it is being built and verified
- * against the C# signer's output before it ships (no retail TV in the loop to fail silently). Until
- * then this throws, and the install flow surfaces it rather than pushing a package the TV will reject.
+ * Certs arrive as PEM (key + cert) from a head, not as a .p12: Node has no PKCS#12 parser and the TV's
+ * Node is old, so the head (which already holds the decrypted material) hands over PEM. The canonical
+ * byte sequences here are the exact ones C#'s canonicalizers produce — proven equal, not reimplemented
+ * as a general c14n — so the output installs identically.
  */
 'use strict';
-function NotImplemented() {
-    var e = new Error('On-TV signing is not implemented yet (#844). The package was prepared but not signed, so the install was not attempted.');
-    e.code = 'SIGNER_NOT_READY';
-    return e;
+var crypto = require('crypto');
+var zip = require('./zip.js');
+
+var DSIG = 'http://www.w3.org/2000/09/xmldsig#';
+var SHA512 = 'http://www.w3.org/2001/04/xmlenc#sha512';
+var EXC_C14N = 'http://www.w3.org/2001/10/xml-exc-c14n#';
+var C14N11 = 'http://www.w3.org/2006/12/xml-c14n11';
+var RSA_SHA512 = 'http://www.w3.org/2001/04/xmldsig-more#rsa-sha512';
+
+function sha512b64(buf) { return crypto.createHash('sha512').update(buf).digest('base64'); }
+function wrap76(s) { var out = []; for (var i = 0; i < s.length; i += 76) out.push(s.slice(i, i + 76)); return out.join('\n'); }
+function pemToDerB64(certPem) { return certPem.replace(/-----BEGIN CERTIFICATE-----/, '').replace(/-----END CERTIFICATE-----/, '').replace(/\s+/g, ''); }
+
+// The #prop SignatureProperties object, in c14n11 canonical form (for the #prop digest) — proven to
+// match C#. targetId = "AuthorSignature" | "DistributorSignature"; role = "author" | "distributor".
+function propCanonical(targetId, role) {
+    return '<Object xmlns="' + DSIG + '" Id="prop"><SignatureProperties xmlns:dsp="http://www.w3.org/2009/xmldsig-properties">'
+        + '<SignatureProperty Id="profile" Target="#' + targetId + '"><dsp:Profile URI="http://www.w3.org/ns/widgets-digsig#profile"></dsp:Profile></SignatureProperty>'
+        + '<SignatureProperty Id="role" Target="#' + targetId + '"><dsp:Role URI="http://www.w3.org/ns/widgets-digsig#role-' + role + '"></dsp:Role></SignatureProperty>'
+        + '<SignatureProperty Id="identifier" Target="#' + targetId + '"><dsp:Identifier></dsp:Identifier></SignatureProperty>'
+        + '</SignatureProperties></Object>';
 }
-// sign(wgtBuffer, certs) -> Buffer (signed wgt). certs = { authorP12, distributorP12, password } bytes.
-function sign(wgtBuffer, certs) { throw NotImplemented(); }
-module.exports = { sign: sign, ready: false };
+// The object as STORED in the signature file: it inherits the default xmldsig namespace from
+// <Signature>, so (unlike the canonical form used for the digest) it carries no xmlns on <Object>.
+function propStored(targetId, role) { return propCanonical(targetId, role).replace(' xmlns="' + DSIG + '"', ''); }
+
+// A <Reference> as it appears in SignedInfo (both canonical and stored forms are identical here).
+function reference(uri, digestB64, withTransform) {
+    var t = withTransform ? '<Transforms><Transform Algorithm="' + C14N11 + '"></Transform></Transforms>' : '';
+    var tStored = withTransform ? '<Transforms><Transform Algorithm="' + C14N11 + '" /></Transforms>' : '';
+    return { canon: '<Reference URI="' + uri + '">' + t + '<DigestMethod Algorithm="' + SHA512 + '"></DigestMethod><DigestValue>' + digestB64 + '</DigestValue></Reference>',
+             stored: '<Reference URI="' + uri + '">' + tStored + '<DigestMethod Algorithm="' + SHA512 + '" /><DigestValue>' + digestB64 + '</DigestValue></Reference>' };
+}
+
+// Build one signature file (author or distributor). refs: [{uri,digest,withTransform}]. Returns Buffer.
+function buildSignature(which, refs, propDigestB64, keyPem, certPem) {
+    var id = which === 'author' ? 'AuthorSignature' : 'DistributorSignature';
+    var role = which === 'author' ? 'author' : 'distributor';
+    var refObjs = refs.map(function (r) { return reference(r.uri, r.digest, r.withTransform); });
+    var propRef = reference('#prop', propDigestB64, true);
+
+    // Canonical SignedInfo (exclusive-c14n: namespace first, explicit close tags) — this is what we sign.
+    var siCanon = '<SignedInfo xmlns="' + DSIG + '">'
+        + '<CanonicalizationMethod Algorithm="' + EXC_C14N + '"></CanonicalizationMethod>'
+        + '<SignatureMethod Algorithm="' + RSA_SHA512 + '"></SignatureMethod>'
+        + refObjs.map(function (r) { return r.canon; }).join('') + propRef.canon + '</SignedInfo>';
+    var sigVal = crypto.sign('RSA-SHA512', Buffer.from(siCanon, 'utf8'), crypto.createPrivateKey(keyPem)).toString('base64');
+
+    // Stored SignedInfo (self-closed empties, no xmlns on SignedInfo — it inherits from Signature).
+    var siStored = '<SignedInfo>'
+        + '<CanonicalizationMethod Algorithm="' + EXC_C14N + '" />'
+        + '<SignatureMethod Algorithm="' + RSA_SHA512 + '" />'
+        + refObjs.map(function (r) { return r.stored; }).join('') + propRef.stored + '</SignedInfo>';
+    var certB64 = '\n' + wrap76(pemToDerB64(certPem)) + '\n';
+    var xml = '<Signature Id="' + id + '" xmlns="' + DSIG + '">'
+        + siStored
+        + '<SignatureValue>' + sigVal + '</SignatureValue>'
+        + '<KeyInfo><X509Data><X509Certificate>' + certB64 + '</X509Certificate></X509Data></KeyInfo>'
+        + propStored(id, role) + '</Signature>';
+    return Buffer.from(xml, 'utf8');
+}
+
+// certs = { authorKeyPem, authorCertPem, distributorKeyPem, distributorCertPem }
+function sign(wgtBuffer, certs) {
+    if (!certs || !certs.authorKeyPem || !certs.distributorKeyPem) { var e = new Error('No signing certificate available on this TV yet (#844 cert hand-over).'); e.code = 'NO_CERT'; throw e; }
+    var entries = zip.readEntries(wgtBuffer).filter(function (e) {
+        return !e.dir && e.name !== 'author-signature.xml' && e.name !== 'signature1.xml';
+    });
+
+    // author-signature.xml: references every package file + #prop
+    var authorRefs = entries.map(function (e) { return { uri: e.name, digest: sha512b64(e.data), withTransform: false }; });
+    var authorProp = sha512b64(Buffer.from(propCanonical('AuthorSignature', 'author'), 'utf8'));
+    var authorXml = buildSignature('author', authorRefs, authorProp, certs.authorKeyPem, certs.authorCertPem);
+
+    // signature1.xml: references author-signature.xml (its stored bytes) + every package file + #prop
+    var distRefs = [{ uri: 'author-signature.xml', digest: sha512b64(authorXml), withTransform: false }]
+        .concat(entries.map(function (e) { return { uri: e.name, digest: sha512b64(e.data), withTransform: false }; }));
+    var distProp = sha512b64(Buffer.from(propCanonical('DistributorSignature', 'distributor'), 'utf8'));
+    var distXml = buildSignature('distributor', distRefs, distProp, certs.distributorKeyPem, certs.distributorCertPem);
+
+    // Repackage: both signatures first, then the files (STORED).
+    var out = [{ name: 'author-signature.xml', data: authorXml }, { name: 'signature1.xml', data: distXml }]
+        .concat(entries.map(function (e) { return { name: e.name, data: e.data }; }));
+    return zip.write(out);
+}
+
+module.exports = { sign: sign, ready: true };

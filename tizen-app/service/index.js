@@ -17,6 +17,8 @@ var PORT = 8077;
 var CATALOG_URL = 'https://apps2samsung.com/catalog/resolved.json';
 var STAGING = '/home/owner/share/tmp/sdk_tools';   // where sdbd accepts a pushed .wgt
 var LOGS = [];
+var CERT_FILE = (process.env.HOME || '/tmp') + '/.a2s-tvstore-certs.json';
+var CERTS = null;
 function log(m) { var l = new Date().toISOString() + ' ' + m; LOGS.push(l); if (LOGS.length > 300) LOGS.shift(); try { console.log(l); } catch (e) {} }
 
 // This TV's own LAN IPv4 — the address sdbd accepts a connection on (phase 0: not loopback).
@@ -73,15 +75,27 @@ function install(entry, cb) {
     });
 }
 
-// The signing certificate a head hands over once (see #844). Stored in the app's data dir.
-function loadCerts() { return null; /* wired when the cert hand-over + signer land */ }
+// The signing certificate a head hands over once (see #844): author/distributor key+cert as PEM
+// (not a .p12 — Node has no PKCS#12 parser). Kept in memory and persisted best-effort.
+function loadCerts() {
+    if (CERTS) return CERTS;
+    try { CERTS = JSON.parse(require('fs').readFileSync(CERT_FILE, 'utf8')); } catch (e) { CERTS = null; }
+    return CERTS;
+}
+function haveCerts() { var c = loadCerts(); return !!(c && c.authorKeyPem && c.distributorKeyPem); }
 
 http.createServer(function (req, res) {
     if (req.method === 'OPTIONS') { cors(res, 204, 'text/plain'); return res.end(); }
     var path = url.parse(req.url).pathname;
-    if (path === '/ping') return json(res, 200, { ok: true, service: 'tv-store', ownIp: ownIp(), signerReady: signer.ready });
+    if (path === '/ping') return json(res, 200, { ok: true, service: 'tv-store', ownIp: ownIp(), signerReady: signer.ready, certReady: haveCerts() });
     if (path === '/logs') return json(res, 200, { logs: LOGS });
     if (path === '/catalog') return get(CATALOG_URL, function (err, buf) { if (err) return json(res, 502, { ok: false, error: err.message }); cors(res, 200, 'application/json'); res.end(buf); });
+    if (path === '/cert' && req.method === 'POST') return body(req, function (err, b) {
+        if (err || !b || !b.authorKeyPem || !b.authorCertPem || !b.distributorKeyPem || !b.distributorCertPem)
+            return json(res, 400, { ok: false, error: 'need { authorKeyPem, authorCertPem, distributorKeyPem, distributorCertPem }' });
+        CERTS = b; try { require('fs').writeFileSync(CERT_FILE, JSON.stringify(b)); } catch (e) {}
+        log('cert: received signing certificate from a head'); json(res, 200, { ok: true });
+    });
     if (path === '/install' && req.method === 'POST') return body(req, function (err, b) {
         if (err || !b || !b.url) return json(res, 400, { ok: false, error: 'need { url, file, appId }' });
         install(b, function (err, r) { if (err) return json(res, 200, { ok: false, error: err.message, code: err.code || null }); json(res, 200, { ok: true, result: r }); });
