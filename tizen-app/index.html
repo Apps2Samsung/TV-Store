@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1920, initial-scale=1">
+<title>Apps2Samsung TV-Store</title>
+<style>
+  html,body{margin:0;height:100%;background:#0e1116;color:#e6edf3;font-family:Tizen,Arial,sans-serif;overflow:hidden}
+  .top{padding:26px 48px 14px}
+  h1{font-size:30px;margin:0}
+  .sub{color:#8b949e;font-size:16px;margin-top:4px}
+  .main{display:flex;height:calc(100% - 96px)}
+  .list{width:46%;overflow-y:auto;padding:0 10px 40px 48px}
+  .detail{flex:1;padding:24px 48px;overflow-y:auto;border-left:1px solid #21262d}
+  .cat{color:#8b949e;font-size:14px;margin:18px 0 6px;text-transform:uppercase;letter-spacing:.06em}
+  .row{padding:13px 16px;border-radius:10px;font-size:19px;cursor:pointer;outline:none}
+  .row:focus,.row.sel{background:#1f2630}
+  .row .meta{color:#8b949e;font-size:14px;margin-top:2px}
+  .detail h2{font-size:26px;margin:0 0 6px}
+  .desc{color:#c9d1d9;font-size:17px;line-height:1.5;margin:10px 0 18px}
+  .pill{display:inline-block;background:#1f2630;color:#8b949e;border-radius:12px;padding:3px 10px;font-size:13px;margin-right:6px}
+  button{font-size:19px;padding:14px 26px;border:0;border-radius:10px;background:#238636;color:#fff;cursor:pointer;margin-top:14px}
+  button:focus{outline:3px solid #2ea043}
+  button:disabled{background:#30363d;color:#8b949e}
+  .status{margin-top:16px;font-size:16px;white-space:pre-wrap}
+  .err{color:#f85149}.ok{color:#3fb950}.warn{color:#d29922}
+</style>
+</head>
+<body>
+<div class="top">
+  <h1>Apps2Samsung &middot; TV-Store</h1>
+  <div class="sub" id="sub">Loading the catalog&hellip;</div>
+</div>
+<div class="main">
+  <div class="list" id="list"></div>
+  <div class="detail" id="detail"><div class="sub">Pick an app on the left.</div></div>
+</div>
+<script src="js/app.js"></script>
+</body>
+</html>
