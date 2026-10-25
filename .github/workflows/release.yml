@@ -1,0 +1,32 @@
+name: Release .wgt
+# A tag v* becomes a GitHub release with TV-Store.wgt as its one asset: what the community catalog
+# (tizen-community-packages, source "release") and the heads pull. The package is unsigned; the
+# installing head signs it with the user's certificate, as with every package.
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Tests
+        run: |
+          node test/run.js
+          node test/sign.test.js
+      - name: Version in config.xml must match the tag
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver=$(sed -n 's/.*<widget[^>]*version="\([^"]*\)".*/\1/p' tizen-app/config.xml | head -1)
+          [ "$tag" = "$ver" ] || { echo "tag v$tag but config.xml says $ver"; exit 1; }
+      - name: Build the .wgt
+        run: scripts/build-wgt.sh
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/TV-Store.wgt --title "TV-Store $GITHUB_REF_NAME" --generate-notes
