@@ -1,53 +1,72 @@
 # Apps2Samsung TV-Store
 
-Install Apps2Samsung catalog apps **natively, from the TV itself** — no PC or phone in the loop after
-first setup. A Tizen web app with a background Node service that acts as the TV's own "host PC":
-it connects to the set's own `sdbd`, pushes a package and runs `0 vd_appinstall`, so the app lands
-in the Apps row like one installed from a laptop. Part of [Apps2Samsung#844](https://github.com/Apps2Samsung/Apps2Samsung/issues/844).
+The Apps2Samsung catalog on the TV itself. Browse with the remote, press OK, and the app installs
+as a real Tizen package, straight into the Apps row. No PC or phone in the loop after a one-time
+setup.
 
-![TV-Store on a 1080p screen](docs/tv-store.png)
+![Home](docs/design/C1-home.png)
 
-## Why this works (and why it's the only way)
-A web app our certificates sign can't call `tizen.package.install` (platform privilege), and Samsung
-won't issue a platform certificate to a normal account (`svdca` returns code 203 — tested). The one
-installer our Public/Partner certificates reach is `sdbd` on port 26101. A `.wgt` sandbox can't open a
-raw socket, but a `<tizen:service>` Node component can (proven on retail by the tessel SMB proxy).
-Phase-0 probe result: **`sdbd` accepts a connection from the TV's own LAN IP, with no key auth**, once
-Developer Mode's Host PC IP is set to the TV's own address.
+## How it looks
+
+The screens below are the design the app is built towards. Dark glass, the Apps2Samsung category
+colours, big tiles for a couch.
+
+| | |
+|---|---|
+| ![App sheet](docs/design/C2-app-sheet.png) The app, its variants, one button. | ![Installing](docs/design/C3-installing.png) Download, sign, install: four steps you can watch or walk away from. |
+| ![Done](docs/design/C4-done.png) Done, with Open right there. | ![On the TV](docs/design/C6-on-the-tv.png) Your apps, updates first. |
+
+![First run](docs/design/C5-first-run.png)
+
+The first time, the TV asks to be armed: open the Toolbox in Apps2Samsung on your phone or PC and
+press **Arm TV-Store**. That hands over your signing certificate once; from then on the TV signs
+and installs on its own.
+
+## How it works
+
+A Samsung TV only installs sideloaded packages through its developer connection (`sdbd`), the
+same door Apps2Samsung uses from a PC. TV-Store is a web app with a small background service that
+acts as the TV's own PC:
+
+1. downloads the package from the catalog,
+2. signs it on the TV with your certificate (the same signatures Apps2Samsung makes),
+3. pushes it to the TV's own `sdbd` and installs it.
+
+For that, Developer Mode's **Host PC IP** on the TV must be set to the TV's own address.
+
+Some catalog apps need settings written into the package before they install (a server address,
+an API key). The TV cannot do that yet, so those are shown greyed with a "Phone or PC" badge and
+install from Apps2Samsung on a phone or PC instead.
 
 ## Layout
-- `tizen-app/` — the package (`config.xml`, `index.html`, `js/app.js`, `icon.png`, `service/`).
-- `tizen-app/service/sdb.js` — the SDB client (CNXN, OPEN/OKAY/WRTE/CLSE, `shell:`, `sync:` push), ported from TizenSdb.Core.
-- `tizen-app/service/index.js` — loopback HTTP control plane + the install pipeline (download → sign → push → `vd_appinstall`).
-- `tizen-app/service/signer.js` — the .wgt signer (XML-DSig, byte-exact with TizenSdb.Core's C# signer).
-- `tizen-app/js/app.js` — the UI, and `window.A2SStore` (`status()`, `setCertificate(certs)`): what a head calls over the inspector.
-- `test/` — a fake `sdbd` and an end-to-end test of connect + push + install over the real `sdb.js`.
 
-## Status
-| Piece | State |
-|---|---|
-| sdbd accepts a TV-side connection | proven on retail (phase 0) |
-| SDB client: connect, push, `vd_appinstall` | done, proven against a fake sdbd (`node test/run.js`) |
-| Catalog UI from `resolved.json` | done, in the Apps2Samsung v3 look: the bundle's embedded catalog gives names, descriptions, categories, groups and variants; manifest providers (Jellyfin builds and such) are one app each with the release's files as variants; installed apps and updates are read off the platform; install progress from the service log; Open after install. Adult packages are left out (no 18+ toggle on the TV); packages a head has to rewrite before they install (`user_settings`, TVapp / ImmiTV / Camera PiP injectors) are listed greyed with the reason |
-| Service control plane (`/ping`, `/catalog`, `/install`) | done, smoke-tested |
-| On-TV package signing | **done** — full W3C XML-DSig ported to Node (`service/signer.js`), output **byte-for-byte identical** to TizenSdb.Core's C# signer on the same input/keys (verified during the port); self-contained test in `test/sign.test.js` |
-| Certificate hand-over from a head | done on this side: the page exposes `window.A2SStore.setCertificate(certs)` for a head to call over the web inspector (the same route the heads drive the debug agent), which posts to the service's `POST /cert`; cert PEMs may carry the chain (leaf + intermediates), embedded in KeyInfo like the C# signer does. The heads' "Arm TV-Store" button is Apps2Samsung#844 |
+- `tizen-app/` – the package: `config.xml`, `index.html`, `js/app.js`, `icon.png`, `service/`
+- `tizen-app/service/index.js` – the service: catalog, certificate, install pipeline
+- `tizen-app/service/sdb.js` – the SDB client (connect, push, install)
+- `tizen-app/service/signer.js` – the package signer
+- `tizen-app/js/app.js` – the UI, and `window.A2SStore`, which Apps2Samsung calls to arm the TV
+- `test/` – a fake `sdbd` plus signer and transport tests
+- `docs/design/` – the screens above
 
-Install now downloads, signs (once a head has armed this TV via `A2SStore.setCertificate`), pushes and runs `vd_appinstall`. Without a certificate yet, the sub line says how to arm it and Install reports it cleanly. The one thing not exercised off-TV is the final `vd_appinstall` on real hardware.
+## Build, test, release
 
-## Release
-Tag `vX.Y.Z` (matching `version` in `tizen-app/config.xml`); `release.yml` runs the tests, builds and publishes a GitHub release with `TV-Store.wgt` as its one asset. That release is what the community catalog entry points at.
+A `.wgt` is a zip of `tizen-app/`; no Tizen Studio needed.
 
-## Build
-A `.wgt` is just a zip of `tizen-app/` with `config.xml` at the root (no Tizen Studio needed):
 ```sh
 scripts/build-wgt.sh        # -> dist/TV-Store.wgt
+node test/run.js            # connect + push + install against a fake sdbd
+node test/sign.test.js      # the signer, with a certificate chain
 ```
-Install it with Apps2Samsung ("Your own package", or `apps2samsung-cli install dist/TV-Store.wgt --tv <ip>`),
-which signs it with your certificate as it installs. On the TV, set Developer Mode's Host PC IP to the
-TV's own IP so its sdbd accepts the service's connection.
 
-## Test
-```sh
-node test/run.js            # connect + 200 KB push (verified intact) + vd_appinstall, against a fake sdbd
-```
+Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching the version in
+`config.xml`) publishes a GitHub release with `TV-Store.wgt` as its one asset.
+
+## Status
+
+| Piece | State |
+|---|---|
+| Install through the TV's own `sdbd` | proven on a retail set |
+| Signing on the TV | done, identical output to the Apps2Samsung signer |
+| Arming from Apps2Samsung (phone, PC, CLI) | done |
+| The screens above | designed, being built |
+| First real install from the TV | next |
