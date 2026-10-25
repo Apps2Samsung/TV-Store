@@ -52,6 +52,21 @@ function verify(xml, certPem) {
 if (!verify(authorXml, certs.authorCertPem)) fail('author SignatureValue does not validate');
 if (!verify(distXml, certs.distributorCertPem)) fail('distributor SignatureValue does not validate');
 
+// 5) A cert PEM holding a chain (leaf first, then an intermediate) puts one <X509Certificate> per
+//    cert into KeyInfo, leaf first, and the signature still validates with the leaf's key. The
+//    fixture chain is fake (two unrelated certs); the signer embeds what it is handed, as the C# one.
+var chainCerts = { authorKeyPem: certs.authorKeyPem, authorCertPem: certs.authorCertPem,
+    distributorKeyPem: certs.distributorKeyPem, distributorCertPem: certs.distributorCertPem + '\n' + certs.authorCertPem };
+var chainEntries = zip.readEntries(signer.sign(pkg, chainCerts));
+var chainXml = chainEntries[1].data.toString('utf8');
+var x509s = chainXml.match(/<X509Certificate>[\s\S]*?<\/X509Certificate>/g) || [];
+if (x509s.length !== 2) fail('expected 2 X509Certificate elements for a 2-cert chain, got ' + x509s.length);
+var leafB64 = certs.distributorCertPem.replace(/-----[A-Z ]+-----/g, '').replace(/\s+/g, '');
+if (x509s[0].replace(/\s+/g, '').indexOf(leafB64) < 0) fail('the leaf is not the first X509Certificate');
+if (!verify(chainXml, certs.distributorCertPem)) fail('distributor SignatureValue with a chain does not validate');
+var singleXml = get('signature1.xml').toString('utf8');
+if ((singleXml.match(/<X509Certificate>/g) || []).length !== 1) fail('a single cert must give exactly one X509Certificate');
+
 console.log('PASS: signer produces a valid, self-consistent signed package');
 console.log('  entries:', entries.map(function (e) { return e.name; }).join(', '));
 process.exit(0);

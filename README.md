@@ -17,7 +17,8 @@ Developer Mode's Host PC IP is set to the TV's own address.
 - `tizen-app/` — the package (`config.xml`, `index.html`, `js/app.js`, `icon.png`, `service/`).
 - `tizen-app/service/sdb.js` — the SDB client (CNXN, OPEN/OKAY/WRTE/CLSE, `shell:`, `sync:` push), ported from TizenSdb.Core.
 - `tizen-app/service/index.js` — loopback HTTP control plane + the install pipeline (download → sign → push → `vd_appinstall`).
-- `tizen-app/service/signer.js` — the .wgt signer. **Not finished** (see Status); the install flow surfaces that rather than pushing an unsigned package.
+- `tizen-app/service/signer.js` — the .wgt signer (XML-DSig, byte-exact with TizenSdb.Core's C# signer).
+- `tizen-app/js/app.js` — the UI, and `window.A2SStore` (`status()`, `setCertificate(certs)`): what a head calls over the inspector.
 - `test/` — a fake `sdbd` and an end-to-end test of connect + push + install over the real `sdb.js`.
 
 ## Status
@@ -28,9 +29,9 @@ Developer Mode's Host PC IP is set to the TV's own address.
 | Catalog UI from `resolved.json` | done |
 | Service control plane (`/ping`, `/catalog`, `/install`) | done, smoke-tested |
 | On-TV package signing | **done** — full W3C XML-DSig ported to Node (`service/signer.js`), output **byte-for-byte identical** to TizenSdb.Core's C# signer on the same input/keys (verified during the port); self-contained test in `test/sign.test.js` |
-| Certificate hand-over from a head | endpoint ready (`POST /cert` takes author/distributor key+cert as **PEM**); a head still needs to call it (it holds the decrypted material) |
+| Certificate hand-over from a head | done on this side: the page exposes `window.A2SStore.setCertificate(certs)` for a head to call over the web inspector (the same route the heads drive the debug agent), which posts to the service's `POST /cert`; cert PEMs may carry the chain (leaf + intermediates), embedded in KeyInfo like the C# signer does. The heads' "Arm TV-Store" button is Apps2Samsung#844 |
 
-Install now downloads, signs (once a head has handed over the certificate via `POST /cert`), pushes and runs `vd_appinstall`. Without a certificate yet, it reports that cleanly. The one thing not exercised off-TV is the final `vd_appinstall` on real hardware.
+Install now downloads, signs (once a head has armed this TV via `A2SStore.setCertificate`), pushes and runs `vd_appinstall`. Without a certificate yet, the sub line says how to arm it and Install reports it cleanly. The one thing not exercised off-TV is the final `vd_appinstall` on real hardware.
 
 ## Build
 A `.wgt` is just a zip of `tizen-app/` with `config.xml` at the root (no Tizen Studio needed):

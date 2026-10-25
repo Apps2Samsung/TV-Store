@@ -8,7 +8,7 @@
 
     function xhr(method, path, bodyObj, cb) {
         var r = new XMLHttpRequest(); r.open(method, BASE + path, true); r.timeout = 120000;
-        r.onreadystatechange = function () { if (r.readyState === 4) { if (r.status === 200) { try { cb(null, JSON.parse(r.responseText)); } catch (e) { cb(e); } } else cb(new Error('HTTP ' + r.status)); } };
+        r.onreadystatechange = function () { if (r.readyState === 4) { if (r.status === 200 || r.status === 400) { try { cb(null, JSON.parse(r.responseText)); } catch (e) { cb(e); } } else cb(new Error('HTTP ' + r.status)); } };
         r.onerror = r.ontimeout = function () { cb(new Error('service unreachable')); };
         if (bodyObj) { r.setRequestHeader('Content-Type', 'application/json'); r.send(JSON.stringify(bodyObj)); } else r.send();
     }
@@ -82,9 +82,41 @@
         else if (e.keyCode === 13) { var b = document.getElementById('installBtn'); if (document.activeElement && document.activeElement.className.indexOf('row') >= 0) select(idx); else if (b) b.click(); }
     });
 
+    // What the sub line says about the signing certificate: armed, or how to arm it. The head's
+    // toolbox is the only way in; TV-Store cannot make a certificate on its own (#844, phase 2).
+    function showArmed(ping) {
+        if (ping.certReady) { sub.textContent = 'Ready. Installs are signed on this TV.'; sub.className = 'sub ok'; }
+        else { sub.textContent = 'Not armed yet: open this TV\'s Toolbox in Apps2Samsung (PC, phone or CLI) and press "Arm TV-Store" to hand over the signing certificate.'; sub.className = 'sub warn'; }
+    }
+
+    // The API a head drives over the web inspector, like the debug agent's window.A2S: the page is
+    // the only thing on the TV that can reach the service's loopback port from outside, so the
+    // certificate hand-over (#844 phase 3) comes in here. Every call resolves, never rejects, with
+    // { ok, ... } so the head reads one shape.
+    window.A2SStore = {
+        version: '0.2.0',
+        // The service's /ping: { ok, ownIp, certReady, signerReady } or { ok: false, error }.
+        status: function () {
+            return new Promise(function (resolve) {
+                xhr('GET', '/ping', null, function (err, res) { resolve(err ? { ok: false, error: err.message } : res); });
+            });
+        },
+        // certs = { authorKeyPem, authorCertPem, distributorKeyPem, distributorCertPem } (PEM, cert
+        // PEMs may hold a chain). Stored by the service; the sub line follows at once.
+        setCertificate: function (certs) {
+            return new Promise(function (resolve) {
+                xhr('POST', '/cert', certs, function (err, res) {
+                    if (err) return resolve({ ok: false, error: err.message });
+                    if (res && res.ok) showArmed({ certReady: true });
+                    resolve(res || { ok: false, error: 'no answer from the service' });
+                });
+            });
+        },
+    };
+
     startService(function (err, ping) {
         if (err) { sub.textContent = err.message; sub.className = 'sub err'; return; }
-        sub.textContent = ping.signerReady ? 'Ready.' : 'Catalog ready. On-TV signing is still in development (#844), so Install reports that step.';
+        showArmed(ping);
         xhr('GET', '/catalog', null, function (err, cat) {
             if (err) { sub.textContent = 'Catalog unavailable: ' + err.message; sub.className = 'sub err'; return; }
             apps = flatten(cat); render();

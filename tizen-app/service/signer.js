@@ -3,8 +3,9 @@
  * SHA-512 digest per package file, a SignedProperties object digested under c14n11, SignedInfo signed
  * under exclusive-c14n with RSA-SHA512, and the signing cert embedded in KeyInfo.
  *
- * Certs arrive as PEM (key + cert) from a head, not as a .p12: Node has no PKCS#12 parser and the TV's
- * Node is old, so the head (which already holds the decrypted material) hands over PEM. The canonical
+ * Certs arrive as PEM (key + cert chain) from a head, not as a .p12: Node has no PKCS#12 parser and the
+ * TV's Node is old, so the head (which already holds the decrypted material) hands over PEM. A cert PEM
+ * may hold several blocks (leaf, then intermediates); every one of them goes into KeyInfo, as from a PC. The canonical
  * byte sequences here are the exact ones C#'s canonicalizers produce — proven equal, not reimplemented
  * as a general c14n — so the output installs identically.
  */
@@ -20,7 +21,15 @@ var RSA_SHA512 = 'http://www.w3.org/2001/04/xmldsig-more#rsa-sha512';
 
 function sha512b64(buf) { return crypto.createHash('sha512').update(buf).digest('base64'); }
 function wrap76(s) { var out = []; for (var i = 0; i < s.length; i += 76) out.push(s.slice(i, i + 76)); return out.join('\n'); }
-function pemToDerB64(certPem) { return certPem.replace(/-----BEGIN CERTIFICATE-----/, '').replace(/-----END CERTIFICATE-----/, '').replace(/\s+/g, ''); }
+// The certificates in a PEM string, base64 DER each, in the order they appear. A head sends the
+// chain the C# signer embeds (TizenSdb.Core GetKeyInfoChain): leaf first, then intermediates, never
+// the root, so KeyInfo below comes out the same as a package signed from a PC.
+function pemCerts(certPem) {
+    var out = [], re = /-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----/g, m;
+    while ((m = re.exec(certPem)) !== null) out.push(m[1].replace(/\s+/g, ''));
+    if (!out.length) throw new Error('certificate PEM holds no CERTIFICATE block');
+    return out;
+}
 
 // The #prop SignatureProperties object, in c14n11 canonical form (for the #prop digest) — proven to
 // match C#. targetId = "AuthorSignature" | "DistributorSignature"; role = "author" | "distributor".
@@ -62,11 +71,12 @@ function buildSignature(which, refs, propDigestB64, keyPem, certPem) {
         + '<CanonicalizationMethod Algorithm="' + EXC_C14N + '" />'
         + '<SignatureMethod Algorithm="' + RSA_SHA512 + '" />'
         + refObjs.map(function (r) { return r.stored; }).join('') + propRef.stored + '</SignedInfo>';
-    var certB64 = '\n' + wrap76(pemToDerB64(certPem)) + '\n';
+    // One <X509Certificate> per cert in the chain, each wrapped at 76 with a newline either side.
+    var x509 = pemCerts(certPem).map(function (b64) { return '<X509Certificate>\n' + wrap76(b64) + '\n</X509Certificate>'; }).join('');
     var xml = '<Signature Id="' + id + '" xmlns="' + DSIG + '">'
         + siStored
         + '<SignatureValue>' + sigVal + '</SignatureValue>'
-        + '<KeyInfo><X509Data><X509Certificate>' + certB64 + '</X509Certificate></X509Data></KeyInfo>'
+        + '<KeyInfo><X509Data>' + x509 + '</X509Data></KeyInfo>'
         + propStored(id, role) + '</Signature>';
     return Buffer.from(xml, 'utf8');
 }
