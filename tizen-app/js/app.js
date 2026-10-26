@@ -440,7 +440,7 @@
         if (selected) refreshInstallButton();
     }
     window.A2SStore = {
-        version: '0.3.2',
+        version: '0.3.3',
         status: function () { return new Promise(function (resolve) { xhr('GET', '/ping', null, function (err, res) { resolve(err ? { ok: false, error: err.message } : res); }); }); },
         setCertificate: function (certs) {
             return new Promise(function (resolve) {
