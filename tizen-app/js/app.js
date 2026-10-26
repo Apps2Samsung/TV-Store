@@ -68,11 +68,23 @@
         if (bodyObj) { r.setRequestHeader('Content-Type', 'application/json'); r.send(JSON.stringify(bodyObj)); } else r.send();
     }
 
+    // Launches the service and waits for its /ping. When it never answers, the error says why: the
+    // platform refused the launch (with its reason), or the launch went through but nothing listens.
     function startService(cb) {
-        try { var pkg = tizen.application.getCurrentApplication().appInfo.id.split('.')[0]; tizen.application.launch(pkg + '.sdbservice', function () {}, function () {}); } catch (e) {}
+        var launch = 'pending';
+        try {
+            var pkg = tizen.application.getCurrentApplication().appInfo.id.split('.')[0];
+            tizen.application.launch(pkg + '.sdbservice',
+                function () { launch = 'ok'; },
+                function (e) { launch = 'launch failed (' + e.name + ': ' + e.message + ')'; });
+        } catch (e) { launch = 'launch failed (' + (e.name ? e.name + ': ' + e.message : e) + ')'; }
         var tries = 0; (function poll() { xhr('GET', '/ping', null, function (err, res) {
             if (!err) return cb(null, res);
-            if (++tries > 25) return cb(new Error('service did not start'));
+            if (++tries > 25) {
+                if (launch === 'ok') return cb(new Error('service did not start: launched, but nothing answers on port 8077'));
+                if (launch === 'pending') return cb(new Error('service did not start: the platform never answered the launch'));
+                return cb(new Error('service did not start: ' + launch));
+            }
             setTimeout(poll, 300);
         }); })();
     }
@@ -421,7 +433,7 @@
         if (selected) refreshInstallButton();
     }
     window.A2SStore = {
-        version: '0.3.1',
+        version: '0.3.2',
         status: function () { return new Promise(function (resolve) { xhr('GET', '/ping', null, function (err, res) { resolve(err ? { ok: false, error: err.message } : res); }); }); },
         setCertificate: function (certs) {
             return new Promise(function (resolve) {
