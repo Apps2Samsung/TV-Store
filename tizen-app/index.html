@@ -17,6 +17,10 @@
   .sub{color:#98989F;font-size:19px;margin-top:6px;max-width:1300px}
   .sub.ok{color:#30C46E}.sub.warn{color:#F0A020}.sub.err{color:#FF5C50}
   .count{color:#98989F;font-size:19px;white-space:nowrap}
+  .tright{display:flex;align-items:center;gap:20px}
+  .gear{display:flex;align-items:center;gap:10px;font-size:19px;font-weight:600;color:#F2F2F7;background:rgba(118,118,128,.24);border-radius:999px;padding:10px 20px;outline:none;cursor:pointer}
+  .gear:focus{background:rgba(45,212,191,.18);box-shadow:inset 0 0 0 3px #2DD4BF}
+  .gear svg{width:22px;height:22px}
   .main{display:flex;height:calc(100% - 158px);padding:0 56px}
   .list{width:50%;overflow-y:auto;padding:6px 28px 60px 0}
   .detail{flex:1;overflow-y:auto;padding:18px 0 60px 28px}
@@ -70,6 +74,19 @@
   .log{margin-top:10px;font-size:16px;line-height:1.5;color:#9FB0C6;background:#0D1B2A;border-radius:12px;padding:12px 16px;white-space:pre-wrap;font-family:Menlo,Consolas,monospace;display:none}
   .log.on{display:block}
   .empty{color:#98989F;font-size:20px;padding:40px 10px}
+
+  /* the Settings screen: one row per switch */
+  .opts{background:#2C2C2E;border-radius:14px;overflow:hidden;margin-top:8px}
+  .opt{display:flex;align-items:center;padding:16px 20px;outline:none;cursor:pointer;border-bottom:1px solid rgba(84,84,88,.55)}
+  .opt:last-child{border-bottom:0}
+  .opt:focus{background:rgba(45,212,191,.18);box-shadow:inset 0 0 0 3px #2DD4BF}
+  .ot{flex:1;min-width:0;margin-right:20px}
+  .ont{font-size:21px;font-weight:500}
+  .oh{font-size:17px;color:#98989F;margin-top:4px;line-height:1.4}
+  .sw{width:64px;height:36px;border-radius:999px;background:rgba(118,118,128,.32);position:relative;flex:none}
+  .sw .knob{position:absolute;top:3px;left:3px;width:30px;height:30px;border-radius:50%;background:#F2F2F7}
+  .sw.on{background:#2DD4BF}
+  .sw.on .knob{left:31px}
   .foot{position:absolute;bottom:0;left:0;right:0;padding:12px 56px;color:#98989F;font-size:16px;border-top:1px solid rgba(84,84,88,.55);background:#000}
   .foot b{color:#F2F2F7;font-weight:500}
 </style>
@@ -80,13 +97,16 @@
     <h1>Apps2Samsung <span class="dot">&middot;</span> TV-Store</h1>
     <div class="sub" id="sub">Loading the catalog&hellip;</div>
   </div>
-  <div class="count" id="count"></div>
+  <div class="tright">
+    <div class="count" id="count"></div>
+    <div class="gear" id="gear" tabindex="0"><svg viewBox="0 0 24 24" fill="none" stroke="#F2F2F7" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Settings</div>
+  </div>
 </div>
 <div class="main">
   <div class="list" id="list"></div>
   <div class="detail" id="detail"><div class="empty">Pick an app on the left.</div></div>
 </div>
-<div class="foot"><b>&#9650;&#9660;</b> move &nbsp;&nbsp; <b>&#9664;&#9654;</b> list / app &nbsp;&nbsp; <b>OK</b> select, install &nbsp;&nbsp; <b>RETURN</b> back</div>
+<div class="foot"><b>&#9650;&#9660;</b> move &nbsp;&nbsp; <b>&#9664;&#9654;</b> list / app &nbsp;&nbsp; <b>OK</b> select, install &nbsp;&nbsp; <b>&#9650;</b> at the top: Settings &nbsp;&nbsp; <b>RETURN</b> back</div>
 <script src="js/app.js"></script>
 </body>
 </html>

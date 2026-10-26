@@ -5,14 +5,15 @@
  * The list is built from resolved.json the way the heads build theirs: the community bundle's
  * embedded catalog gives every package a name, description, category, group and variant, a
  * version and ids; the other providers (Jellyfin builds and such) are one app each with the
- * release's files as variants. Three things the TV leaves out or marks, since it cannot do what a
- * head does to a package before it installs:
- *   - adult packages (no 18+ toggle on the TV yet): left out;
- *   - packages that ask for settings before they install (`user_settings`): listed, greyed, with
- *     the reason, until the form exists on the TV;
- *   - packages a head rewrites with its own injectors (TVapp channels, ImmiTV and Camera PiP
- *     server settings): same. Known by file name here, as in the heads' Packaging/ folder; a
- *     catalog flag would be the better home for that list.
+ * release's files as variants. Two kinds of app are filtered by the Settings screen (the gear
+ * above the list), remembered on the TV:
+ *   - adult packages: left out until "Show adult (18+) apps" is on, which asks "I am 18 or older"
+ *     first, as the phone does (#850); listed with an 18+ badge then;
+ *   - packages the TV cannot install by itself (marked "PC / phone"): listed greyed by default, so
+ *     nobody thinks they are missing; "Show apps that need a PC or phone" off hides them. These are
+ *     packages that ask for settings before they install (`user_settings`) and packages a head
+ *     rewrites with its own injectors (TVapp channels, ImmiTV and Camera PiP server settings),
+ *     known by file name here, as in the heads' Packaging/ folder.
  */
 (function () {
     'use strict';
@@ -33,7 +34,30 @@
     var CATEGORY_ORDER = ['media', 'iptv', 'streaming', 'games', 'casting', 'tools', 'other'];
     var HEAD_ONLY = /tvapp|immitv|camerapip|camera-pip/i;   // the heads' injectors, keyed by file name
 
+    var catalogApps = [];      // every app the catalog has, before the Settings filters
     var apps = [], rows = [], idx = 0, selected = null, variantIdx = 0, focusCol = 'list';
+    var gearEl = document.getElementById('gear');
+    gearEl.onfocus = function () { focusCol = 'gear'; };
+    gearEl.onclick = function () { openSettings(); };
+
+    // ---- settings, remembered on the TV ----------------------------------------------------------
+    var SETTINGS_KEY = 'a2s.store.settings';
+    var settings = loadSettings();
+    var confirmingAdult = false;   // the "I am 18 or older" question is showing
+
+    function loadSettings() {
+        var s = { showAdult: false, showNeedsHead: true };
+        try {
+            var saved = JSON.parse(window.localStorage.getItem(SETTINGS_KEY) || '{}');
+            if (typeof saved.showAdult === 'boolean') s.showAdult = saved.showAdult;
+            if (typeof saved.showNeedsHead === 'boolean') s.showNeedsHead = saved.showNeedsHead;
+        } catch (e) {}
+        return s;
+    }
+
+    function saveSettings() {
+        try { window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {}
+    }
     var installed = {};        // packageId -> version, from the platform
     var ready = null;          // the service's /ping
 
@@ -103,7 +127,7 @@
             assets.forEach(function (a) { x.variants.push(variant(null, a.name, a.browser_download_url, a.package_version, a.app_id, a.package_id)); });
         });
 
-        out = out.filter(function (x) { return x.variants.length > 0 && !x.adult; });
+        out = out.filter(function (x) { return x.variants.length > 0; });
         out.forEach(function (x) {
             // An app is "needs a head" when every file of it does.
             var all = x.variants.every(function (v) { return !!v.needsHead; });
@@ -116,6 +140,15 @@
             return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
         });
         return out;
+    }
+
+    // The catalog as the Settings say to show it.
+    function visible(all) {
+        return all.filter(function (x) {
+            if (x.adult && !settings.showAdult) return false;
+            if (x.needsHead && !settings.showNeedsHead) return false;
+            return true;
+        });
     }
 
     // Installed / update state of an app: from the variant whose package id the TV lists.
@@ -163,6 +196,7 @@
             var subline = categoryName(x.category) + (x.variants.length > 1 ? ' \u00b7 ' + x.variants.length + ' variants' : (x.variants[0].version ? ' \u00b7 v' + x.variants[0].version : ''));
             var badges = '';
             if (st.installed) badges += badge(st.update ? 'b-warn' : 'b-ok', st.update ? 'Update' : 'Installed');
+            if (x.adult) badges += badge('b-warn', '18+');
             if (x.needsHead) badges += badge('b-mute', 'PC / phone');
             row.innerHTML = '<div class="tile ' + tileClass(x.category, x.name) + '">' + esc(tileLetter(x.name)) + '</div>'
                 + '<div class="txt"><div class="name">' + esc(x.name) + badges + '</div><div class="meta">' + esc(subline) + '</div></div>'
@@ -171,7 +205,9 @@
             row.onfocus = function () { idx = i; focusCol = 'list'; select(i); };
             card.appendChild(row); rows.push(row);
         });
-        countEl.textContent = apps.length + ' apps';
+        var hidden = catalogApps.length - apps.length;
+        countEl.textContent = apps.length + (apps.length === 1 ? ' app' : ' apps') + (hidden > 0 ? ' \u00b7 ' + hidden + ' hidden' : '');
+        if (!apps.length) listEl.innerHTML = '<div class="empty">No apps to show. Press \u25b2 for Settings.</div>';
     }
 
     function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -188,9 +224,10 @@
         var sl = document.createElement('div'); sl.className = 'subline';
         sl.textContent = categoryName(selected.category) + (selected.variants.length > 1 ? ' \u00b7 ' + selected.variants.length + ' variants' : '');
         sheet.appendChild(sl);
-        if (st.installed) {
+        if (st.installed || selected.adult) {
             var pills = document.createElement('div'); pills.className = 'pills';
-            pills.innerHTML = '<span class="pill ' + (st.update ? 'warn' : 'ok') + '">' + (st.update ? 'Update available' : 'Installed') + (st.version ? ' \u00b7 v' + esc(st.version) : '') + '</span>';
+            if (selected.adult) pills.innerHTML += '<span class="pill warn">Adults only (18+)</span>';
+            if (st.installed) pills.innerHTML += '<span class="pill ' + (st.update ? 'warn' : 'ok') + '">' + (st.update ? 'Update available' : 'Installed') + (st.version ? ' \u00b7 v' + esc(st.version) : '') + '</span>';
             sheet.appendChild(pills);
         }
         var notice = document.createElement('div'); notice.className = 'notice'; notice.id = 'notice'; notice.style.display = 'none'; sheet.appendChild(notice);
@@ -248,6 +285,63 @@
         btn.disabled = false; btn.textContent = label;
     }
 
+    // ---- the Settings screen -------------------------------------------------------------------
+
+    function option(key, title, hint) {
+        var on = settings[key];
+        var el = document.createElement('div'); el.className = 'opt'; el.tabIndex = 0; el.setAttribute('data-key', key);
+        el.innerHTML = '<div class="ot"><div class="ont">' + esc(title) + '</div><div class="oh">' + esc(hint) + '</div></div>'
+            + '<span class="sw' + (on ? ' on' : '') + '"><span class="knob"></span></span>';
+        el.onclick = function () { toggle(key); };
+        el.onfocus = function () { focusCol = 'detail'; };
+        return el;
+    }
+
+    function openSettings(focusKey) {
+        selected = null;
+        rows.forEach(function (r, j) { r.className = 'row' + (apps[j].needsHead ? ' dim' : ''); });
+        detailEl.innerHTML = '';
+        var sheet = document.createElement('div'); sheet.className = 'sheet'; detailEl.appendChild(sheet);
+        var h = document.createElement('h2'); h.textContent = 'Settings'; sheet.appendChild(h);
+        var list = document.createElement('div'); list.className = 'opts'; sheet.appendChild(list);
+        list.appendChild(option('showAdult', 'Show adult (18+) apps', 'Apps marked adult-only stay out of the list until this is on.'));
+        list.appendChild(option('showNeedsHead', 'Show apps that need a PC or phone',
+            'Some apps need Apps2Samsung on a PC or phone to install. Turn this off to keep them out of the list.'));
+
+        if (confirmingAdult) {
+            var notice = document.createElement('div'); notice.className = 'notice';
+            notice.textContent = 'These apps are meant for adults only. Turn them on only if you are 18 or older.';
+            sheet.appendChild(notice);
+            var btns = document.createElement('div'); btns.className = 'btns';
+            var yes = document.createElement('button'); yes.id = 'adultYes'; yes.textContent = 'I am 18 or older';
+            yes.onclick = function () { confirmingAdult = false; setSetting('showAdult', true); };
+            var no = document.createElement('button'); no.className = 'alt'; no.textContent = 'Cancel';
+            no.onclick = function () { confirmingAdult = false; openSettings('showAdult'); };
+            yes.onfocus = no.onfocus = function () { focusCol = 'detail'; };
+            btns.appendChild(yes); btns.appendChild(no); sheet.appendChild(btns);
+        }
+
+        var note = document.createElement('div'); note.className = 'subline'; note.style.marginTop = '18px';
+        note.textContent = 'Remembered on this TV.';
+        sheet.appendChild(note);
+
+        focusCol = 'detail';
+        var target = confirmingAdult ? document.getElementById('adultYes') : detailEl.querySelector('.opt[data-key="' + (focusKey || 'showAdult') + '"]');
+        if (target) target.focus();
+    }
+
+    function toggle(key) {
+        // Turning adult apps on asks first; turning anything off does not.
+        if (key === 'showAdult' && !settings.showAdult) { confirmingAdult = true; openSettings(key); return; }
+        setSetting(key, !settings[key]);
+    }
+
+    function setSetting(key, value) {
+        settings[key] = value; saveSettings();
+        apps = visible(catalogApps); idx = 0; render();
+        openSettings(key);
+    }
+
     // ---- actions ------------------------------------------------------------------------------
 
     function doInstall() {
@@ -283,27 +377,40 @@
 
     // ---- keys ---------------------------------------------------------------------------------
 
-    function focusables() { return Array.prototype.slice.call(detailEl.querySelectorAll('.var, button:not([disabled])')); }
+    function focusables() { return Array.prototype.slice.call(detailEl.querySelectorAll('.opt, .var, button:not([disabled])')); }
 
     document.addEventListener('keydown', function (e) {
         var k = e.keyCode;
-        if (k === 10009) {           // RETURN: details -> list, list -> leave
-            if (focusCol === 'detail' && rows.length) { rows[idx].focus(); e.preventDefault(); return; }
+        if (k === 10009) {           // RETURN: details or gear -> list, list -> leave
+            if ((focusCol === 'detail' || focusCol === 'gear') && rows.length) { rows[idx].focus(); e.preventDefault(); return; }
             try { tizen.application.getCurrentApplication().exit(); } catch (x) {}
             return;
         }
-        if (!rows.length) return;
+        if (focusCol === 'gear') {
+            if (k === 13) { openSettings(); e.preventDefault(); }
+            else if ((k === 40 || k === 37) && rows.length) { rows[idx].focus(); e.preventDefault(); }
+            else if (k === 39) { var fg = focusables(); if (fg.length) { fg[0].focus(); e.preventDefault(); } }
+            return;
+        }
         if (focusCol === 'list') {
+            if (!rows.length) { if (k === 38) { gearEl.focus(); e.preventDefault(); } return; }
             if (k === 40) { idx = Math.min(idx + 1, rows.length - 1); rows[idx].focus(); e.preventDefault(); }
-            else if (k === 38) { idx = Math.max(idx - 1, 0); rows[idx].focus(); e.preventDefault(); }
+            else if (k === 38) { if (idx === 0) gearEl.focus(); else { idx--; rows[idx].focus(); } e.preventDefault(); }
             else if (k === 39 || k === 13) { var f = focusables(); if (f.length) { f[0].focus(); e.preventDefault(); } }
             return;
         }
         var f2 = focusables(), at = f2.indexOf(document.activeElement);
-        if (k === 37) { rows[idx].focus(); e.preventDefault(); }
+        var back = function () { if (rows.length) rows[idx].focus(); else gearEl.focus(); };
+        if (k === 37) { back(); e.preventDefault(); }
         else if (k === 40) { if (at < f2.length - 1) f2[at + 1].focus(); e.preventDefault(); }
-        else if (k === 38) { if (at > 0) f2[at - 1].focus(); else rows[idx].focus(); e.preventDefault(); }
-        else if (k === 13) { var el = document.activeElement; if (el && el.className.indexOf('var') === 0) chooseVariant(parseInt(el.getAttribute('data-k'), 10)); else if (el && el.tagName === 'BUTTON') el.click(); e.preventDefault(); }
+        else if (k === 38) { if (at > 0) f2[at - 1].focus(); else if (!selected) gearEl.focus(); else back(); e.preventDefault(); }
+        else if (k === 13) {
+            var el = document.activeElement;
+            if (el && el.className.indexOf('opt') === 0) toggle(el.getAttribute('data-key'));
+            else if (el && el.className.indexOf('var') === 0) chooseVariant(parseInt(el.getAttribute('data-k'), 10));
+            else if (el && el.tagName === 'BUTTON') el.click();
+            e.preventDefault();
+        }
     });
 
     // ---- the API a head drives over the web inspector (#844 phase 3) ----------------------------
@@ -314,7 +421,7 @@
         if (selected) refreshInstallButton();
     }
     window.A2SStore = {
-        version: '0.2.0',
+        version: '0.3.0',
         status: function () { return new Promise(function (resolve) { xhr('GET', '/ping', null, function (err, res) { resolve(err ? { ok: false, error: err.message } : res); }); }); },
         setCertificate: function (certs) {
             return new Promise(function (resolve) {
@@ -337,8 +444,8 @@
                 if (err) { sub.textContent = 'Catalog unavailable: ' + err.message; sub.className = 'sub err'; return; }
                 var community = (cat.providers || []).filter(function (p) { return p.catalog && p.catalog.categories; })[0];
                 window.__categories = community ? community.catalog.categories : {};
-                apps = build(cat); render();
-                if (apps.length) rows[0].focus();
+                catalogApps = build(cat); apps = visible(catalogApps); render();
+                if (apps.length) rows[0].focus(); else gearEl.focus();
             });
         });
     });
