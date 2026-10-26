@@ -11,9 +11,11 @@
  *     first, as the phone does (#850); listed with an 18+ badge then;
  *   - packages the TV cannot install by itself (marked "PC / phone"): listed greyed by default, so
  *     nobody thinks they are missing; "Show apps that need a PC or phone" off hides them. These are
- *     packages that ask for settings before they install (`user_settings`) and packages a head
+ *     packages that ask for settings before they install (`user_settings`), packages a head
  *     rewrites with its own injectors (TVapp channels, ImmiTV and Camera PiP server settings),
- *     known by file name here, as in the heads' Packaging/ folder.
+ *     known by file name here, as in the heads' Packaging/ folder, and root packages
+ *     (`flags: ["root"]`): those gain root on the TV and afterwards need Host PC IP set to
+ *     127.0.0.1, a step the heads confirm and explain. They carry a "root" badge too.
  */
 (function () {
     'use strict';
@@ -110,7 +112,7 @@
     function build(cat) {
         var out = [], byKey = {};
         function app(key, name, category, description) {
-            if (!byKey[key]) { byKey[key] = { name: name, category: category || 'other', description: description || '', variants: [], needsHead: null, adult: false }; out.push(byKey[key]); }
+            if (!byKey[key]) { byKey[key] = { name: name, category: category || 'other', description: description || '', variants: [], needsHead: null, adult: false, root: false }; out.push(byKey[key]); }
             return byKey[key];
         }
         (cat.providers || []).forEach(function (p) {
@@ -128,7 +130,10 @@
                     if (e.group && x.variants.length === 0) x.description = e.description;
                     x.variants.push(v);
                     if (e.adult) x.adult = true;
-                    if (e.user_settings) v.needsHead = 'asks for settings before it installs';
+                    var root = (e.flags || []).indexOf('root') >= 0;
+                    if (root) x.root = true;
+                    if (root) v.needsHead = 'gains root on the TV and needs Host PC IP changed afterwards';
+                    else if (e.user_settings) v.needsHead = 'asks for settings before it installs';
                     else if (HEAD_ONLY.test(e.file)) v.needsHead = 'is configured by Apps2Samsung while it installs';
                 });
                 return;
@@ -209,6 +214,7 @@
             var badges = '';
             if (st.installed) badges += badge(st.update ? 'b-warn' : 'b-ok', st.update ? 'Update' : 'Installed');
             if (x.adult) badges += badge('b-warn', '18+');
+            if (x.root) badges += badge('b-warn', 'root');
             if (x.needsHead) badges += badge('b-mute', 'PC / phone');
             row.innerHTML = '<div class="tile ' + tileClass(x.category, x.name) + '">' + esc(tileLetter(x.name)) + '</div>'
                 + '<div class="txt"><div class="name">' + esc(x.name) + badges + '</div><div class="meta">' + esc(subline) + '</div></div>'
@@ -236,9 +242,10 @@
         var sl = document.createElement('div'); sl.className = 'subline';
         sl.textContent = categoryName(selected.category) + (selected.variants.length > 1 ? ' \u00b7 ' + selected.variants.length + ' variants' : '');
         sheet.appendChild(sl);
-        if (st.installed || selected.adult) {
+        if (st.installed || selected.adult || selected.root) {
             var pills = document.createElement('div'); pills.className = 'pills';
             if (selected.adult) pills.innerHTML += '<span class="pill warn">Adults only (18+)</span>';
+            if (selected.root) pills.innerHTML += '<span class="pill warn">Gains root on the TV</span>';
             if (st.installed) pills.innerHTML += '<span class="pill ' + (st.update ? 'warn' : 'ok') + '">' + (st.update ? 'Update available' : 'Installed') + (st.version ? ' \u00b7 v' + esc(st.version) : '') + '</span>';
             sheet.appendChild(pills);
         }
