@@ -7,7 +7,7 @@
     <feature name="http://tizen.org/feature/screen.size.all"/>
     <!-- web.service: the background Node service that drives sdbd (opens the raw socket the webview can't). -->
     <feature name="http://tizen.org/feature/web.service"/>
-    <tizen:application id="A2SStore001.Store" package="A2SStore001" required_version="4.0"/>
+    <tizen:application id="A2STVStore.Store" package="A2STVStore" required_version="4.0"/>
     <!-- The UI fetches catalog + drives installs over the service's loopback HTTP endpoint. -->
     <tizen:allow-mixed-content>true</tizen:allow-mixed-content>
     <tizen:content-security-policy>default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; connect-src * http://127.0.0.1:8077 http://localhost:8077</tizen:content-security-policy>
@@ -17,7 +17,7 @@
     <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>
     <tizen:privilege name="http://tizen.org/privilege/filesystem.read"/>
     <tizen:privilege name="http://tizen.org/privilege/filesystem.write"/>
-    <tizen:service id="A2SStore001.sdbservice" type="service">
+    <tizen:service id="A2STVStore.sdbservice" type="service">
         <tizen:content src="service/index.js"/>
         <tizen:name>TV-Store service</tizen:name>
         <tizen:description>Downloads, signs and installs catalog packages via sdbd on this TV</tizen:description>
