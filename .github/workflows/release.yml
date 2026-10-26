@@ -17,6 +17,7 @@ jobs:
           node-version: '20'
       - name: Tests
         run: |
+          node test/config.test.js
           node test/run.js
           node test/sign.test.js
       - name: Version in config.xml must match the tag

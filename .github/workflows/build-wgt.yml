@@ -14,9 +14,11 @@ jobs:
           node-version: '20'
       - name: Syntax-check the service and UI
         run: |
-          for f in tizen-app/service/sdb.js tizen-app/service/zip.js tizen-app/service/index.js tizen-app/service/signer.js tizen-app/js/app.js test/fake-sdbd.js test/run.js test/sign.test.js; do
+          for f in tizen-app/service/sdb.js tizen-app/service/zip.js tizen-app/service/index.js tizen-app/service/signer.js tizen-app/js/app.js test/fake-sdbd.js test/run.js test/sign.test.js test/config.test.js; do
             node --check "$f"
           done
+      - name: config.xml ids (package id is 10 alphanumerics)
+        run: node test/config.test.js
       - name: End-to-end sdb transport test (fake sdbd)
         run: node test/run.js
       - name: Signer test (valid signed package)
