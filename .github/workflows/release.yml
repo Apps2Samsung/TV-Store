@@ -22,7 +22,8 @@ jobs:
       - name: Version in config.xml must match the tag
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          ver=$(sed -n 's/.*<widget[^>]*version="\([^"]*\)".*/\1/p' tizen-app/config.xml | head -1)
+          # The <widget> tag spans several lines in config.xml, so read the file as one line.
+          ver=$(tr '\n' ' ' < tizen-app/config.xml | sed -n 's/.*<widget[^>]*version="\([^"]*\)".*/\1/p')
           [ "$tag" = "$ver" ] || { echo "tag v$tag but config.xml says $ver"; exit 1; }
       - name: Build the .wgt
         run: scripts/build-wgt.sh
