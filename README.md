@@ -35,8 +35,19 @@ acts as the TV's own PC:
 For that, Developer Mode's **Host PC IP** on the TV must be set to the TV's own address.
 
 Some catalog apps need settings written into the package before they install (a server address,
-an API key). The TV cannot do that yet, so those are shown greyed with a "Phone or PC" badge and
+an API key). The TV cannot do that yet, so those are shown greyed with a "PC / phone" badge and
 install from Apps2Samsung on a phone or PC instead.
+
+## Settings
+
+Press **▲** at the top of the list to reach **Settings**. Both switches are remembered on the TV:
+
+- **Show adult (18+) apps**: off by default. Turning it on asks "I am 18 or older" first, as the
+  phone app does; those apps then carry an 18+ badge.
+- **Show apps that need a PC or phone**: on by default, so nobody thinks an app is missing; turn
+  it off to keep the greyed "PC / phone" apps out of the list.
+
+The header counts what the switches hide ("12 apps · 3 hidden").
 
 ## Layout
 
