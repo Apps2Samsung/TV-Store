@@ -52,6 +52,17 @@ its hash matches that catalog.
 
 For that, Developer Mode's **Host PC IP** on the TV must be set to the TV's own address.
 
+The screen talks to the service over HTTP on port 8077. Apps2Samsung writes the TV's own IP into
+TV-Store when it installs it, because Tizen 10 may not let a page reach its service over
+`127.0.0.1`; when that address stops answering, TV-Store tries the TV's current IP and loopback.
+The service only answers the TV itself, except for its log.
+
+## The log
+
+The service keeps its log on the TV, with the previous run's next to it, so it survives a crash.
+Open `http://<TV IP>:8077/log.txt` on a phone or PC in the same network, or scan the QR code under
+**Settings** (also shown when the service does not start), and attach it to a bug report.
+
 Some catalog apps need settings written into the package before they install (a server address,
 an API key). The TV cannot do that yet, so those are shown greyed with a "Phone or PC" badge and
 install from Apps2Samsung on a phone or PC instead. The same goes for apps that need root, and for
@@ -77,6 +88,7 @@ The header counts what the switches hide ("12 apps · 3 hidden").
 - `tizen-app/service/catalog.js` + `catalog-key.js` – the signed catalog check and its public key
 - `tizen-app/service/compat.js` – buffers that work on the TV's Node 4.4.3
 - `tizen-app/js/app.js` – the UI, and `window.A2SStore`, which Apps2Samsung calls to arm the TV
+- `tizen-app/js/qrcode.js` – QR codes for the log address and the Ko-fi link ([qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 1.4.4, MIT)
 - `test/` – a fake `sdbd` plus signer and transport tests
 - `docs/design/` – the screens above
 
@@ -88,6 +100,7 @@ A `.wgt` is a zip of `tizen-app/`; no Tizen Studio needed.
 scripts/build-wgt.sh        # -> dist/TV-Store.wgt
 node test/run.js            # connect + push + install against a fake sdbd
 node test/sign.test.js      # the signer, with a certificate chain
+node --expose-gc test/stream-sign.test.js  # the file-to-file signer on a 24 MB package
 node test/catalog.test.js   # the signed catalog: signature, age, hashes
 ```
 

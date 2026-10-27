@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets"
-        id="https://github.com/Apps2Samsung/TV-Store" version="0.3.5" viewmodes="maximized">
+        id="https://github.com/Apps2Samsung/TV-Store" version="0.3.6" viewmodes="maximized">
     <name>Apps2Samsung TV-Store</name>
     <icon src="icon.png"/>
     <content src="index.html"/>
@@ -10,7 +10,7 @@
     <tizen:application id="A2STVStore.Store" package="A2STVStore" required_version="4.0"/>
     <!-- The UI fetches catalog + drives installs over the service's loopback HTTP endpoint. -->
     <tizen:allow-mixed-content>true</tizen:allow-mixed-content>
-    <tizen:content-security-policy>default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; connect-src * http://127.0.0.1:8077 http://localhost:8077</tizen:content-security-policy>
+    <tizen:content-security-policy>default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; connect-src * http://127.0.0.1:8077</tizen:content-security-policy>
     <tizen:privilege name="http://tizen.org/privilege/internet"/>
     <tizen:privilege name="http://developer.samsung.com/privilege/network.public"/>
     <tizen:privilege name="http://tizen.org/privilege/application.launch"/>

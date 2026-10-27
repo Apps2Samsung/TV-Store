@@ -118,7 +118,8 @@ SdbClient.prototype.shell = function (command, cb) {
     }, function (err) { if (err) fin(err); });
 };
 
-// sync: push a Buffer to a remote path (mode 0644). Mirrors tizen-sdb PushAsync.
+// sync: push to a remote path (mode 0644). Mirrors tizen-sdb PushAsync. data is a Buffer or
+// { size, read(offset, length) -> Buffer }, so a package can go straight from a file.
 SdbClient.prototype.push = function (remotePath, data, cb) {
     var self = this;
     var reply = Buf.alloc(0), finished = false, chRef = null;
@@ -137,10 +138,12 @@ SdbClient.prototype.push = function (remotePath, data, cb) {
         // SEND "<path>,<mode>"
         var target = remotePath + ',' + 0x81a4;   // 0100644
         syncPacket('SEND', Buf.from(target), function () { sendData(0); });
+        var size = Buffer.isBuffer(data) ? data.length : data.size;
         function sendData(off) {
-            if (off >= data.length) return doneCmd();
-            var end = Math.min(off + 64 * 1024, data.length);        // 64 KiB sync chunks
-            syncPacket('DATA', data.slice(off, end), function () { sendData(end); });
+            if (off >= size) return doneCmd();
+            var end = Math.min(off + 64 * 1024, size), chunk;        // 64 KiB sync chunks
+            try { chunk = Buffer.isBuffer(data) ? data.slice(off, end) : data.read(off, end - off); } catch (e) { return finish(e); }
+            syncPacket('DATA', chunk, function () { sendData(end); });
         }
         function doneCmd() {
             var mtime = Buf.alloc(4); mtime.writeUInt32LE(Math.floor(Date.now() / 1000) >>> 0, 0);

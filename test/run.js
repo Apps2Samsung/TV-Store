@@ -14,7 +14,8 @@ fake.start(PORT, {
     c.connect(function (err) {
         if (err) return done(err);
         var remote = '/home/owner/share/tmp/sdk_tools/TVStoreTest.wgt';
-        c.push(remote, fileBytes, function (err) {
+        // The service pushes from a file through a { size, read } source; push that way here too.
+        c.push(remote, { size: fileBytes.length, read: function (off, len) { return fileBytes.slice(off, off + len); } }, function (err) {
             if (err) return done(err);
             var got = h.received[remote];
             if (!got) return done(new Error('fake sdbd never received the file'));
