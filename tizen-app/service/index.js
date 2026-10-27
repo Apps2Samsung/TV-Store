@@ -111,6 +111,10 @@ function signAndInstall(entry, remoteName, wgt, cb) {
                 c.end();
                 if (err) return cb(err);
                 log('install: vd_appinstall reply: ' + out.replace(/\s+/g, ' ').slice(0, 200));
+                // sdbd answers the shell call either way; the installer's own words say whether it
+                // worked ("install failed[118, -12], reason: ..." on a refused package).
+                var failed = /install failed\[([^\]]*)\](?:,\s*reason:\s*([^\n]*))?/i.exec(out);
+                if (failed) return cb(coded('INSTALL_FAILED', 'The TV refused the package [' + failed[1] + ']' + (failed[2] ? ': ' + failed[2].trim() : '')));
                 cb(null, { reply: out });
             });
         });
