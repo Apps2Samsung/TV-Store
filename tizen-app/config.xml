@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets"
-        id="https://github.com/Apps2Samsung/TV-Store" version="0.3.6" viewmodes="maximized">
+        id="https://github.com/Apps2Samsung/TV-Store" version="0.3.7" viewmodes="maximized">
     <name>Apps2Samsung TV-Store</name>
     <icon src="icon.png"/>
     <content src="index.html"/>
@@ -17,7 +17,7 @@
     <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>
     <tizen:privilege name="http://tizen.org/privilege/filesystem.read"/>
     <tizen:privilege name="http://tizen.org/privilege/filesystem.write"/>
-    <tizen:service id="A2STVStore.sdbservice" type="service">
+    <tizen:service id="A2STVStore.sdbservice">
         <tizen:content src="service/index.js"/>
         <tizen:name>TV-Store service</tizen:name>
         <tizen:description>Downloads, signs and installs catalog packages via sdbd on this TV</tizen:description>
