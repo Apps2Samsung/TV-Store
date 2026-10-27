@@ -72,17 +72,25 @@
 
     // Launches the service and waits for its /ping. When it never answers, the error says why: the
     // platform refused the launch (with its reason), or the launch went through but nothing listens.
+    // The first start after an install is slow: the platform answered nothing within 7.5 s on a
+    // 2019 set (#881) and the service was up later. So wait 30 s, and launch again after 10 s in
+    // case the first request was dropped.
     function startService(cb) {
         var launch = 'pending';
-        try {
-            var pkg = tizen.application.getCurrentApplication().appInfo.id.split('.')[0];
-            tizen.application.launch(pkg + '.sdbservice',
-                function () { launch = 'ok'; },
-                function (e) { launch = 'launch failed (' + e.name + ': ' + e.message + ')'; });
-        } catch (e) { launch = 'launch failed (' + (e.name ? e.name + ': ' + e.message : e) + ')'; }
+        function go() {
+            try {
+                var pkg = tizen.application.getCurrentApplication().appInfo.id.split('.')[0];
+                tizen.application.launch(pkg + '.sdbservice',
+                    function () { launch = 'ok'; },
+                    function (e) { launch = 'launch failed (' + e.name + ': ' + e.message + ')'; });
+            } catch (e) { launch = 'launch failed (' + (e.name ? e.name + ': ' + e.message : e) + ')'; }
+        }
+        go();
         var tries = 0; (function poll() { xhr('GET', '/ping', null, function (err, res) {
             if (!err) return cb(null, res);
-            if (++tries > 25) {
+            if (tries === 3) sub.textContent = 'Starting the TV-Store service\u2026';
+            if (tries === 33 && launch !== 'ok') go();
+            if (++tries > 100) {
                 if (launch === 'ok') return cb(new Error('service did not start: launched, but nothing answers on port 8077'));
                 if (launch === 'pending') return cb(new Error('service did not start: the platform never answered the launch'));
                 return cb(new Error('service did not start: ' + launch));
@@ -135,13 +143,18 @@
                     if (root) v.needsHead = 'gains root on the TV and needs Host PC IP changed afterwards';
                     else if (e.user_settings) v.needsHead = 'asks for settings before it installs';
                     else if (HEAD_ONLY.test(e.file)) v.needsHead = 'is configured by Apps2Samsung while it installs';
+                    else if (!a.digest) v.needsHead = 'has no published hash, so the TV cannot check the download';
                 });
                 return;
             }
 
             var info = PROVIDERS[p.id] || { name: p.id, category: 'other', description: '' };
             var x = app('p:' + p.id, info.name, info.category, info.description);
-            assets.forEach(function (a) { x.variants.push(variant(null, a.name, a.browser_download_url, a.package_version, a.app_id, a.package_id)); });
+            assets.forEach(function (a) {
+                var v = variant(null, a.name, a.browser_download_url, a.package_version, a.app_id, a.package_id);
+                if (!a.digest) v.needsHead = 'has no published hash, so the TV cannot check the download';
+                x.variants.push(v);
+            });
         });
 
         out = out.filter(function (x) { return x.variants.length > 0; });
@@ -440,15 +453,21 @@
         if (selected) refreshInstallButton();
     }
     window.A2SStore = {
-        version: '0.3.3',
+        version: '0.3.4',
         status: function () { return new Promise(function (resolve) { xhr('GET', '/ping', null, function (err, res) { resolve(err ? { ok: false, error: err.message } : res); }); }); },
+        // A head arms right after installing, while the service may still be starting (first
+        // launch after an install takes seconds): keep trying for 15 s before giving up.
         setCertificate: function (certs) {
             return new Promise(function (resolve) {
-                xhr('POST', '/cert', certs, function (err, res) {
-                    if (err) return resolve({ ok: false, error: err.message });
-                    if (res && res.ok) showArmed({ ok: true, certReady: true });
-                    resolve(res || { ok: false, error: 'no answer from the service' });
-                });
+                var tries = 0;
+                (function post() {
+                    xhr('POST', '/cert', certs, function (err, res) {
+                        if (err && ++tries < 30) return setTimeout(post, 500);
+                        if (err) return resolve({ ok: false, error: err.message });
+                        if (res && res.ok) showArmed({ ok: true, certReady: true });
+                        resolve(res || { ok: false, error: 'no answer from the service' });
+                    });
+                })();
             });
         }
     };

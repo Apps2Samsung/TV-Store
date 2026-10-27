@@ -20,6 +20,7 @@ jobs:
           node test/config.test.js
           node test/run.js
           node test/sign.test.js
+          node test/catalog.test.js
       - name: Version in config.xml must match the tag
         run: |
           tag="${GITHUB_REF_NAME#v}"

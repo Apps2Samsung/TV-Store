@@ -23,6 +23,8 @@ jobs:
         run: node test/run.js
       - name: Signer test (valid signed package)
         run: node test/sign.test.js
+      - name: Signed catalog test (signature, staleness, hashes)
+        run: node test/catalog.test.js
       - name: Build the .wgt
         run: scripts/build-wgt.sh
       - uses: actions/upload-artifact@v4
