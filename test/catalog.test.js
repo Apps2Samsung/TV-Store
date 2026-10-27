@@ -1,7 +1,9 @@
 'use strict';
 // The signed catalog (#881): a signature from the right key verifies, anything else is refused, and
-// every package file's hash is indexed by its download URL. Throwaway key, generated here.
-var crypto = require('crypto');
+// every package file's hash is indexed by its download URL. Signed with the throwaway fixture keys,
+// with the APIs Node 4.4.3 has (the TV's Node), so this runs there too.
+var crypto = require('crypto'), fs = require('fs'), path = require('path');
+var Buf = require('../tizen-app/service/compat.js');
 var cat = require('../tizen-app/service/catalog.js');
 var shipped = require('../tizen-app/service/catalog-key.js');
 
@@ -11,9 +13,10 @@ function throwsLike(fn, re, what) {
     fail(what + ': was accepted');
 }
 
-var pair = crypto.generateKeyPairSync('rsa', { modulusLength: 3072 });
-var pub = pair.publicKey.export({ type: 'spki', format: 'pem' });
-var other = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 }).publicKey.export({ type: 'spki', format: 'pem' });
+var F = path.join(__dirname, 'fixtures');
+var key = fs.readFileSync(path.join(F, 'author.key'), 'utf8');
+var pub = fs.readFileSync(path.join(F, 'author.crt'), 'utf8');          // createVerify takes a certificate PEM as the public key
+var other = fs.readFileSync(path.join(F, 'distributor.crt'), 'utf8');
 
 var hash = crypto.createHash('sha256').update('package bytes').digest('hex');
 function catalog(generatedAt) {
@@ -22,9 +25,9 @@ function catalog(generatedAt) {
         { name: 'B.wgt', browser_download_url: 'https://github.com/o/r/releases/download/1/B.wgt' }
     ] }] }] }, null, 2) + '\n';
 }
-function signed(json, key) {
-    var sig = crypto.sign('sha256', Buffer.from(json), key || pair.privateKey).toString('base64');
-    return Buffer.from(sig + '\n' + json);
+function signed(json) {
+    var sig = crypto.createSign('RSA-SHA256').update(Buf.from(json, 'utf8')).sign(key, 'base64');
+    return Buf.from(sig + '\n' + json, 'utf8');
 }
 
 var now = Date.parse('2026-10-27T10:00:00Z');
@@ -38,10 +41,11 @@ if (r.index['https://github.com/o/r/releases/download/1/B.wgt'] !== null) fail('
 var tampered = signed(good); tampered[tampered.length - 5] ^= 1;
 throwsLike(function () { cat.verify(tampered, pub, now); }, /signature does not match/, 'tampered catalog');
 throwsLike(function () { cat.verify(signed(good), other, now); }, /signature does not match/, 'another key');
-throwsLike(function () { cat.verify(Buffer.from(good.replace(/\n/g, ' ')), pub, now); }, /not signed/, 'unsigned catalog');
+throwsLike(function () { cat.verify(Buf.from(good.replace(/\n/g, ' '), 'utf8'), pub, now); }, /not signed/, 'unsigned catalog');
 throwsLike(function () { cat.verify(signed(catalog('2026-10-10T00:00:00Z')), pub, now); }, /more than 7 days old/, 'stale catalog');
-if (cat.sha256(Buffer.from('package bytes')) !== hash) fail('sha256 helper');
-crypto.createPublicKey(shipped);   // the shipped key parses
+if (cat.sha256(Buf.from('package bytes', 'utf8')) !== hash) fail('sha256 helper');
+// The shipped key parses: verifying anything with it answers false instead of throwing.
+if (crypto.createVerify('RSA-SHA256').update('x').verify(shipped, 'AAAA', 'base64') !== false) fail('shipped key');
 
 console.log('PASS');
 console.log('  signed catalog verifies; tampered, foreign-key, unsigned and stale ones are refused');

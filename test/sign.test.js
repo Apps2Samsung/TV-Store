@@ -3,6 +3,7 @@
  * over the reconstructed canonical SignedInfo; signature1 covers author-signature.xml; the zip reads.
  * The byte-for-byte equality with TizenSdb.Core's C# signer was confirmed separately during the port. */
 'use strict';
+var Buf = require('../tizen-app/service/compat.js');
 var fs = require('fs'), crypto = require('crypto'), path = require('path');
 var signer = require('../tizen-app/service/signer.js');
 var zip = require('../tizen-app/service/zip.js');
@@ -12,9 +13,9 @@ function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
 
 // A small fixture package.
 var pkg = zip.write([
-    { name: 'config.xml', data: Buffer.from('<?xml version="1.0"?>\n<widget id="http://x/t" version="1.0.0"><name>T</name></widget>\n') },
-    { name: 'index.html', data: Buffer.from('<!doctype html><title>t</title>\n') },
-    { name: 'js/app.js', data: Buffer.from('console.log(1);\n') },
+    { name: 'config.xml', data: Buf.from('<?xml version="1.0"?>\n<widget id="http://x/t" version="1.0.0"><name>T</name></widget>\n') },
+    { name: 'index.html', data: Buf.from('<!doctype html><title>t</title>\n') },
+    { name: 'js/app.js', data: Buf.from('console.log(1);\n') },
 ]);
 var certs = {
     authorKeyPem: fs.readFileSync(path.join(F, 'author.key'), 'utf8'), authorCertPem: fs.readFileSync(path.join(F, 'author.crt'), 'utf8'),
@@ -47,7 +48,7 @@ function verify(xml, certPem) {
     var canonInner = inner.replace(/<([A-Za-z]+)([^>]*?) \/>/g, '<$1$2></$1>');
     var si = '<SignedInfo xmlns="http://www.w3.org/2000/09/xmldsig#">' + canonInner + '</SignedInfo>';
     var sig = xml.match(/<SignatureValue>([^<]+)<\/SignatureValue>/)[1];
-    return crypto.verify('RSA-SHA512', Buffer.from(si, 'utf8'), crypto.createPublicKey(certPem), Buffer.from(sig, 'base64'));
+    return crypto.createVerify('RSA-SHA512').update(Buf.from(si, 'utf8')).verify(certPem, sig, 'base64');
 }
 if (!verify(authorXml, certs.authorCertPem)) fail('author SignatureValue does not validate');
 if (!verify(distXml, certs.distributorCertPem)) fail('distributor SignatureValue does not validate');

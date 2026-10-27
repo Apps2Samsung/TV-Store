@@ -10,6 +10,7 @@
  * as a general c14n — so the output installs identically.
  */
 'use strict';
+var Buf = require('./compat.js');
 var crypto = require('crypto');
 var zip = require('./zip.js');
 
@@ -64,7 +65,8 @@ function buildSignature(which, refs, propDigestB64, keyPem, certPem) {
         + '<CanonicalizationMethod Algorithm="' + EXC_C14N + '"></CanonicalizationMethod>'
         + '<SignatureMethod Algorithm="' + RSA_SHA512 + '"></SignatureMethod>'
         + refObjs.map(function (r) { return r.canon; }).join('') + propRef.canon + '</SignedInfo>';
-    var sigVal = crypto.sign('RSA-SHA512', Buffer.from(siCanon, 'utf8'), crypto.createPrivateKey(keyPem)).toString('base64');
+    // createSign, not crypto.sign / createPrivateKey: those are Node 12 / 11.6, the TV runs 4.4.3.
+    var sigVal = crypto.createSign('RSA-SHA512').update(Buf.from(siCanon, 'utf8')).sign(keyPem, 'base64');
 
     // Stored SignedInfo (self-closed empties, no xmlns on SignedInfo — it inherits from Signature).
     var siStored = '<SignedInfo>'
@@ -78,7 +80,7 @@ function buildSignature(which, refs, propDigestB64, keyPem, certPem) {
         + '<SignatureValue>' + sigVal + '</SignatureValue>'
         + '<KeyInfo><X509Data>' + x509 + '</X509Data></KeyInfo>'
         + propStored(id, role) + '</Signature>';
-    return Buffer.from(xml, 'utf8');
+    return Buf.from(xml, 'utf8');
 }
 
 // certs = { authorKeyPem, authorCertPem, distributorKeyPem, distributorCertPem }
@@ -90,13 +92,13 @@ function sign(wgtBuffer, certs) {
 
     // author-signature.xml: references every package file + #prop
     var authorRefs = entries.map(function (e) { return { uri: e.name, digest: sha512b64(e.data), withTransform: false }; });
-    var authorProp = sha512b64(Buffer.from(propCanonical('AuthorSignature', 'author'), 'utf8'));
+    var authorProp = sha512b64(Buf.from(propCanonical('AuthorSignature', 'author'), 'utf8'));
     var authorXml = buildSignature('author', authorRefs, authorProp, certs.authorKeyPem, certs.authorCertPem);
 
     // signature1.xml: references author-signature.xml (its stored bytes) + every package file + #prop
     var distRefs = [{ uri: 'author-signature.xml', digest: sha512b64(authorXml), withTransform: false }]
         .concat(entries.map(function (e) { return { uri: e.name, digest: sha512b64(e.data), withTransform: false }; }));
-    var distProp = sha512b64(Buffer.from(propCanonical('DistributorSignature', 'distributor'), 'utf8'));
+    var distProp = sha512b64(Buf.from(propCanonical('DistributorSignature', 'distributor'), 'utf8'));
     var distXml = buildSignature('distributor', distRefs, distProp, certs.distributorKeyPem, certs.distributorCertPem);
 
     // Repackage: both signatures first, then the files (STORED).

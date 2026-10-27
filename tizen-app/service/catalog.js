@@ -15,7 +15,8 @@ var crypto = require('crypto');
 
 var MAX_AGE_MS = 7 * 24 * 3600 * 1000;   // the workflow re-signs at least twice a day
 
-function b64(s) { return Buffer.from && Buffer.from !== Uint8Array.from ? Buffer.from(s, 'base64') : new Buffer(s, 'base64'); }
+var Buf = require('./compat.js');
+function b64(s) { return Buf.from(s, 'base64'); }
 
 // buf: the bytes of resolved.json.signed. Returns { catalog, payload, index } or throws.
 function verify(buf, publicKeyPem, now) {

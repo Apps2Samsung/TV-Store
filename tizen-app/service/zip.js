@@ -2,6 +2,7 @@
  * inflate, so no npm dependency. The signer digests decompressed content (compression-independent) and
  * writes a STORED package, which Tizen installs fine (the debug agent ships STORED too). */
 'use strict';
+var Buf = require('./compat.js');
 var zlib = require('zlib');
 
 function readEntries(buf) {
@@ -39,13 +40,13 @@ function crc32(buf) {
 function write(entries) {
     var locals = [], central = [], offset = 0;
     entries.forEach(function (e) {
-        var nameBuf = Buffer.from(e.name, 'utf8'), crc = crc32(e.data), size = e.data.length;
-        var lh = Buffer.alloc(30);
+        var nameBuf = Buf.from(e.name, 'utf8'), crc = crc32(e.data), size = e.data.length;
+        var lh = Buf.alloc(30);
         lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(20, 4); lh.writeUInt16LE(0, 6); lh.writeUInt16LE(0, 8);
         lh.writeUInt16LE(0, 10); lh.writeUInt16LE(0, 12); lh.writeUInt32LE(crc, 14);
         lh.writeUInt32LE(size, 18); lh.writeUInt32LE(size, 22); lh.writeUInt16LE(nameBuf.length, 26); lh.writeUInt16LE(0, 28);
         var localRec = Buffer.concat([lh, nameBuf, e.data]);
-        var cd = Buffer.alloc(46);
+        var cd = Buf.alloc(46);
         cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt16LE(20, 4); cd.writeUInt16LE(20, 6); cd.writeUInt16LE(0, 8); cd.writeUInt16LE(0, 10);
         cd.writeUInt16LE(0, 12); cd.writeUInt16LE(0, 14); cd.writeUInt32LE(crc, 16); cd.writeUInt32LE(size, 20); cd.writeUInt32LE(size, 24);
         cd.writeUInt16LE(nameBuf.length, 28); cd.writeUInt16LE(0, 30); cd.writeUInt16LE(0, 32); cd.writeUInt16LE(0, 34);
@@ -54,7 +55,7 @@ function write(entries) {
         locals.push(localRec); offset += localRec.length;
     });
     var cdBuf = Buffer.concat(central), localBuf = Buffer.concat(locals);
-    var eocd = Buffer.alloc(22);
+    var eocd = Buf.alloc(22);
     eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(entries.length, 8); eocd.writeUInt16LE(entries.length, 10);
     eocd.writeUInt32LE(cdBuf.length, 12); eocd.writeUInt32LE(localBuf.length, 16); eocd.writeUInt16LE(0, 20);
     return Buffer.concat([localBuf, cdBuf, eocd]);
