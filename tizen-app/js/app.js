@@ -24,7 +24,7 @@
 (function () {
     'use strict';
     var BASE = 'http://127.0.0.1:8077';
-    var VERSION = '0.3.4';
+    var VERSION = '0.3.5';
     var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13, RETURN: 10009, ESC: 27, BACK: 8 };
 
     // What the manifest providers are called; resolved.json carries only their ids.
@@ -355,7 +355,7 @@
             var ip = ready && ready.ownIp ? ready.ownIp : 'this TV’s address';
             h += '<div class="welcome"><div class="wmain"><h1>Welcome. One thing to do first.</h1>'
                 + '<p>TV-Store signs every app it installs with your own certificate, the same one Apps2Samsung uses. Hand it over once from your phone or PC and this TV installs on its own from then on.</p>'
-                + '<div class="steps"><div class="step"><div class="num">1</div><div><b>Open Apps2Samsung</b><span>On your phone or PC. The one you installed TV-Store with.</span></div></div>'
+                + '<div class="steps"><div class="step"><div class="num">1</div><div><b>Open Apps2Samsung</b><span>Version 3.0 or newer, on your phone or PC: the one you installed TV-Store with.</span></div></div>'
                 + '<div class="step"><div class="num">2</div><div><b>Pick this TV, open the Toolbox</b><span>' + esc(device ? device + ' at ' + ip : ip) + '.</span></div></div>'
                 + '<div class="step"><div class="num">3</div><div><b>Press Arm TV-Store</b><span>This screen turns green by itself. Nothing to type here.</span></div></div></div>'
                 + '<div class="waiting"><span class="spin"></span>Waiting for your phone or PC… you can browse the catalog meanwhile.</div></div>'
@@ -486,7 +486,7 @@
 
         var label = st.installed && st.variant === sheet.v ? (st.update ? 'Update to v' + v.version : 'Reinstall') : (st.installed ? 'Install this variant' : 'Install on this TV');
         if (v.needsHead) h += '<div class="notice">' + esc(x.name + ' ' + v.needsHead + ', which this TV cannot do yet. Install it with Apps2Samsung on a phone or PC.') + '</div>';
-        else if (!armed()) h += '<div class="notice">Not armed yet. Open this TV’s Toolbox in Apps2Samsung on your phone or PC and press Arm TV-Store once; after that every install runs here.</div>';
+        else if (!armed()) h += '<div class="notice">Not armed yet. Open this TV’s Toolbox in Apps2Samsung 3.0 or newer on your phone or PC and press Arm TV-Store once; after that every install runs here.</div>';
         var can = !v.needsHead && armed() && !(job && job.running);
         h += '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="install" data-act="install"' + (can ? (x.variants.length > 1 ? '' : ' data-default') : ' disabled') + '>'
             + esc(v.needsHead ? 'Install from a phone or PC' : job && job.running ? 'Another install is running' : label) + '</button>';
