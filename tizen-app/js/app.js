@@ -455,13 +455,19 @@
     window.A2SStore = {
         version: '0.3.4',
         status: function () { return new Promise(function (resolve) { xhr('GET', '/ping', null, function (err, res) { resolve(err ? { ok: false, error: err.message } : res); }); }); },
+        // A head arms right after installing, while the service may still be starting (first
+        // launch after an install takes seconds): keep trying for 15 s before giving up.
         setCertificate: function (certs) {
             return new Promise(function (resolve) {
-                xhr('POST', '/cert', certs, function (err, res) {
-                    if (err) return resolve({ ok: false, error: err.message });
-                    if (res && res.ok) showArmed({ ok: true, certReady: true });
-                    resolve(res || { ok: false, error: 'no answer from the service' });
-                });
+                var tries = 0;
+                (function post() {
+                    xhr('POST', '/cert', certs, function (err, res) {
+                        if (err && ++tries < 30) return setTimeout(post, 500);
+                        if (err) return resolve({ ok: false, error: err.message });
+                        if (res && res.ok) showArmed({ ok: true, certReady: true });
+                        resolve(res || { ok: false, error: 'no answer from the service' });
+                    });
+                })();
             });
         }
     };

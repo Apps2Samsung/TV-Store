@@ -24,10 +24,15 @@ var CATALOG_URL = 'https://apps2samsung.com/catalog/resolved.json.signed';
 var STAGING = '/home/owner/share/tmp/sdk_tools';   // where sdbd accepts a pushed .wgt
 var LOGS = [];
 var CERT_NAME = '.a2s-tvstore-certs.json';
-// Where the handed-over certificate is kept, best first: the package's own data folder
-// (<root>/data next to <root>/res/wgt/service), which survives a restart and an upgrade, then
-// $HOME. /tmp is the last resort and does not survive a reboot.
-var CERT_DIRS = [path.resolve(__dirname, '../../../data'), process.env.HOME, '/tmp'].filter(function (d) { return !!d; });
+// Where the handed-over certificate is kept, best first: the package's private data folder
+// (what the page's tizen.filesystem calls wgt-private), which survives a reboot and an upgrade.
+// The service runs from /opt/usr/apps/<pkg>/res/wgt/service, read-only, and $HOME (/home/owner)
+// is not writable for it (both seen on a 2019 Tizen 5.0 set, #881); the data folder lives under
+// apps_rw instead. /tmp is the last resort: it survives an app restart, not a reboot, and is
+// where 0.3.3 ended up, so a certificate found there is moved up.
+var PKG = path.basename(path.resolve(__dirname, '../../..'));
+var CERT_DIRS = ['/opt/usr/home/owner/apps_rw/' + PKG + '/data', '/home/owner/apps_rw/' + PKG + '/data', process.env.HOME, '/tmp']
+    .filter(function (d) { return !!d; });
 var CERT_FILE = null, CERT_ERROR = null;
 var CERTS = null;
 var CATALOG = null;        // { catalog, payload, index, at } once a signed catalog verified
@@ -114,16 +119,21 @@ function signAndInstall(entry, remoteName, wgt, cb) {
 
 // The signed catalog, fetched and verified, cached for 10 minutes (the workflow publishes every
 // 30). A download URL is installable only when this lists it.
+// Requests that arrive while a fetch is running wait for that one.
+var CATALOG_WAITING = null;
 function withCatalog(cb, fresh) {
     if (CATALOG && !fresh && Date.now() - CATALOG.at < 10 * 60 * 1000) return cb(null, CATALOG);
+    if (CATALOG_WAITING) return CATALOG_WAITING.push(cb);
+    CATALOG_WAITING = [cb];
+    function done(err, cat) { var w = CATALOG_WAITING; CATALOG_WAITING = null; w.forEach(function (f) { f(err, cat); }); }
     get(CATALOG_URL, function (err, buf) {
-        if (err) return cb(err);
+        if (err) return done(err);
         var cat;
         try { cat = catalogTrust.verify(buf, CATALOG_KEY); }
-        catch (e) { log('catalog: ' + e.message); return cb(e); }
+        catch (e) { log('catalog: ' + e.message); return done(e); }
         cat.at = Date.now(); CATALOG = cat;
         log('catalog: signature ok, generated ' + cat.catalog.generatedAt + ', ' + Object.keys(cat.index).length + ' files');
-        cb(null, cat);
+        done(null, cat);
     });
 }
 
@@ -156,7 +166,7 @@ http.createServer(function (req, res) {
     if (route === '/ping') return json(res, 200, { ok: true, service: 'tv-store', ownIp: ownIp(), signerReady: signer.ready, certReady: haveCerts(),
         certFile: CERT_FILE, certError: CERT_ERROR, node: process.version });
     if (route === '/logs') return json(res, 200, { logs: LOGS });
-    if (route === '/catalog') return withCatalog(function (err, cat) { if (err) return json(res, 502, { ok: false, error: err.message }); cors(res, 200, 'application/json'); res.end(cat.payload); }, true);
+    if (route === '/catalog') return withCatalog(function (err, cat) { if (err) return json(res, 502, { ok: false, error: err.message }); cors(res, 200, 'application/json'); res.end(cat.payload); });
     if (route === '/cert' && req.method === 'POST') return body(req, function (err, b) {
         if (err || !b || !b.authorKeyPem || !b.authorCertPem || !b.distributorKeyPem || !b.distributorCertPem)
             return json(res, 400, { ok: false, error: 'need { authorKeyPem, authorCertPem, distributorKeyPem, distributorCertPem }' });
