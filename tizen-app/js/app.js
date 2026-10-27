@@ -29,7 +29,7 @@
     // TV's current IP and loopback too, and keeps whichever answers.
     var BASE = 'http://127.0.0.1:8077';
     var KOFI = 'https://ko-fi.com/patrickst';
-    var VERSION = '0.3.6';
+    var VERSION = '0.3.7';
     var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13, RETURN: 10009, ESC: 27, BACK: 8 };
 
     // What the manifest providers are called; resolved.json carries only their ids.
@@ -132,13 +132,24 @@
     // case the first request was dropped.
     function startService(cb) {
         var launch = 'pending';
+        // Through an app control first, as TizenBrew starts its service (which comes up on Tizen 10),
+        // and plain launch when the platform refuses that.
         function go() {
+            var id;
+            try { id = tizen.application.getCurrentApplication().appInfo.id.split('.')[0] + '.sdbservice'; }
+            catch (e) { launch = 'launch failed (' + (e.name ? e.name + ': ' + e.message : e) + ')'; return; }
+            function plain(why) {
+                try {
+                    tizen.application.launch(id,
+                        function () { launch = 'ok'; },
+                        function (e) { launch = 'launch failed (' + why + '; ' + e.name + ': ' + e.message + ')'; });
+                } catch (e) { launch = 'launch failed (' + why + '; ' + (e.name ? e.name + ': ' + e.message : e) + ')'; }
+            }
             try {
-                var pkg = tizen.application.getCurrentApplication().appInfo.id.split('.')[0];
-                tizen.application.launch(pkg + '.sdbservice',
+                tizen.application.launchAppControl(new tizen.ApplicationControl('http://tizen.org/appcontrol/operation/service'), id,
                     function () { launch = 'ok'; },
-                    function (e) { launch = 'launch failed (' + e.name + ': ' + e.message + ')'; });
-            } catch (e) { launch = 'launch failed (' + (e.name ? e.name + ': ' + e.message : e) + ')'; }
+                    function (e) { plain('app control: ' + e.name); });
+            } catch (e) { plain('app control: ' + (e.name || e)); }
         }
         go();
         var tries = 0, found = false;

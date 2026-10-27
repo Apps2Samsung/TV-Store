@@ -82,7 +82,9 @@ The header counts what the switches hide ("12 apps · 3 hidden").
 ## Layout
 
 - `tizen-app/` – the package: `config.xml`, `index.html`, `js/app.js`, `icon.png`, `service/`
-- `tizen-app/service/index.js` – the service: catalog, certificate, install pipeline
+- `tizen-app/service/index.js` – the service: catalog, certificate, install pipeline. The `.wgt` carries
+  `service/` as one file, bundled by `scripts/bundle-service.js` (Tizen 10 runs services in an embedded
+  Node 20 and does not start split ones)
 - `tizen-app/service/sdb.js` – the SDB client (connect, push, install)
 - `tizen-app/service/signer.js` – the package signer
 - `tizen-app/service/catalog.js` + `catalog-key.js` – the signed catalog check and its public key
@@ -101,6 +103,7 @@ scripts/build-wgt.sh        # -> dist/TV-Store.wgt
 node test/run.js            # connect + push + install against a fake sdbd
 node test/sign.test.js      # the signer, with a certificate chain
 node --expose-gc test/stream-sign.test.js  # the file-to-file signer on a 24 MB package
+node test/bundle.test.js    # the bundled service starts however the platform loads it
 node test/catalog.test.js   # the signed catalog: signature, age, hashes
 ```
 

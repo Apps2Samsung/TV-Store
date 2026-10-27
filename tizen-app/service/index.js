@@ -32,7 +32,9 @@ var CERT_NAME = '.a2s-tvstore-certs.json';
 // is not writable for it (both seen on a 2019 Tizen 5.0 set, #881); the data folder lives under
 // apps_rw instead. /tmp is the last resort: it survives an app restart, not a reboot, and is
 // where 0.3.3 ended up, so a certificate found there is moved up.
-var PKG = path.basename(path.resolve(__dirname, '../../..'));
+// The package id, from where the service runs (/opt/usr/apps/<pkg>/res/wgt/service). A runtime
+// that gives the script no __dirname gets the id TV-Store ships with.
+var PKG = typeof __dirname === 'string' ? path.basename(path.resolve(__dirname, '../../..')) : 'A2STVStore';
 var CERT_DIRS = ['/opt/usr/home/owner/apps_rw/' + PKG + '/data', '/home/owner/apps_rw/' + PKG + '/data', process.env.HOME, '/tmp']
     .filter(function (d) { return !!d; });
 var CERT_FILE = null, CERT_ERROR = null;
