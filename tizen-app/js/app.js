@@ -23,8 +23,13 @@
  */
 (function () {
     'use strict';
+    // Apps2Samsung writes this TV's own IP in here when it installs TV-Store: Tizen 10 may not route
+    // a page's request to the service over loopback. When that address stops answering (the router
+    // gave the TV another one, or TV-Store was updated without Apps2Samsung), startService tries the
+    // TV's current IP and loopback too, and keeps whichever answers.
     var BASE = 'http://127.0.0.1:8077';
-    var VERSION = '0.3.5';
+    var KOFI = 'https://ko-fi.com/patrickst';
+    var VERSION = '0.3.6';
     var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13, RETURN: 10009, ESC: 27, BACK: 8 };
 
     // What the manifest providers are called; resolved.json carries only their ids.
@@ -49,6 +54,17 @@
     var catalogApps = [];      // every app in the catalog, before the Settings filters
     var apps = [];             // what the Settings let through
     var installed = {};        // packageId -> version, from the platform
+    var appIds = {};           // application ids the platform lists, exact case
+    // Which file TV-Store installed per package id. Variants of one app often share the package id
+    // and the version (all six Litefin builds are LitefinApp 2.0.30, #17), so the TV alone cannot
+    // say which one it has.
+    var VARIANTS_KEY = 'a2s.tvstore.variants';
+    var installedFile = (function () { try { return JSON.parse(window.localStorage.getItem(VARIANTS_KEY)) || {}; } catch (e) { return {}; } })();
+    function rememberVariant(v) {
+        if (!v.packageId) return;
+        installedFile[v.packageId] = v.file;
+        try { window.localStorage.setItem(VARIANTS_KEY, JSON.stringify(installedFile)); } catch (e) {}
+    }
     var ready = null;          // the service's /ping
     var problem = null;        // { title, text } when the service or the catalog failed
     var loading = true;
@@ -63,6 +79,8 @@
     var returnFocus = null;    // data-k to focus again when the sheet closes
     var confirmingAdult = false;
     var device = '';
+    var tvIp = '';             // this TV's IP now, from systeminfo
+    var tried = [];            // what startService got from each address, for the error screen
 
     // ---- settings, remembered on the TV -------------------------------------------------------------
     var SETTINGS_KEY = 'a2s.store.settings';
@@ -77,9 +95,25 @@
     })();
     function saveSettings() { try { window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {} }
 
+    // A QR code as an <img> (qrcode.js, GIF data URL: old TV engines show that fine), on a white tile.
+    function qr(text, px) {
+        try {
+            var q = qrcode(0, 'M'); q.addData(text); q.make();
+            var n = q.getModuleCount(), cell = Math.max(2, Math.floor(px / (n + 8)));
+            return '<span class="qr"><img alt="" src="' + q.createDataURL(cell, cell * 4) + '" style="width:' + px + 'px;height:' + px + 'px"></span>';
+        } catch (e) { return ''; }
+    }
+    function logUrl() { return ready && ready.logUrl ? ready.logUrl : (tvIp ? 'http://' + tvIp + ':8077/log.txt' : ''); }
+    // The log, for a bug report: scan it with a phone, or type the address on a PC in the same network.
+    function logBlock() {
+        var u = logUrl();
+        if (!u) return '';
+        return '<div class="qrrow">' + qr(u, 150) + '<div><b>The TV-Store log</b><span>Scan with your phone, or open <span class="mono">' + esc(u) + '</span> on a computer in the same network. Attach it to a bug report.</span></div></div>';
+    }
+
     // ---- the service ------------------------------------------------------------------------------
-    function xhr(method, path, bodyObj, cb) {
-        var r = new XMLHttpRequest(); r.open(method, BASE + path, true); r.timeout = 180000;
+    function xhr(method, path, bodyObj, cb, base, timeout) {
+        var r = new XMLHttpRequest(); r.open(method, (base || BASE) + path, true); r.timeout = timeout || 180000;
         r.onreadystatechange = function () {
             if (r.readyState !== 4) return;
             var body = null; try { body = JSON.parse(r.responseText); } catch (e) {}
@@ -107,16 +141,32 @@
             } catch (e) { launch = 'launch failed (' + (e.name ? e.name + ': ' + e.message : e) + ')'; }
         }
         go();
-        var tries = 0; (function poll() { xhr('GET', '/ping', null, function (err, res) {
-            if (!err) return cb(null, res);
-            if (tries === 33 && launch !== 'ok') go();
-            if (++tries > 100) {
-                if (launch === 'ok') return cb(new Error('Launched, but nothing answers on port 8077.'));
-                if (launch === 'pending') return cb(new Error('The TV never answered the request to start it.'));
-                return cb(new Error(launch));
-            }
-            setTimeout(poll, 300);
-        }); })();
+        var tries = 0, found = false;
+        function candidates() {
+            var c = [BASE];
+            if (tvIp) c.push('http://' + tvIp + ':8077');
+            c.push('http://127.0.0.1:8077');
+            return c.filter(function (x, i) { return c.indexOf(x) === i; });
+        }
+        (function poll() {
+            var list = candidates(), left = list.length, last = {};
+            list.forEach(function (base) {
+                xhr('GET', '/ping', null, function (err, res) {
+                    if (found) return;
+                    if (!err) { found = true; BASE = base; return cb(null, res); }
+                    last[base] = err.message;
+                    if (--left) return;
+                    tried = list.map(function (x) { return x.replace(/^http:\/\//, '') + ': ' + last[x]; });
+                    if (tries === 33 && launch !== 'ok') go();
+                    if (++tries > 100) {
+                        if (launch === 'ok') return cb(new Error('Launched, but nothing answers on port 8077.'));
+                        if (launch === 'pending') return cb(new Error('The TV never answered the request to start it.'));
+                        return cb(new Error(launch));
+                    }
+                    setTimeout(poll, 300);
+                }, base, 2500);
+            });
+        })();
     }
 
     // What the platform says is installed: packageId -> version. Empty off a TV.
@@ -124,13 +174,17 @@
         try {
             tizen.application.getAppsInfo(function (infos) {
                 var map = {};
-                for (var i = 0; i < infos.length; i++) if (infos[i].packageId) map[infos[i].packageId] = infos[i].version || '';
+                appIds = {};
+                for (var i = 0; i < infos.length; i++) { if (infos[i].packageId) map[infos[i].packageId] = infos[i].version || ''; if (infos[i].id) appIds[infos[i].id] = true; }
                 cb(map);
             }, function () { cb({}); });
         } catch (e) { cb({}); }
     }
 
     function readDevice() {
+        ['ETHERNET_NETWORK', 'WIFI_NETWORK'].forEach(function (t) {
+            try { tizen.systeminfo.getPropertyValue(t, function (n) { if (n && n.ipAddress && !tvIp) tvIp = n.ipAddress; }, function () {}); } catch (e) {}
+        });
         try {
             tizen.systeminfo.getPropertyValue('BUILD', function (b) {
                 device = b && b.model ? b.model : '';
@@ -250,18 +304,34 @@
     }
     function setInstalled(map) { installed = map; claims = null; }
 
-    // Installed / update state of an app: from the variant whose package id the TV lists.
+    // Installed / update state of an app: from the variants whose package id the TV lists. Several
+    // can match (#17); then the installed application id narrows it down where the builds differ in
+    // it, and the file TV-Store itself installed settles it. Otherwise known is false: the screens
+    // say the variant is not known instead of naming the first one, and no update starts without
+    // the user picking the build (it could swap theirs for another).
     function state(x) {
+        var hits = [];
         for (var i = 0; i < x.variants.length; i++) {
             var v = x.variants[i];
-            if (v.packageId && installed.hasOwnProperty(v.packageId) && claimOf(v.packageId) === x.key) {
-                var have = installed[v.packageId];
-                return { installed: true, version: have, update: newer(v.version, have), variant: i, latest: v.version };
-            }
+            if (v.packageId && installed.hasOwnProperty(v.packageId) && claimOf(v.packageId) === x.key) hits.push(i);
         }
-        return { installed: false };
+        if (!hits.length) return { installed: false };
+        var byApp = hits.filter(function (i) { return x.variants[i].appId && appIds[x.variants[i].appId]; });
+        if (byApp.length) hits = byApp;
+        var pick = hits[0], known = hits.length === 1, file = installedFile[x.variants[pick].packageId];
+        for (var j = 0; j < hits.length; j++) if (x.variants[hits[j]].file === file) { pick = hits[j]; known = true; }
+        var pv = x.variants[pick], have = installed[pv.packageId];
+        return { installed: true, version: have, update: newer(pv.version, have), variant: pick, known: known, latest: pv.version };
     }
 
+    // TV-Store's own catalog entry.
+    function self() {
+        var pkg = '';
+        try { pkg = tizen.application.getCurrentApplication().appInfo.packageId; } catch (e) {}
+        for (var i = 0; i < catalogApps.length; i++)
+            for (var j = 0; j < catalogApps[i].variants.length; j++) if (pkg && catalogApps[i].variants[j].packageId === pkg) return catalogApps[i];
+        return null;
+    }
     function updates() { return catalogApps.filter(function (x) { return state(x).update; }); }
     function onTv() { return catalogApps.filter(function (x) { return state(x).installed; }); }
     function byKey(k) { for (var i = 0; i < catalogApps.length; i++) if (catalogApps[i].key === k) return catalogApps[i]; return null; }
@@ -344,6 +414,8 @@
         var h = '';
         if (problem) {
             h += '<div class="welcome"><div class="wmain"><h1>' + esc(problem.title) + '</h1><p>' + esc(problem.text) + '</p>'
+                + (tried.length ? '<div class="hint mono" style="margin-top:18px">' + tried.map(esc).join('<br>') + '</div>' : '')
+                + logBlock()
                 + '<div class="btns" style="margin-top:26px"><button class="btn primary f" data-k="retry" data-act="retry">Try again</button></div></div></div>';
             pageEl.innerHTML = h; return;
         }
@@ -364,6 +436,13 @@
             h += section('all', 'Meanwhile, have a look around', apps, false, false);
             pageEl.innerHTML = h; return;
         }
+
+        // TV-Store is in its own catalog: say so when a newer one is there (like Moonfin's update
+        // popup, but from the signed catalog instead of the GitHub API, and installable from here).
+        var me = self(), ms = me ? state(me) : null;
+        if (ms && ms.update) h += '<div class="notice" style="display:flex;align-items:center;margin:0 0 26px"><span style="flex:1">TV-Store v' + esc(ms.latest)
+            + ' is out (this is v' + esc(ms.version) + '). TV-Store closes while it updates itself; open it again after a minute.</span>'
+            + '<button class="btn primary f" style="margin-left:20px" data-k="selfupd" data-act="selfupd">Update TV-Store</button></div>';
 
         if (!hover || apps.indexOf(hover) < 0) hover = apps[0] || null;
         if (!query) {
@@ -392,7 +471,7 @@
     // ---- On the TV (C6) -----------------------------------------------------------------------------
     function tvRow(x) {
         var st = state(x), v = x.variants[st.variant];
-        var mt = st.update ? 'v' + st.version + ' installed · v' + st.latest + ' in the catalog' : 'v' + (st.version || v.version) + (x.variants.length > 1 ? ' · ' + v.label : '');
+        var mt = st.update ? 'v' + st.version + ' installed · v' + st.latest + ' in the catalog' : 'v' + (st.version || v.version) + (x.variants.length > 1 ? ' · ' + (st.known ? v.label : 'variant not known') : '');
         return '<div class="lrow f" tabindex="0" data-k="tv:' + esc(x.key) + '" data-app="' + esc(x.key) + '">' + tile(x, 66)
             + '<div class="txt"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(mt) + '</div></div>'
             + (st.update ? badge('b-warn', 'Update') : badge('b-ok', 'Up to date')) + CHEV + '</div>';
@@ -420,9 +499,9 @@
         var h = '<div class="panel" id="tvpanel"><div class="phead">' + tile(x, 96) + '<div style="min-width:0"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(catName(x.category) + (v.appId ? ' · ' + v.appId : '')) + '</div></div></div>'
             + '<div class="table kv" style="margin-top:0"><div class="trow"><span class="k">Installed</span><span class="v">v' + esc(st.version) + '</span></div>'
             + '<div class="trow"><span class="k">In the catalog</span><span class="v"' + (st.update ? ' style="color:#F0A020"' : '') + '>v' + esc(st.latest || v.version) + '</span></div>'
-            + (x.variants.length > 1 ? '<div class="trow"><span class="k">Variant</span><span class="v">' + esc(v.label) + '</span></div>' : '') + '</div>'
+            + (x.variants.length > 1 ? '<div class="trow"><span class="k">Variant</span><span class="v">' + esc(st.known ? v.label : 'Not known: the builds share one package') + '</span></div>' : '') + '</div>'
             + '<div class="btns" style="margin-top:18px">';
-        if (st.update && !v.needsHead && armed()) h += '<button class="btn primary grow f" data-k="tvupd" data-act="tvupd">Update</button>';
+        if (st.update && st.known && !v.needsHead && armed()) h += '<button class="btn primary grow f" data-k="tvupd" data-act="tvupd">Update</button>';
         else h += '<button class="btn grow f" data-k="tvsheet" data-act="tvsheet">Details</button>';
         if (v.appId) h += '<button class="btn f" data-k="tvopen" data-act="tvopen">Open</button>';
         h += '</div>';
@@ -475,7 +554,7 @@
             if (!sheet.all && x.variants.length > 4) shown = sheet.v < 4 ? [0, 1, 2, 3] : [0, 1, 2, sheet.v];
             h += '<div class="vhead"><span class="t">Variant</span><span class="h">Pick the build for your set</span></div><div class="vbox"><div class="vscroll" id="vscroll">'
                 + shown.map(function (i) {
-                    var vv = x.variants[i], inst = st.installed && st.variant === i;
+                    var vv = x.variants[i], inst = st.installed && st.known && st.variant === i;
                     return '<div class="var f' + (i === sheet.v ? ' sel' : '') + '" tabindex="0" data-k="var:' + i + '" data-var="' + i + '"' + (i === sheet.v ? ' data-default' : '') + '>'
                         + '<span class="radio"></span><span class="vl">' + esc(vv.label) + '</span>'
                         + (inst ? badge('b-ok', 'on the TV') : '') + (vv.needsHead ? badge('b-mute', 'Phone or PC') : '')
@@ -484,13 +563,14 @@
             if (!sheet.all && x.variants.length > 4) h += '<span class="link f" tabindex="0" data-k="allvars" data-act="allvars">Show all ' + x.variants.length + ' variants ›</span>';
         }
 
-        var label = st.installed && st.variant === sheet.v ? (st.update ? 'Update to v' + v.version : 'Reinstall') : (st.installed ? 'Install this variant' : 'Install on this TV');
+        var label = st.installed && st.known && st.variant === sheet.v ? (st.update ? 'Update to v' + v.version : 'Reinstall') : (st.installed ? 'Install this variant' : 'Install on this TV');
         if (v.needsHead) h += '<div class="notice">' + esc(x.name + ' ' + v.needsHead + ', which this TV cannot do yet. Install it with Apps2Samsung on a phone or PC.') + '</div>';
         else if (!armed()) h += '<div class="notice">Not armed yet. Open this TV’s Toolbox in Apps2Samsung 3.0 or newer on your phone or PC and press Arm TV-Store once; after that every install runs here.</div>';
         var can = !v.needsHead && armed() && !(job && job.running);
         h += '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="install" data-act="install"' + (can ? (x.variants.length > 1 ? '' : ' data-default') : ' disabled') + '>'
             + esc(v.needsHead ? 'Install from a phone or PC' : job && job.running ? 'Another install is running' : label) + '</button>';
         if (st.installed && x.variants[st.variant].appId) h += '<button class="btn f" data-k="open" data-act="open">Open</button>';
+        if (st.installed && !st.known && x.variants.length > 1) h = h.replace('<div class="sfoot">', '<div class="notice">' + esc('Your TV has ' + x.name + ' v' + st.version + ', but every build of it uses the same package, so TV-Store cannot tell which one. Pick yours above to reinstall or update it.') + '</div><div class="sfoot">');
         h += '</div><div class="hint">' + (can ? 'Takes about a minute. RETURN goes back to the store.' : 'RETURN goes back to the store.') + '</div></div>';
         return h;
     }
@@ -530,6 +610,8 @@
         h += '<div class="table kv" style="margin-top:38px"><div class="trow"><span class="k">Variant</span><span class="v">' + esc(v.label) + '</span></div>'
             + '<div class="trow"><span class="k">Took</span><span class="v">' + secs + ' seconds</span></div>'
             + '<div class="trow"><span class="k">Signed with</span><span class="v">your certificate</span></div></div>';
+        // The heads end an install the same way: a thank-you and the Ko-fi link, as a QR here.
+        h += '<div class="qrrow">' + qr(KOFI, 150) + '<div><b>That was easy, right?</b><span>Scan the code to buy me a beer.</span></div></div>';
         h += '<div class="sfoot"><div class="btns">' + (v.appId ? '<button class="btn primary grow f" data-k="openjob" data-act="openjob" data-default>Open ' + esc(x.name) + '</button>' : '')
             + '<button class="btn' + (v.appId ? '' : ' grow') + ' f" data-k="close" data-act="close">Back to the store</button></div>';
         if (queue.length) h += '<div class="hint">Next up: ' + esc(queue[0].name) + (queue.length > 1 ? ' and ' + (queue.length - 1) + ' more' : '') + '. It starts in a moment.</div>';
@@ -551,7 +633,7 @@
         h += '<div class="table kv"><div class="trow"><span class="k">Signing certificate</span><span class="v">' + (armed() ? 'handed over' : 'not yet') + '</span></div>'
             + '<div class="trow"><span class="k">Catalog</span><span class="v">' + esc(catalogApps.length + ' apps, signature checked') + '</span></div>'
             + '<div class="trow"><span class="k">TV-Store</span><span class="v">v' + VERSION + (ready && ready.node ? ' · Node ' + esc(ready.node) : '') + '</span></div></div>';
-        return h;
+        return h + logBlock();
     }
 
     // ---- actions ----------------------------------------------------------------------------------
@@ -563,7 +645,7 @@
     function startInstall(x, vIdx) {
         if (job && job.running) return;
         var v = x.variants[vIdx], st = state(x);
-        job = { app: x, v: v, vIdx: vIdx, update: st.installed && st.variant === vIdx, running: true, finished: false, ok: false, step: 0, bytes: 0, line: '', error: null, started: Date.now() };
+        job = { app: x, v: v, vIdx: vIdx, update: st.installed && st.known && st.variant === vIdx, running: true, finished: false, ok: false, step: 0, bytes: 0, line: '', error: null, started: Date.now() };
         if (sheet) { sheet = { mode: 'job' }; renderSheet(true); } else openSheet({ mode: 'job' });
         renderHeader();
         var since = job.started - 2000, me = job;
@@ -574,7 +656,8 @@
                 me.running = false; me.finished = true; me.ended = Date.now();
                 if (err || !res.ok) { me.error = err ? err.message : res.error; renderHeader(); if (sheet && sheet.mode === 'job') renderSheet(true); queue = []; return; }
                 me.ok = true; me.step = 4;
-                if (v.packageId) { installed[v.packageId] = v.version; claims = null; }
+                if (v.packageId) { installed[v.packageId] = v.version; claims = null; rememberVariant(v); }
+                if (v.appId) appIds[v.appId] = true;
                 readInstalled(function (map) {
                     if (map && Object.keys(map).length) setInstalled(map);
                     renderPage();
@@ -643,9 +726,10 @@
             case 'adultno': confirmingAdult = false; renderSheet(); focusKey('opt:showAdult'); return;
             case 'tvupd': startInstall(tvSel, state(tvSel).variant); return;
             case 'tvsheet': openApp(tvSel); return;
+            case 'selfupd': openApp(self()); return;
             case 'tvopen': launch(tvSel.variants[state(tvSel).variant].appId); return;
             case 'updall':
-                queue = updates().filter(function (x) { var v = x.variants[state(x).variant]; return !v.needsHead; });
+                queue = updates().filter(function (x) { var st = state(x), v = x.variants[st.variant]; return st.known && !v.needsHead; });
                 if (queue.length) { var first = queue.shift(); startInstall(first, state(first).variant); }
                 return;
         }

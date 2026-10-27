@@ -209,6 +209,10 @@
   .ico.run{border:3px solid #2DD4BF;border-right-color:transparent;-webkit-animation:spin 1s linear infinite;animation:spin 1s linear infinite}
   .ico.wait{border:2px solid rgba(159,176,198,.5)}
   .ico.bigok{position:absolute;right:-14px;bottom:-14px;width:60px;height:60px;border:5px solid #142638;margin:0}
+  .qrrow{display:flex;align-items:center;margin-top:28px;text-align:left}
+  .qrrow .qr{flex:none;background:#fff;border-radius:14px;padding:8px;margin-right:24px;line-height:0}
+  .qrrow b{display:block;font-size:22px;color:#F4F7FB;margin-bottom:6px}
+  .qrrow span{font-size:18px;color:#9FB0C6;line-height:1.45}
   .donehead{display:flex;flex-direction:column;align-items:center;text-align:center;margin-top:60px;flex:none}
   .donehead .tw{position:relative;width:150px;height:150px}
   .donehead h2{font-size:36px;font-weight:700;letter-spacing:-.01em;margin:28px 0 0}
@@ -253,6 +257,7 @@
   </div>
   <div class="sheet" id="sheet"></div>
 </div>
+<script src="js/qrcode.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

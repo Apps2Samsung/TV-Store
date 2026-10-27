@@ -83,28 +83,67 @@ function buildSignature(which, refs, propDigestB64, keyPem, certPem) {
     return Buf.from(xml, 'utf8');
 }
 
-// certs = { authorKeyPem, authorCertPem, distributorKeyPem, distributorCertPem }
-function sign(wgtBuffer, certs) {
+function needCerts(certs) {
     if (!certs || !certs.authorKeyPem || !certs.distributorKeyPem) { var e = new Error('No signing certificate available on this TV yet (#844 cert hand-over).'); e.code = 'NO_CERT'; throw e; }
-    var entries = zip.readEntries(wgtBuffer).filter(function (e) {
-        return !e.dir && e.name !== 'author-signature.xml' && e.name !== 'signature1.xml';
-    });
+}
 
+// Both signature files for package files given as [{name, digest}] (SHA-512, base64), in order.
+function signatures(files, certs) {
     // author-signature.xml: references every package file + #prop
-    var authorRefs = entries.map(function (e) { return { uri: e.name, digest: sha512b64(e.data), withTransform: false }; });
+    var authorRefs = files.map(function (f) { return { uri: f.name, digest: f.digest, withTransform: false }; });
     var authorProp = sha512b64(Buf.from(propCanonical('AuthorSignature', 'author'), 'utf8'));
     var authorXml = buildSignature('author', authorRefs, authorProp, certs.authorKeyPem, certs.authorCertPem);
 
     // signature1.xml: references author-signature.xml (its stored bytes) + every package file + #prop
-    var distRefs = [{ uri: 'author-signature.xml', digest: sha512b64(authorXml), withTransform: false }]
-        .concat(entries.map(function (e) { return { uri: e.name, digest: sha512b64(e.data), withTransform: false }; }));
+    var distRefs = [{ uri: 'author-signature.xml', digest: sha512b64(authorXml), withTransform: false }].concat(authorRefs);
     var distProp = sha512b64(Buf.from(propCanonical('DistributorSignature', 'distributor'), 'utf8'));
     var distXml = buildSignature('distributor', distRefs, distProp, certs.distributorKeyPem, certs.distributorCertPem);
-
-    // Repackage: both signatures first, then the files (STORED).
-    var out = [{ name: 'author-signature.xml', data: authorXml }, { name: 'signature1.xml', data: distXml }]
-        .concat(entries.map(function (e) { return { name: e.name, data: e.data }; }));
-    return zip.write(out);
+    return { author: authorXml, distributor: distXml };
 }
 
-module.exports = { sign: sign, ready: true };
+function packageFile(name) { return name !== 'author-signature.xml' && name !== 'signature1.xml'; }
+
+// Signs the package at inFile into outFile; cb(err). Never holds the package in memory: each entry
+// is inflated as a stream for its digest, and copied over still compressed, so a 41 MB package
+// costs about as much memory as a small one (a Tizen 6 set lost the service on one, held whole).
+function signFile(inFile, outFile, certs, cb) {
+    try { needCerts(certs); } catch (e) { return cb(e); }
+    var entries;
+    try { entries = zip.readCentral(inFile).filter(function (e) { return !e.dir && packageFile(e.name); }); } catch (e) { return cb(e); }
+    var files = [], i = 0;
+    (function next() {
+        if (i === entries.length) {
+            var sig;
+            try {
+                sig = signatures(files, certs);
+                // Both signatures first, then the files.
+                zip.writeFile(outFile, [{ name: 'author-signature.xml', data: sig.author }, { name: 'signature1.xml', data: sig.distributor }]
+                    .concat(entries.map(function (e) { return { name: e.name, from: inFile, entry: e }; })));
+            } catch (e) { return cb(e); }
+            return cb(null);
+        }
+        var e = entries[i++], h = crypto.createHash('sha512'), size = 0, done = false;
+        function fin(err) {
+            if (done) return; done = true;
+            if (err) return cb(new Error('cannot read ' + e.name + ' from the package: ' + err.message));
+            if (size !== e.uncompSize) return cb(new Error('size mismatch for ' + e.name));
+            files.push({ name: e.name, digest: h.digest('base64') });
+            setImmediate(next);
+        }
+        var st = zip.entryStream(inFile, e);
+        st.on('data', function (d) { size += d.length; h.update(d); });
+        st.on('end', function () { fin(null); });
+        st.on('error', fin);
+    })();
+}
+
+// The same on a Buffer, for small packages and the tests. Writes a STORED package.
+function sign(wgtBuffer, certs) {
+    needCerts(certs);
+    var entries = zip.readEntries(wgtBuffer).filter(function (e) { return !e.dir && packageFile(e.name); });
+    var sig = signatures(entries.map(function (e) { return { name: e.name, digest: sha512b64(e.data) }; }), certs);
+    return zip.write([{ name: 'author-signature.xml', data: sig.author }, { name: 'signature1.xml', data: sig.distributor }]
+        .concat(entries.map(function (e) { return { name: e.name, data: e.data }; })));
+}
+
+module.exports = { sign: sign, signFile: signFile, ready: true };

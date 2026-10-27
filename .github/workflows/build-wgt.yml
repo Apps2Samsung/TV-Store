@@ -23,6 +23,8 @@ jobs:
         run: node test/run.js
       - name: Signer test (valid signed package)
         run: node test/sign.test.js
+      - name: Streaming signer test (big package, file to file)
+        run: node --expose-gc test/stream-sign.test.js
       - name: Signed catalog test (signature, staleness, hashes)
         run: node test/catalog.test.js
       # The TV's own Node: v4.4.3 on a 2019 Tizen 5.0 set (#881). Buffer.from, Buffer.alloc,
@@ -36,6 +38,7 @@ jobs:
           node test/config.test.js
           node test/run.js
           node test/sign.test.js
+          node --expose-gc test/stream-sign.test.js
           node test/catalog.test.js
       - name: Build the .wgt
         run: scripts/build-wgt.sh
