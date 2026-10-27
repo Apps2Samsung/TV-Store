@@ -11,6 +11,7 @@
  * installs is handled exactly as the desktop/phone/CLI would.
  */
 'use strict';
+var Buf = require('./compat.js');
 var net = require('net');
 
 var CMD = { CNXN: 0x4E584E43, AUTH: 0x48545541, OPEN: 0x4E45504F, OKAY: 0x59414B4F, WRTE: 0x45545257, CLSE: 0x45534C43 };
@@ -21,8 +22,8 @@ var MAXDATA = 256 * 1024;
 function sum32(buf) { var s = 0; for (var i = 0; i < buf.length; i++) s = (s + buf[i]) >>> 0; return s; }
 
 function frame(command, arg0, arg1, payload) {
-    payload = payload || Buffer.alloc(0);
-    var h = Buffer.alloc(24);
+    payload = payload || Buf.alloc(0);
+    var h = Buf.alloc(24);
     h.writeUInt32LE(command >>> 0, 0);
     h.writeUInt32LE(arg0 >>> 0, 4);
     h.writeUInt32LE(arg1 >>> 0, 8);
@@ -34,7 +35,7 @@ function frame(command, arg0, arg1, payload) {
 
 // A framed reader: accumulates bytes and emits {command,arg0,arg1,payload} frames.
 function Demux(onFrame) {
-    var buf = Buffer.alloc(0);
+    var buf = Buf.alloc(0);
     this.push = function (chunk) {
         buf = Buffer.concat([buf, chunk]);
         while (buf.length >= 24) {
@@ -62,7 +63,7 @@ SdbClient.prototype.connect = function (cb) {
     var done = false;
     function finish(err) { if (done) return; done = true; cb(err); }
     var sock = net.connect(this.port, this.host, function () {
-        sock.write(frame(CMD.CNXN, CLIENT_VERSION, MAXDATA, Buffer.from('host::sdb-net-client')));
+        sock.write(frame(CMD.CNXN, CLIENT_VERSION, MAXDATA, Buf.from('host::sdb-net-client')));
     });
     this._sock = sock;
     sock.setTimeout(15000);
@@ -95,7 +96,7 @@ SdbClient.prototype.open = function (service, handlers, cb) {
     var ch = { localId: localId, remoteId: 0, onData: handlers.onData, onClose: handlers.onClose, onReady: null };
     this._channels[localId] = ch;
     ch.onReady = function () { cb(null, ch); };
-    this._send(CMD.OPEN, localId, 0, Buffer.from(service, 'binary'));
+    this._send(CMD.OPEN, localId, 0, Buf.from(service, 'binary'));
 };
 
 // Write a chunk to a channel and wait for the device OKAY before the next write.
@@ -120,7 +121,7 @@ SdbClient.prototype.shell = function (command, cb) {
 // sync: push a Buffer to a remote path (mode 0644). Mirrors tizen-sdb PushAsync.
 SdbClient.prototype.push = function (remotePath, data, cb) {
     var self = this;
-    var reply = Buffer.alloc(0), finished = false, chRef = null;
+    var reply = Buf.alloc(0), finished = false, chRef = null;
     function finish(err) { if (finished) return; finished = true; if (chRef) { try { self.close(chRef); } catch (e) {} } cb(err || null); }
     function onSync(d) {
         reply = Buffer.concat([reply, d]);
@@ -135,18 +136,18 @@ SdbClient.prototype.push = function (remotePath, data, cb) {
         chRef = ch;
         // SEND "<path>,<mode>"
         var target = remotePath + ',' + 0x81a4;   // 0100644
-        syncPacket('SEND', Buffer.from(target), function () { sendData(0); });
+        syncPacket('SEND', Buf.from(target), function () { sendData(0); });
         function sendData(off) {
             if (off >= data.length) return doneCmd();
             var end = Math.min(off + 64 * 1024, data.length);        // 64 KiB sync chunks
             syncPacket('DATA', data.slice(off, end), function () { sendData(end); });
         }
         function doneCmd() {
-            var mtime = Buffer.alloc(4); mtime.writeUInt32LE(Math.floor(Date.now() / 1000) >>> 0, 0);
+            var mtime = Buf.alloc(4); mtime.writeUInt32LE(Math.floor(Date.now() / 1000) >>> 0, 0);
             syncPacket('DONE', mtime, function () { /* wait for OKAY via onSync */ });
         }
         function syncPacket(cmd4, payload, after) {
-            var h = Buffer.alloc(8); h.write(cmd4, 0, 'ascii'); h.writeUInt32LE(payload.length >>> 0, 4);
+            var h = Buf.alloc(8); h.write(cmd4, 0, 'ascii'); h.writeUInt32LE(payload.length >>> 0, 4);
             self.write(ch, Buffer.concat([h, payload]), after);
         }
     });
