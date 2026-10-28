@@ -63,8 +63,10 @@ SdbClient.prototype.connect = function (cb) {
     var self = this;
     var done = false, started = Date.now();
     this.firstFrame = null;     // name of the first frame sdbd sent, for the install log
-    function finish(err) {
+    // err.code: the socket's own (ECONNREFUSED, ECONNRESET, ...), SDB_CLOSED or SDB_TIMEOUT.
+    function finish(err, code) {
         if (done) return; done = true;
+        if (err) err.code = code;
         if (err) err.message += ' (' + self.host + ':' + self.port + ', after ' + (Date.now() - started) + ' ms, first frame from sdbd: ' + (self.firstFrame || 'none') + ')';
         cb(err);
     }
@@ -76,9 +78,9 @@ SdbClient.prototype.connect = function (cb) {
     sock.setTimeout(15000);
     this._demux = new Demux(function (f) { self._onFrame(f, finish); });
     sock.on('data', function (d) { self._demux.push(d); });
-    sock.on('timeout', function () { finish(new Error('sdb connect timed out')); });
-    sock.on('error', function (e) { finish(new Error('sdb socket error: ' + ((e && e.code) || e.message))); self._failAll(e); });
-    sock.on('close', function () { finish(new Error('sdbd closed the connection')); self._connected = false; self._failAll(new Error('connection closed')); });
+    sock.on('timeout', function () { finish(new Error('sdb connect timed out'), 'SDB_TIMEOUT'); });
+    sock.on('error', function (e) { finish(new Error('sdb socket error: ' + ((e && e.code) || e.message)), e && e.code); self._failAll(e); });
+    sock.on('close', function () { finish(new Error('sdbd closed the connection'), 'SDB_CLOSED'); self._connected = false; self._failAll(new Error('connection closed')); });
 };
 
 SdbClient.prototype._onFrame = function (f, connectCb) {

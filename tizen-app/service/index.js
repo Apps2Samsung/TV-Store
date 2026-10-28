@@ -186,18 +186,31 @@ function install(entry, cb) {
 function coded(code, message) { var e = new Error(message); e.code = code; return e; }
 
 // sdbd on this TV, at the first address that completes the handshake. The LAN IP is what Developer
-// Mode's Host PC IP lets in; loopback is a fallback for Tizen 9/10, where sdbd resets the LAN IP (#26).
-function connectSdb(hosts, cb, i) {
-    i = i || 0;
+// Mode's Host PC IP lets in; loopback is a fallback for a Host PC IP of 127.0.0.1.
+// When none gets in, the error says what to change on the TV instead of the socket error (#26).
+function connectSdb(hosts, cb, i, seen) {
+    i = i || 0; seen = seen || [];
     var c = new sdb.SdbClient(hosts[i]);
     c.trace = VERBOSE ? function (m) { logv('sdb ' + hosts[i] + ': ' + m); } : null;
     c.connect(function (err) {
         if (!err) { log('install: sdb connected to ' + hosts[i] + ', first frame ' + c.firstFrame); return cb(null, c); }
         c.end();
         log('install: ' + err.message);
-        if (i + 1 < hosts.length) return connectSdb(hosts, cb, i + 1);
-        cb(err);
+        seen.push({ code: err.code, frame: c.firstFrame });
+        if (i + 1 < hosts.length) return connectSdb(hosts, cb, i + 1, seen);
+        cb(sdbAdvice(err, seen, hosts[0]));
     });
+}
+
+// What the user can do about a failed sdb connection. A refused connection means sdbd is not
+// listening: Developer Mode is off. One that sdbd accepts and drops without a word is what a caller
+// other than the Host PC IP gets (the Tizen 10 report in #26, Host PC IP was 127.0.0.1).
+function sdbAdvice(err, seen, ip) {
+    if (seen.every(function (s) { return s.code === 'ECONNREFUSED'; }))
+        return coded('DEV_MODE_OFF', 'Developer Mode is off on this TV. Turn it on (Apps, then 1 2 3 4 5) with Host PC IP ' + ip + ', restart the TV and try again.');
+    if (seen.some(function (s) { return !s.frame && /^(ECONNRESET|EPIPE|SDB_CLOSED)$/.test(s.code || ''); }))
+        return coded('HOST_PC_IP', 'The TV turned the install away. In Developer Mode (Apps, then 1 2 3 4 5), Host PC IP must be this TV\u2019s own IP, ' + ip + ', not 127.0.0.1 or a phone or PC. Change it, restart the TV and try again.');
+    return err;
 }
 
 function signAndInstall(entry, remoteName, inFile, outFile, cb) {
