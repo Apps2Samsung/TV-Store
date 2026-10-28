@@ -259,5 +259,7 @@
 </div>
 <script src="js/qrcode.js"></script>
 <script src="js/app.js"></script>
+<!-- Tizen 10 starts a web service through wrt:service; older runtimes skip or fail this and keep the old start. -->
+<script type="module">import { Service } from 'wrt:service'; window.a2sService = Service;</script>
 </body>
 </html>

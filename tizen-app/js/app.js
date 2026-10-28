@@ -29,7 +29,7 @@
     // TV's current IP and loopback too, and keeps whichever answers.
     var BASE = 'http://127.0.0.1:8077';
     var KOFI = 'https://ko-fi.com/patrickst';
-    var VERSION = '0.3.8';
+    var VERSION = '0.3.9';
     var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13, RETURN: 10009, ESC: 27, BACK: 8 };
 
     // What the manifest providers are called; resolved.json carries only their ids.
@@ -138,6 +138,15 @@
             var id;
             try { id = tizen.application.getCurrentApplication().appInfo.id.split('.')[0] + '.sdbservice'; }
             catch (e) { launch = 'launch failed (' + (e.name ? e.name + ': ' + e.message : e) + ')'; return; }
+            // Tizen 10 starts a web service only through wrt:service (set by the module in index.html).
+            if (typeof window.a2sService === 'function') {
+                try {
+                    var started = new window.a2sService(id).start();
+                    if (started && typeof started.then === 'function') started.then(function () { launch = 'ok'; }, function (e) { launch = 'launch failed (wrt:service: ' + (e && e.message || e) + ')'; });
+                    else launch = 'ok';
+                    return;
+                } catch (e) { launch = 'launch failed (wrt:service: ' + (e && e.message || e) + ')'; }
+            }
             function plain(why) {
                 try {
                     tizen.application.launch(id,
@@ -151,7 +160,8 @@
                     function (e) { plain('app control: ' + e.name); });
             } catch (e) { plain('app control: ' + (e.name || e)); }
         }
-        go();
+        // The wrt:service module runs after this script, before DOMContentLoaded.
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', go); else go();
         var tries = 0, found = false;
         function candidates() {
             var c = [BASE];
