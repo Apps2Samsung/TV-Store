@@ -23,7 +23,8 @@ colours, big tiles for a couch.
 - **Apps2Samsung 3.0 or newer** on a phone or PC, for the one-time arming. Until 3.0 is the stable
   release that means the [3.0 beta](https://github.com/Apps2Samsung/Apps2Samsung/releases); 2.x has
   no Arm TV-Store button.
-- A Samsung TV in Developer Mode. Tested on Tizen 5.0 (2019); TV-Store asks for Tizen 3.0 (2017) or newer.
+- A Samsung TV in Developer Mode. Tested on Tizen 5.0 (2019) and Tizen 10 (2025); TV-Store asks for Tizen 3.0
+  (2017) or newer.
 
 ## Setting it up
 
@@ -62,6 +63,7 @@ The service only answers the TV itself, except for its log.
 The service keeps its log on the TV, with the previous run's next to it, so it survives a crash.
 Open `http://<TV IP>:8077/log.txt` on a phone or PC in the same network, or scan the QR code under
 **Settings** (also shown when the service does not start), and attach it to a bug report.
+When a bug report asks for more detail, turn on **Verbose logging** in Settings first (see below).
 
 Some catalog apps need settings written into the package before they install (a server address,
 an API key). The TV cannot do that yet, so those are shown greyed with a "Phone or PC" badge and
@@ -70,12 +72,15 @@ any file the catalog has no hash for.
 
 ## Settings
 
-Press **▲** at the top of the list to reach **Settings**. Both switches are remembered on the TV:
+Press **▲** at the top of the list to reach **Settings**. The switches are remembered on the TV:
 
 - **Show adult (18+) apps**: off by default. Turning it on asks "I am 18 or older" first, as the
   phone app does; those apps then carry an 18+ badge.
 - **Show apps that need a PC or phone**: on by default, so nobody thinks an app is missing; turn
   it off to keep the greyed "PC / phone" apps out of the list.
+- **Verbose logging**: off by default. Adds much more detail to the log: the sdb traffic, HTTP
+  requests, the TV's network addresses and how long each install step took. Turn it on for a bug
+  report and off again afterwards.
 
 The header counts what the switches hide ("12 apps · 3 hidden").
 
@@ -94,23 +99,14 @@ The header counts what the switches hide ("12 apps · 3 hidden").
 - `test/` – a fake `sdbd` plus signer and transport tests
 - `docs/design/` – the screens above
 
-## Tizen 9 and 10: help us test
+## Tizen 9 and 10
 
-On Tizen 9 and 10 the old way of starting TV-Store's background service does nothing; those sets
-start a web service through the `Service` class of the `wrt:service` module. TV-Store 0.3.9 starts
-it that way there (and as before on older sets). A user tracked down the cause; the test build
-below checks it on more TVs before it becomes the regular release.
+Since 0.3.9 TV-Store runs on 2025+ sets (Tizen 9 and 10). Those sets start a web service through
+the `Service` class of the `wrt:service` module, so TV-Store starts its service that way there and
+as before on older sets.
 
-1. Uninstall TV-Store, then power the TV off at the wall for about 30 seconds.
-2. Install `TV-Store.wgt` from the
-   [tizen10-test-2 pre-release](https://github.com/Apps2Samsung/TV-Store/releases/tag/tizen10-test-2)
-   with Apps2Samsung, as for any install.
-3. Open TV-Store and wait up to 30 seconds.
-4. Open `http://<TV IP>:8077/log.txt`; it should contain `TV-Store service on port 8077`.
-5. Reply in [issue 26](https://github.com/Apps2Samsung/TV-Store/issues/26) with your TV model and
-   Tizen version, whether the store opened, and the error text on screen if it did not.
-
-Reports from older sets (Tizen 3 to 8) help too: they confirm nothing changed there.
+Set Host PC IP the same way as on any other TV: the TV's own address (shown in TV-Store), not
+`127.0.0.1`. With anything else the TV turns the install away, and TV-Store says so.
 
 ## Build, test, release
 
@@ -138,3 +134,4 @@ Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching 
 | The screens above | built (0.3.4) |
 | First real install from the TV | done, 2019 Tizen 5.0 set (0.3.4) |
 | Tizen 3.0 and 4.0 sets (2017, 2018) | untested |
+| Tizen 10 sets (2025) | done, retail set (0.3.9) |
