@@ -157,6 +157,20 @@ function install(entry, cb) {
 
 function coded(code, message) { var e = new Error(message); e.code = code; return e; }
 
+// sdbd on this TV, at the first address that completes the handshake. The LAN IP is what Developer
+// Mode's Host PC IP lets in; loopback is a fallback for Tizen 9/10, where sdbd resets the LAN IP (#26).
+function connectSdb(hosts, cb, i) {
+    i = i || 0;
+    var c = new sdb.SdbClient(hosts[i]);
+    c.connect(function (err) {
+        if (!err) { log('install: sdb connected to ' + hosts[i] + ', first frame ' + c.firstFrame); return cb(null, c); }
+        c.end();
+        log('install: ' + err.message);
+        if (i + 1 < hosts.length) return connectSdb(hosts, cb, i + 1);
+        cb(err);
+    });
+}
+
 function signAndInstall(entry, remoteName, inFile, outFile, cb) {
     var started = Date.now();
     signer.signFile(inFile, outFile, loadCerts(), function (err) {
@@ -166,9 +180,8 @@ function signAndInstall(entry, remoteName, inFile, outFile, cb) {
         log('install: signed in ' + Math.round((Date.now() - started) / 1000) + ' s, ' + size + ' bytes');
         var ip = ownIp();
         if (!ip) return cb(new Error('could not determine this TV’s own IP'));
-        var c = new sdb.SdbClient(ip);
-        c.connect(function (err) {
-            if (err) { c.end(); return cb(err); }
+        connectSdb([ip, '127.0.0.1'], function (err, c) {
+            if (err) return cb(err);
             var remote = STAGING + '/' + remoteName, fd;
             try { fd = fs.openSync(outFile, 'r'); } catch (e) { c.end(); return cb(e); }
             log('install: pushing to ' + remote);

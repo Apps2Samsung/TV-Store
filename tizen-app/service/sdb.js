@@ -60,8 +60,13 @@ function SdbClient(host, port) {
 
 SdbClient.prototype.connect = function (cb) {
     var self = this;
-    var done = false;
-    function finish(err) { if (done) return; done = true; cb(err); }
+    var done = false, started = Date.now();
+    this.firstFrame = null;     // name of the first frame sdbd sent, for the install log
+    function finish(err) {
+        if (done) return; done = true;
+        if (err) err.message += ' (' + self.host + ':' + self.port + ', after ' + (Date.now() - started) + ' ms, first frame from sdbd: ' + (self.firstFrame || 'none') + ')';
+        cb(err);
+    }
     var sock = net.connect(this.port, this.host, function () {
         sock.write(frame(CMD.CNXN, CLIENT_VERSION, MAXDATA, Buf.from('host::sdb-net-client')));
     });
@@ -71,11 +76,12 @@ SdbClient.prototype.connect = function (cb) {
     sock.on('data', function (d) { self._demux.push(d); });
     sock.on('timeout', function () { finish(new Error('sdb connect timed out')); });
     sock.on('error', function (e) { finish(new Error('sdb socket error: ' + ((e && e.code) || e.message))); self._failAll(e); });
-    sock.on('close', function () { self._connected = false; self._failAll(new Error('connection closed')); });
+    sock.on('close', function () { finish(new Error('sdbd closed the connection')); self._connected = false; self._failAll(new Error('connection closed')); });
 };
 
 SdbClient.prototype._onFrame = function (f, connectCb) {
     var self = this;
+    if (!this.firstFrame) this.firstFrame = NAME[f.command] || ('0x' + (f.command >>> 0).toString(16));
     if (!this._connected) {
         if (f.command === CMD.CNXN) { this._connected = true; if (connectCb) connectCb(null); return; }
         if (f.command === CMD.AUTH) { if (connectCb) connectCb(new Error('sdbd requires key auth on this set; set Developer Mode Host PC IP to the TV’s own IP')); try { this._sock.destroy(); } catch (e) {} return; }
