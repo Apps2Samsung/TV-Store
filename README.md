@@ -23,7 +23,7 @@ colours, big tiles for a couch.
 - **Apps2Samsung 3.0 or newer** on a phone or PC, for the one-time arming. Until 3.0 is the stable
   release that means the [3.0 beta](https://github.com/Apps2Samsung/Apps2Samsung/releases); 2.x has
   no Arm TV-Store button.
-- A Samsung TV in Developer Mode. Tested on Tizen 5.0 (2019); TV-Store asks for Tizen 4.0 or newer.
+- A Samsung TV in Developer Mode. Tested on Tizen 5.0 (2019); TV-Store asks for Tizen 3.0 (2017) or newer.
 
 ## Setting it up
 
@@ -119,4 +119,4 @@ Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching 
 | Arming from Apps2Samsung (phone, PC, CLI) | done |
 | The screens above | built (0.3.4) |
 | First real install from the TV | done, 2019 Tizen 5.0 set (0.3.4) |
-| Tizen 4.0 sets | untested |
+| Tizen 3.0 and 4.0 sets (2017, 2018) | untested |
