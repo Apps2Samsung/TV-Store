@@ -45,6 +45,7 @@ jobs:
           node --expose-gc test/stream-sign.test.js
           node test/bundle.test.js
           node test/catalog.test.js
+          node test/sdb-errors.test.js
       - name: Build the .wgt
         run: scripts/build-wgt.sh
       - uses: actions/upload-artifact@v4
