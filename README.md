@@ -96,27 +96,21 @@ The header counts what the switches hide ("12 apps · 3 hidden").
 
 ## Tizen 9 and 10: help us test
 
-On Tizen 10 TV-Store's background service does not start: the platform runs web services in an
-embedded Node 20 that does not bring them up (the 10.0 emulator runs none at all). The plan for
-those sets is TV-Store as a .NET app (`tizen-nui/`), where there is no separate service: the HTTP
-API runs on a thread inside the app, as in [Overscan](https://github.com/Apps2Samsung/Overscan).
+On Tizen 9 and 10 the old way of starting TV-Store's background service does nothing; those sets
+start a web service through the `Service` class of the `wrt:service` module. TV-Store 0.3.9 starts
+it that way there (and as before on older sets). A user tracked down the cause; the test build
+below checks it on more TVs before it becomes the regular release.
 
-On the Tizen 10 emulator that app starts, its server comes up and the page reaches it. What the
-emulator cannot show is the last step, the app talking to the TV's own `sdbd`, because its Host PC
-IP cannot be changed. **If you have a 2025 or newer set (Tizen 9 or 10), the test build answers
-that in a minute.** It installs nothing.
+1. Uninstall TV-Store, then power the TV off at the wall for about 30 seconds.
+2. Install `TV-Store.wgt` from the
+   [tizen10-test-2 pre-release](https://github.com/Apps2Samsung/TV-Store/releases/tag/tizen10-test-2)
+   with Apps2Samsung, as for any install.
+3. Open TV-Store and wait up to 30 seconds.
+4. Open `http://<TV IP>:8077/log.txt`; it should contain `TV-Store service on port 8077`.
+5. Reply in [issue 26](https://github.com/Apps2Samsung/TV-Store/issues/26) with your TV model and
+   Tizen version, whether the store opened, and the error text on screen if it did not.
 
-1. Install `TV-Store-tizen10-test.tpk` from the
-   [tizen10-test-1 pre-release](https://github.com/Apps2Samsung/TV-Store/releases/tag/tizen10-test-1)
-   with Apps2Samsung (Host PC IP on your phone or PC, as for any install).
-2. In Developer Mode, set **Host PC IP** to the **TV's own IP address** and restart the TV.
-3. Open **TV-Store Tizen 10 test** from Apps and wait about 30 seconds.
-4. Post a photo of the screen, or the text at `http://<TV IP>:8077/log.txt`, in
-   [issue 26](https://github.com/Apps2Samsung/TV-Store/issues/26), with your TV model.
-
-It shows **RESULT: WORKS** or **RESULT: DOES NOT WORK**; both answers help. Set Host PC IP back to
-your phone or PC afterwards. Build it with the .NET 6 SDK and the `tizen` workload:
-`dotnet build tizen-nui/TVStore.csproj -c Release`.
+Reports from older sets (Tizen 3 to 8) help too: they confirm nothing changed there.
 
 ## Build, test, release
 
