@@ -29,7 +29,7 @@
     // TV's current IP and loopback too, and keeps whichever answers.
     var BASE = 'http://127.0.0.1:8077';
     var KOFI = 'https://ko-fi.com/patrickst';
-    var VERSION = '0.3.9';
+    var VERSION = '0.3.9b';   // config.xml stays 0.3.9: Tizen takes digits only
     var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13, RETURN: 10009, ESC: 27, BACK: 8 };
 
     // What the manifest providers are called; resolved.json carries only their ids.
@@ -85,15 +85,21 @@
     // ---- settings, remembered on the TV -------------------------------------------------------------
     var SETTINGS_KEY = 'a2s.store.settings';
     var settings = (function () {
-        var s = { showAdult: false, showNeedsHead: true };
+        var s = { showAdult: false, showNeedsHead: true, verboseLog: false };
         try {
             var saved = JSON.parse(window.localStorage.getItem(SETTINGS_KEY) || '{}');
             if (typeof saved.showAdult === 'boolean') s.showAdult = saved.showAdult;
             if (typeof saved.showNeedsHead === 'boolean') s.showNeedsHead = saved.showNeedsHead;
+            if (typeof saved.verboseLog === 'boolean') s.verboseLog = saved.verboseLog;
         } catch (e) {}
         return s;
     })();
     function saveSettings() { try { window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {} }
+    // The service keeps its own copy (it logs before the page is up); this page's setting wins.
+    function syncVerbose() {
+        if (ready && ready.verbose === settings.verboseLog) return;
+        xhr('POST', '/settings', { verbose: settings.verboseLog }, function (err, res) { if (!err && res && res.ok && ready) ready.verbose = res.verbose; });
+    }
 
     // A QR code as an <img> (qrcode.js, GIF data URL: old TV engines show that fine), on a white tile.
     function qr(text, px) {
@@ -669,7 +675,8 @@
         var hidden = catalogApps.length - apps.length;
         var h = '<div class="shd"><div><div class="nm">Settings</div><div class="mt">Remembered on this TV' + (hidden > 0 ? ' · ' + hidden + (hidden === 1 ? ' app' : ' apps') + ' hidden now' : '') + '</div></div></div>'
             + '<div class="opts">' + opt('showAdult', 'Show adult (18+) apps', 'Apps marked adult-only stay out of the store until this is on.')
-            + opt('showNeedsHead', 'Show apps that need a phone or PC', 'Some apps need Apps2Samsung on a phone or PC to install. Turn this off to keep them out of the store.') + '</div>';
+            + opt('showNeedsHead', 'Show apps that need a phone or PC', 'Some apps need Apps2Samsung on a phone or PC to install. Turn this off to keep them out of the store.')
+            + opt('verboseLog', 'Verbose logging', 'Writes much more detail to the TV-Store log. Turn it on when a bug report asks for it, and off again afterwards.') + '</div>';
         if (confirmingAdult) h += '<div class="notice">These apps are meant for adults only. Turn them on only if you are 18 or older.</div>'
             + '<div class="btns" style="margin-top:16px"><button class="btn primary grow f" data-k="adultyes" data-act="adultyes" data-default>I am 18 or older</button><button class="btn f" data-k="adultno" data-act="adultno">Cancel</button></div>';
         h += '<div class="table kv"><div class="trow"><span class="k">Signing certificate</span><span class="v">' + (armed() ? 'handed over' : 'not yet') + '</span></div>'
@@ -741,6 +748,7 @@
     }
     function setSetting(key, value) {
         settings[key] = value; saveSettings(); confirmingAdult = false;
+        if (key === 'verboseLog') syncVerbose();
         apps = visible(catalogApps);
         renderPage(); renderSheet(); focusKey('opt:' + key);
     }
@@ -906,7 +914,7 @@
     renderHeader(); renderFoot(); renderPage(); readDevice();
     startService(function (err, ping) {
         if (err) { loading = false; problem = { title: 'The TV-Store service did not start', short: 'Service stopped', text: err.message + ' Close TV-Store and open it again; if it keeps happening, reinstall it from Apps2Samsung.' }; renderPage(); focusFirst(); return; }
-        ready = ping; renderFoot();
+        ready = ping; renderFoot(); syncVerbose();
         readInstalled(function (map) {
             setInstalled(map);
             xhr('GET', '/catalog', null, function (err, cat) {
