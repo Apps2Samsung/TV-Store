@@ -112,7 +112,7 @@ that in a minute.** It installs nothing.
 2. In Developer Mode, set **Host PC IP** to the **TV's own IP address** and restart the TV.
 3. Open **TV-Store Tizen 10 test** from Apps and wait about 30 seconds.
 4. Post a photo of the screen, or the text at `http://<TV IP>:8077/log.txt`, in
-   [an issue](https://github.com/Apps2Samsung/TV-Store/issues), with your TV model.
+   [issue 26](https://github.com/Apps2Samsung/TV-Store/issues/26), with your TV model.
 
 It shows **RESULT: WORKS** or **RESULT: DOES NOT WORK**; both answers help. Set Host PC IP back to
 your phone or PC afterwards. Build it with the .NET 6 SDK and the `tizen` workload:
