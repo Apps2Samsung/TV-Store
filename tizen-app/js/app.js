@@ -29,7 +29,7 @@
     // TV's current IP and loopback too, and keeps whichever answers.
     var BASE = 'http://127.0.0.1:8077';
     var KOFI = 'https://ko-fi.com/patrickst';
-    var VERSION = '0.3.8';
+    var VERSION = '0.3.9';
     var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13, RETURN: 10009, ESC: 27, BACK: 8 };
 
     // What the manifest providers are called; resolved.json carries only their ids.
@@ -85,15 +85,21 @@
     // ---- settings, remembered on the TV -------------------------------------------------------------
     var SETTINGS_KEY = 'a2s.store.settings';
     var settings = (function () {
-        var s = { showAdult: false, showNeedsHead: true };
+        var s = { showAdult: false, showNeedsHead: true, verboseLog: false };
         try {
             var saved = JSON.parse(window.localStorage.getItem(SETTINGS_KEY) || '{}');
             if (typeof saved.showAdult === 'boolean') s.showAdult = saved.showAdult;
             if (typeof saved.showNeedsHead === 'boolean') s.showNeedsHead = saved.showNeedsHead;
+            if (typeof saved.verboseLog === 'boolean') s.verboseLog = saved.verboseLog;
         } catch (e) {}
         return s;
     })();
     function saveSettings() { try { window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {} }
+    // The service keeps its own copy (it logs before the page is up); this page's setting wins.
+    function syncVerbose() {
+        if (ready && ready.verbose === settings.verboseLog) return;
+        xhr('POST', '/settings', { verbose: settings.verboseLog }, function (err, res) { if (!err && res && res.ok && ready) ready.verbose = res.verbose; });
+    }
 
     // A QR code as an <img> (qrcode.js, GIF data URL: old TV engines show that fine), on a white tile.
     function qr(text, px) {
@@ -130,6 +136,28 @@
     // The first start after an install is slow: the platform answered nothing within 7.5 s on a
     // 2019 set (#881) and the service was up later. So wait 30 s, and launch again after 10 s in
     // case the first request was dropped.
+    // Tizen 9 and later start a web service through the Service class of the wrt:service module.
+    // Only there is the module loaded, from a script added here, so older TVs run none of this and
+    // start the service as before. A module that never answers (3 s) falls back to the old start.
+    function platformMajor() {
+        try { return parseInt(tizen.systeminfo.getCapability('http://tizen.org/feature/platform.version'), 10) || 0; }
+        catch (e) { return 0; }
+    }
+    function withWrtService(cb) {
+        if (platformMajor() < 9) return cb();
+        var done = false;
+        function once() { if (done) return; done = true; window.removeEventListener('a2s-wrt-service', once); cb(); }
+        window.addEventListener('a2s-wrt-service', once);
+        setTimeout(once, 3000);
+        try {
+            var s = document.createElement('script');
+            s.type = 'module';
+            s.text = "import { Service } from 'wrt:service'; window.a2sService = Service; window.dispatchEvent(new Event('a2s-wrt-service'));";
+            s.onerror = once;
+            document.body.appendChild(s);
+        } catch (e) { once(); }
+    }
+
     function startService(cb) {
         var launch = 'pending';
         // Through an app control first, as TizenBrew starts its service (which comes up on Tizen 10),
@@ -138,6 +166,15 @@
             var id;
             try { id = tizen.application.getCurrentApplication().appInfo.id.split('.')[0] + '.sdbservice'; }
             catch (e) { launch = 'launch failed (' + (e.name ? e.name + ': ' + e.message : e) + ')'; return; }
+            // Tizen 9/10 start a web service only through wrt:service (loaded by withWrtService).
+            if (typeof window.a2sService === 'function') {
+                try {
+                    var started = new window.a2sService(id).start();
+                    if (started && typeof started.then === 'function') started.then(function () { launch = 'ok'; }, function (e) { launch = 'launch failed (wrt:service: ' + (e && e.message || e) + ')'; });
+                    else launch = 'ok';
+                    return;
+                } catch (e) { launch = 'launch failed (wrt:service: ' + (e && e.message || e) + ')'; }
+            }
             function plain(why) {
                 try {
                     tizen.application.launch(id,
@@ -151,7 +188,7 @@
                     function (e) { plain('app control: ' + e.name); });
             } catch (e) { plain('app control: ' + (e.name || e)); }
         }
-        go();
+        withWrtService(go);
         var tries = 0, found = false;
         function candidates() {
             var c = [BASE];
@@ -638,7 +675,8 @@
         var hidden = catalogApps.length - apps.length;
         var h = '<div class="shd"><div><div class="nm">Settings</div><div class="mt">Remembered on this TV' + (hidden > 0 ? ' · ' + hidden + (hidden === 1 ? ' app' : ' apps') + ' hidden now' : '') + '</div></div></div>'
             + '<div class="opts">' + opt('showAdult', 'Show adult (18+) apps', 'Apps marked adult-only stay out of the store until this is on.')
-            + opt('showNeedsHead', 'Show apps that need a phone or PC', 'Some apps need Apps2Samsung on a phone or PC to install. Turn this off to keep them out of the store.') + '</div>';
+            + opt('showNeedsHead', 'Show apps that need a phone or PC', 'Some apps need Apps2Samsung on a phone or PC to install. Turn this off to keep them out of the store.')
+            + opt('verboseLog', 'Verbose logging', 'Writes much more detail to the TV-Store log. Turn it on when a bug report asks for it, and off again afterwards.') + '</div>';
         if (confirmingAdult) h += '<div class="notice">These apps are meant for adults only. Turn them on only if you are 18 or older.</div>'
             + '<div class="btns" style="margin-top:16px"><button class="btn primary grow f" data-k="adultyes" data-act="adultyes" data-default>I am 18 or older</button><button class="btn f" data-k="adultno" data-act="adultno">Cancel</button></div>';
         h += '<div class="table kv"><div class="trow"><span class="k">Signing certificate</span><span class="v">' + (armed() ? 'handed over' : 'not yet') + '</span></div>'
@@ -710,6 +748,7 @@
     }
     function setSetting(key, value) {
         settings[key] = value; saveSettings(); confirmingAdult = false;
+        if (key === 'verboseLog') syncVerbose();
         apps = visible(catalogApps);
         renderPage(); renderSheet(); focusKey('opt:' + key);
     }
@@ -875,7 +914,7 @@
     renderHeader(); renderFoot(); renderPage(); readDevice();
     startService(function (err, ping) {
         if (err) { loading = false; problem = { title: 'The TV-Store service did not start', short: 'Service stopped', text: err.message + ' Close TV-Store and open it again; if it keeps happening, reinstall it from Apps2Samsung.' }; renderPage(); focusFirst(); return; }
-        ready = ping; renderFoot();
+        ready = ping; renderFoot(); syncVerbose();
         readInstalled(function (map) {
             setInstalled(map);
             xhr('GET', '/catalog', null, function (err, cat) {

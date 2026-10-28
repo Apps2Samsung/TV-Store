@@ -58,6 +58,32 @@ function log(m) {
     try { if (fs.statSync(LOG_FILE).size > 512 * 1024) fs.renameSync(LOG_FILE, LOG_PREV); } catch (e) {}
     try { fs.appendFileSync(LOG_FILE, l + '\n'); } catch (e) {}
 }
+// Verbose logging (#31): off by default so the log a user sends stays readable; the page turns it
+// on from Settings when a problem needs more. Kept in a file next to the log so it survives a restart.
+// Verbose lines start with "verbose" and never contain " install:", which the page reads as progress.
+// Never log key material: the /cert body is not logged, only that it arrived.
+var VERBOSE_FILE = DATA_DIR ? path.join(DATA_DIR, '.a2s-verbose') : null;
+var VERBOSE = false;
+try { VERBOSE = !!(VERBOSE_FILE && fs.existsSync(VERBOSE_FILE)); } catch (e) {}
+function logv(m) { if (VERBOSE) log('verbose ' + m); }
+function setVerbose(on) {
+    on = !!on;
+    if (on === VERBOSE) return;
+    VERBOSE = on;
+    try { if (on) fs.writeFileSync(VERBOSE_FILE, ''); else fs.unlinkSync(VERBOSE_FILE); } catch (e) {}
+    log('verbose logging ' + (on ? 'on' : 'off'));
+    if (on) logPlatform();
+}
+// What this TV is, for a verbose log: OS, Node, every network address, the folders in use.
+function logPlatform() {
+    var nets = [];
+    try { var ifs = os.networkInterfaces();
+        for (var n in ifs) for (var i = 0; i < ifs[n].length; i++) nets.push(n + ' ' + ifs[n][i].family + ' ' + ifs[n][i].address + (ifs[n][i].internal ? ' (internal)' : ''));
+    } catch (e) { nets.push('networkInterfaces failed: ' + e.message); }
+    logv('platform: ' + os.type() + ' ' + os.release() + ' ' + process.arch + ', node ' + process.version + ', pid ' + process.pid + ', uptime ' + Math.round(os.uptime()) + ' s');
+    logv('platform: network ' + nets.join('; '));
+    logv('platform: package ' + PKG + ', data ' + DATA_DIR + ', cert ' + (CERT_FILE || 'none yet') + ', cert folders ' + CERT_DIRS.join(', '));
+}
 function logText() {
     var t = '';
     try { t += '--- previous run ---\n' + fs.readFileSync(LOG_PREV, 'utf8') + '\n'; } catch (e) {}
@@ -97,7 +123,7 @@ function get(u, cb, hops) {
                  headers: { 'User-Agent': 'Apps2Samsung-TV-Store' } };
     if (secure) opts.rejectUnauthorized = false;
     var req = (secure ? https : http).get(opts, function (res) {
-        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) { res.resume(); return get(url.resolve(u, res.headers.location), cb, hops + 1); }
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) { res.resume(); logv('http: ' + res.statusCode + ' redirect to ' + res.headers.location); return get(url.resolve(u, res.headers.location), cb, hops + 1); }
         if (res.statusCode !== 200) { res.resume(); return cb(new Error('HTTP ' + res.statusCode + ' for ' + u)); }
         var chunks = []; res.on('data', function (d) { chunks.push(d); }); res.on('end', function () { cb(null, Buffer.concat(chunks)); });
     });
@@ -114,7 +140,7 @@ function getToFile(u, file, cb, hops) {
                  headers: { 'User-Agent': 'Apps2Samsung-TV-Store' } };
     if (secure) opts.rejectUnauthorized = false;
     var req = (secure ? https : http).get(opts, function (res) {
-        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) { res.resume(); done = true; return getToFile(url.resolve(u, res.headers.location), file, cb, hops + 1); }
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) { res.resume(); done = true; logv('http: ' + res.statusCode + ' redirect to ' + res.headers.location); return getToFile(url.resolve(u, res.headers.location), file, cb, hops + 1); }
         if (res.statusCode !== 200) { res.resume(); return fin(new Error('HTTP ' + res.statusCode + ' for ' + u)); }
         var h = crypto.createHash('sha256'), size = 0, out = fs.createWriteStream(file);
         res.on('data', function (d) { size += d.length; h.update(d); });
@@ -146,7 +172,9 @@ function install(entry, cb) {
         var base = path.join(DATA_DIR, 'job-' + Date.now()), inFile = base + '.in.wgt', outFile = base + '.signed.wgt';
         function clean(err, r) { [inFile, outFile].forEach(function (f) { try { fs.unlinkSync(f); } catch (e) {} }); cb(err, r); }
         log('install: downloading ' + downloadUrl);
+        var started = Date.now();
         getToFile(downloadUrl, inFile, function (err, got) {
+            logv('timing: download took ' + (Date.now() - started) + ' ms');
             if (err) return clean(err);
             if (got.sha256 !== want) { log('install: hash mismatch, got ' + got.sha256 + ' want ' + want); return clean(coded('HASH_MISMATCH', 'the download does not match the catalog (SHA-256 differs); not installing it')); }
             log('install: downloaded ' + got.size + ' bytes, SHA-256 matches the catalog; signing');
@@ -157,6 +185,34 @@ function install(entry, cb) {
 
 function coded(code, message) { var e = new Error(message); e.code = code; return e; }
 
+// sdbd on this TV, at the first address that completes the handshake. The LAN IP is what Developer
+// Mode's Host PC IP lets in; loopback is a fallback for a Host PC IP of 127.0.0.1.
+// When none gets in, the error says what to change on the TV instead of the socket error (#26).
+function connectSdb(hosts, cb, i, seen) {
+    i = i || 0; seen = seen || [];
+    var c = new sdb.SdbClient(hosts[i]);
+    c.trace = VERBOSE ? function (m) { logv('sdb ' + hosts[i] + ': ' + m); } : null;
+    c.connect(function (err) {
+        if (!err) { log('install: sdb connected to ' + hosts[i] + ', first frame ' + c.firstFrame); return cb(null, c); }
+        c.end();
+        log('install: ' + err.message);
+        seen.push({ code: err.code, frame: c.firstFrame });
+        if (i + 1 < hosts.length) return connectSdb(hosts, cb, i + 1, seen);
+        cb(sdbAdvice(err, seen, hosts[0]));
+    });
+}
+
+// What the user can do about a failed sdb connection. A refused connection means sdbd is not
+// listening: Developer Mode is off. One that sdbd accepts and drops without a word is what a caller
+// other than the Host PC IP gets (the Tizen 10 report in #26, Host PC IP was 127.0.0.1).
+function sdbAdvice(err, seen, ip) {
+    if (seen.every(function (s) { return s.code === 'ECONNREFUSED'; }))
+        return coded('DEV_MODE_OFF', 'Developer Mode is off on this TV. Turn it on (Apps, then 1 2 3 4 5) with Host PC IP ' + ip + ', restart the TV and try again.');
+    if (seen.some(function (s) { return !s.frame && /^(ECONNRESET|EPIPE|SDB_CLOSED)$/.test(s.code || ''); }))
+        return coded('HOST_PC_IP', 'The TV turned the install away. In Developer Mode (Apps, then 1 2 3 4 5), Host PC IP must be this TV\u2019s own IP, ' + ip + ', not 127.0.0.1 or a phone or PC. Change it, restart the TV and try again.');
+    return err;
+}
+
 function signAndInstall(entry, remoteName, inFile, outFile, cb) {
     var started = Date.now();
     signer.signFile(inFile, outFile, loadCerts(), function (err) {
@@ -166,18 +222,21 @@ function signAndInstall(entry, remoteName, inFile, outFile, cb) {
         log('install: signed in ' + Math.round((Date.now() - started) / 1000) + ' s, ' + size + ' bytes');
         var ip = ownIp();
         if (!ip) return cb(new Error('could not determine this TV’s own IP'));
-        var c = new sdb.SdbClient(ip);
-        c.connect(function (err) {
-            if (err) { c.end(); return cb(err); }
+        connectSdb([ip, '127.0.0.1'], function (err, c) {
+            if (err) return cb(err);
             var remote = STAGING + '/' + remoteName, fd;
             try { fd = fs.openSync(outFile, 'r'); } catch (e) { c.end(); return cb(e); }
             log('install: pushing to ' + remote);
+            var pushStarted = Date.now();
             c.push(remote, { size: size, read: function (off, len) { return zip.readAt(fd, off, len); } }, function (err) {
                 try { fs.closeSync(fd); } catch (e) {}
                 if (err) { c.end(); return cb(err); }
+                logv('timing: push took ' + (Date.now() - pushStarted) + ' ms');
+                var installStarted = Date.now();
                 c.shell('0 vd_appinstall ' + (entry.appId || entry.packageId || '') + ' ' + remote, function (err, out) {
                     c.end();
                     if (err) return cb(err);
+                    logv('timing: vd_appinstall took ' + (Date.now() - installStarted) + ' ms');
                     log('install: vd_appinstall reply: ' + out.replace(/\s+/g, ' ').slice(0, 200));
                     // sdbd answers the shell call either way; the installer's own words say whether it
                     // worked ("install failed[118, -12], reason: ..." on a refused package).
@@ -236,27 +295,36 @@ function haveCerts() { var c = loadCerts(); return !!(c && c.authorKeyPem && c.d
 http.createServer(function (req, res) {
     if (req.method === 'OPTIONS') { cors(res, 204, 'text/plain'); return res.end(); }
     var route = url.parse(req.url).pathname;
+    // The page polls /ping and /logs all the time; those would drown the rest.
+    if (VERBOSE && !/^\/(ping|logs|log\.txt)$/.test(route)) res.on('finish', function () { logv('http: ' + req.method + ' ' + route + ' -> ' + res.statusCode); });
     if (route === '/log.txt') { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Access-Control-Allow-Origin': '*' }); return res.end(logText()); }
     // The rest only for this TV: the port is open to the LAN because Tizen 10 may not route a page's
     // request to the service over loopback, but nothing else on the network gets to hand over a
     // certificate or start an install.
     if (!fromThisTv(req)) { cors(res, 403, 'text/plain'); return res.end('only this TV may use TV-Store'); }
     if (route === '/ping') return json(res, 200, { ok: true, service: 'tv-store', ownIp: ownIp(), logUrl: 'http://' + ownIp() + ':' + PORT + '/log.txt', signerReady: signer.ready, certReady: haveCerts(),
-        certFile: CERT_FILE, certError: CERT_ERROR, node: process.version });
+        certFile: CERT_FILE, certError: CERT_ERROR, node: process.version, verbose: VERBOSE });
+    if (route === '/settings' && req.method === 'POST') return body(req, function (err, b) {
+        if (err || !b || typeof b.verbose !== 'boolean') return json(res, 400, { ok: false, error: 'need { verbose: true|false }' });
+        setVerbose(b.verbose);
+        json(res, 200, { ok: true, verbose: VERBOSE });
+    });
     if (route === '/logs') return json(res, 200, { logs: LOGS });
-    if (route === '/catalog') return withCatalog(function (err, cat) { if (err) return json(res, 502, { ok: false, error: err.message }); cors(res, 200, 'application/json'); res.end(cat.payload); });
+    if (route === '/catalog') return withCatalog(function (err, cat) { if (err) { log('catalog: failed: ' + err.message); return json(res, 502, { ok: false, error: err.message }); } cors(res, 200, 'application/json'); res.end(cat.payload); });
     if (route === '/cert' && req.method === 'POST') return body(req, function (err, b) {
-        if (err || !b || !b.authorKeyPem || !b.authorCertPem || !b.distributorKeyPem || !b.distributorCertPem)
+        if (err || !b || !b.authorKeyPem || !b.authorCertPem || !b.distributorKeyPem || !b.distributorCertPem) {
+            log('cert: refused a handover that is not { authorKeyPem, authorCertPem, distributorKeyPem, distributorCertPem }');
             return json(res, 400, { ok: false, error: 'need { authorKeyPem, authorCertPem, distributorKeyPem, distributorCertPem }' });
+        }
         log('cert: received signing certificate from a head'); saveCerts(b);
         json(res, 200, { ok: true, certFile: CERT_FILE, certError: CERT_FILE ? null : CERT_ERROR });
     });
     if (route === '/install' && req.method === 'POST') return body(req, function (err, b) {
         if (err || !b || !b.url) return json(res, 400, { ok: false, error: 'need { url, file, appId }' });
-        install(b, function (err, r) { if (err) return json(res, 200, { ok: false, error: err.message, code: err.code || null }); json(res, 200, { ok: true, result: r }); });
+        install(b, function (err, r) { if (err) { log('install: failed' + (err.code ? ' [' + err.code + ']' : '') + ': ' + err.message); return json(res, 200, { ok: false, error: err.message, code: err.code || null }); } json(res, 200, { ok: true, result: r }); });
     });
     cors(res, 404, 'text/plain'); res.end('not found');
-}).listen(PORT, '0.0.0.0', function () { log('TV-Store service on port ' + PORT + ', node ' + process.version + ' ' + process.arch + ', this TV ' + ownIp() + ', data ' + DATA_DIR); });
+}).listen(PORT, '0.0.0.0', function () { log('TV-Store service on port ' + PORT + ', node ' + process.version + ' ' + process.arch + ', this TV ' + ownIp() + ', data ' + DATA_DIR + (VERBOSE ? ', verbose logging on' : '')); logPlatform(); });
 
 module.exports.onStart = function () { log('service onStart'); };
 module.exports.onRequest = function () { log('service onRequest'); };

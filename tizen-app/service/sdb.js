@@ -56,26 +56,39 @@ function SdbClient(host, port) {
     this._nextLocalId = 1;
     this._channels = {};        // localId -> channel state
     this._connected = false;
+    this.trace = null;          // function (line) for verbose logging: the frames, without their data
 }
 
 SdbClient.prototype.connect = function (cb) {
     var self = this;
-    var done = false;
-    function finish(err) { if (done) return; done = true; cb(err); }
+    var done = false, started = Date.now();
+    this.firstFrame = null;     // name of the first frame sdbd sent, for the install log
+    // err.code: the socket's own (ECONNREFUSED, ECONNRESET, ...), SDB_CLOSED or SDB_TIMEOUT.
+    function finish(err, code) {
+        if (done) return; done = true;
+        if (err) err.code = code;
+        if (err) err.message += ' (' + self.host + ':' + self.port + ', after ' + (Date.now() - started) + ' ms, first frame from sdbd: ' + (self.firstFrame || 'none') + ')';
+        cb(err);
+    }
     var sock = net.connect(this.port, this.host, function () {
+        if (self.trace) self.trace('tcp connected after ' + (Date.now() - started) + ' ms; -> CNXN');
         sock.write(frame(CMD.CNXN, CLIENT_VERSION, MAXDATA, Buf.from('host::sdb-net-client')));
     });
     this._sock = sock;
     sock.setTimeout(15000);
     this._demux = new Demux(function (f) { self._onFrame(f, finish); });
     sock.on('data', function (d) { self._demux.push(d); });
-    sock.on('timeout', function () { finish(new Error('sdb connect timed out')); });
-    sock.on('error', function (e) { finish(new Error('sdb socket error: ' + ((e && e.code) || e.message))); self._failAll(e); });
-    sock.on('close', function () { self._connected = false; self._failAll(new Error('connection closed')); });
+    sock.on('timeout', function () { finish(new Error('sdb connect timed out'), 'SDB_TIMEOUT'); });
+    sock.on('error', function (e) { finish(new Error('sdb socket error: ' + ((e && e.code) || e.message)), e && e.code); self._failAll(e); });
+    sock.on('close', function () { finish(new Error('sdbd closed the connection'), 'SDB_CLOSED'); self._connected = false; self._failAll(new Error('connection closed')); });
 };
 
 SdbClient.prototype._onFrame = function (f, connectCb) {
     var self = this;
+    if (!this.firstFrame) this.firstFrame = NAME[f.command] || ('0x' + (f.command >>> 0).toString(16));
+    // Every frame but the data and the per-chunk OKAYs, which a package push sends by the hundred.
+    var chunkOkay = f.command === CMD.OKAY && this._channels[f.arg1] && this._channels[f.arg1].remoteId;
+    if (this.trace && f.command !== CMD.WRTE && !chunkOkay) this.trace('<- ' + (NAME[f.command] || f.command) + ' ' + f.arg0 + ' ' + f.arg1 + (f.command === CMD.CNXN ? ' ' + f.payload.toString('utf8').replace(/\u0000/g, '') : ''));
     if (!this._connected) {
         if (f.command === CMD.CNXN) { this._connected = true; if (connectCb) connectCb(null); return; }
         if (f.command === CMD.AUTH) { if (connectCb) connectCb(new Error('sdbd requires key auth on this set; set Developer Mode Host PC IP to the TV’s own IP')); try { this._sock.destroy(); } catch (e) {} return; }
@@ -87,7 +100,10 @@ SdbClient.prototype._onFrame = function (f, connectCb) {
     if (f.command === CMD.CLSE) { if (ch) { if (ch.onClose) ch.onClose(); delete self._channels[ch.localId]; } return; }
 };
 
-SdbClient.prototype._send = function (command, arg0, arg1, payload) { this._sock.write(frame(command, arg0, arg1, payload)); };
+SdbClient.prototype._send = function (command, arg0, arg1, payload) {
+    if (this.trace && command !== CMD.WRTE && command !== CMD.OKAY) this.trace('-> ' + NAME[command] + ' ' + arg0 + ' ' + arg1 + (command === CMD.OPEN ? ' ' + payload.toString('utf8').replace(/\u0000/g, '') : ''));
+    this._sock.write(frame(command, arg0, arg1, payload));
+};
 SdbClient.prototype._failAll = function (err) { var self = this; Object.keys(this._channels).forEach(function (id) { var ch = self._channels[id]; if (ch.onClose) ch.onClose(err); }); this._channels = {}; };
 
 // Open a stream for a service string ("shell:...\0", "sync:\0"). cb(err, channel).
