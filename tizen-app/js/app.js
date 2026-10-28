@@ -1,6 +1,6 @@
 /* TV-Store UI: the Apps2Samsung catalog on the TV, driven with the remote, installing through the
  * service (download, check the hash, sign, push, vd_appinstall). Option C, "Cinema", from the
- * design canvas (docs/design/C1..C6). ES5 on purpose: Tizen 4.0 ships Chromium 56.
+ * design canvas (docs/design/C1..C6). ES5 on purpose: Tizen 3.0 ships Chromium 47.
  *
  * Screens: the store (C1), the app sheet (C2), installing (C3), done (C4), first run until a head
  * arms the TV (C5), On the TV (C6), and Settings in the same sheet.
