@@ -130,6 +130,28 @@
     // The first start after an install is slow: the platform answered nothing within 7.5 s on a
     // 2019 set (#881) and the service was up later. So wait 30 s, and launch again after 10 s in
     // case the first request was dropped.
+    // Tizen 9 and later start a web service through the Service class of the wrt:service module.
+    // Only there is the module loaded, from a script added here, so older TVs run none of this and
+    // start the service as before. A module that never answers (3 s) falls back to the old start.
+    function platformMajor() {
+        try { return parseInt(tizen.systeminfo.getCapability('http://tizen.org/feature/platform.version'), 10) || 0; }
+        catch (e) { return 0; }
+    }
+    function withWrtService(cb) {
+        if (platformMajor() < 9) return cb();
+        var done = false;
+        function once() { if (done) return; done = true; window.removeEventListener('a2s-wrt-service', once); cb(); }
+        window.addEventListener('a2s-wrt-service', once);
+        setTimeout(once, 3000);
+        try {
+            var s = document.createElement('script');
+            s.type = 'module';
+            s.text = "import { Service } from 'wrt:service'; window.a2sService = Service; window.dispatchEvent(new Event('a2s-wrt-service'));";
+            s.onerror = once;
+            document.body.appendChild(s);
+        } catch (e) { once(); }
+    }
+
     function startService(cb) {
         var launch = 'pending';
         // Through an app control first, as TizenBrew starts its service (which comes up on Tizen 10),
@@ -138,7 +160,7 @@
             var id;
             try { id = tizen.application.getCurrentApplication().appInfo.id.split('.')[0] + '.sdbservice'; }
             catch (e) { launch = 'launch failed (' + (e.name ? e.name + ': ' + e.message : e) + ')'; return; }
-            // Tizen 10 starts a web service only through wrt:service (set by the module in index.html).
+            // Tizen 9/10 start a web service only through wrt:service (loaded by withWrtService).
             if (typeof window.a2sService === 'function') {
                 try {
                     var started = new window.a2sService(id).start();
@@ -160,8 +182,7 @@
                     function (e) { plain('app control: ' + e.name); });
             } catch (e) { plain('app control: ' + (e.name || e)); }
         }
-        // The wrt:service module runs after this script, before DOMContentLoaded.
-        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', go); else go();
+        withWrtService(go);
         var tries = 0, found = false;
         function candidates() {
             var c = [BASE];
