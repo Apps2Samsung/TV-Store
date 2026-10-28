@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns="http://tizen.org/ns/packages" api-version="9.0" package="A2STVProbe" version="0.0.1">
+  <profile name="tv" />
+  <ui-application appid="A2STVProbe.Probe"
+                  exec="TVStore.dll"
+                  type="dotnet"
+                  multiple="false"
+                  taskmanage="true"
+                  nodisplay="false"
+                  launch_mode="single"
+                  api-version="9.0">
+    <label>TV-Store Tizen 10 test</label>
+    <icon>TVStore.png</icon>
+    <splash-screens />
+  </ui-application>
+  <privileges>
+    <privilege>http://tizen.org/privilege/internet</privilege>
+    <privilege>http://tizen.org/privilege/network.get</privilege>
+  </privileges>
+</manifest>

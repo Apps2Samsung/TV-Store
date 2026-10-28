@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>body { background: #0a0b0e; color: #cfe; font: 22px sans-serif; margin: 0; }</style>
+</head>
+<body>
+<div id="out">page loaded, asking the in-process server...</div>
+<script>
+// Can the page in the NUI WebView reach the server in its own process, over loopback?
+var out = document.getElementById('out'), lines = ['page: ' + location.href];
+function say(l) { lines.push(l); out.textContent = lines.join(' | '); }
+function report() {
+    var x = new XMLHttpRequest();
+    x.open('POST', 'http://127.0.0.1:8077/page-report');
+    x.send(lines.join(' | '));
+}
+var x = new XMLHttpRequest();
+x.timeout = 5000;
+x.onload = function () { say('loopback /ping ' + x.status + ' ' + x.responseText); report(); };
+x.onerror = function () { say('loopback /ping: network error'); report(); };
+x.ontimeout = function () { say('loopback /ping: timed out'); report(); };
+x.open('GET', 'http://127.0.0.1:8077/ping');
+x.send();
+</script>
+</body>
+</html>
