@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    TV-Store for Tizen 9.0 and 10.0, as a .NET NUI app.
+
+    The .wgt (tizen-app/) does its work in a <tizen:service>, a separate Node process the
+    platform has to start; on Tizen 10 that is an embedded Node 20 that does not come up
+    (the 10.0 emulator runs no web services at all). Here there is no service: the HTTP
+    API the page talks to (port 8077) runs on a thread in this process, as Overscan's
+    diagnostics server does, and the page is the same index.html in a NUI WebView.
+
+    Same toolchain as Overscan's NUI build: the net6.0-tizen8.0 workload's ref pack is
+    API 9 and exposes the NUI WebView; the manifest's api-version (9.0) is what gates
+    installation.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net6.0-tizen8.0</TargetFramework>
+    <RootNamespace>TVStore</RootNamespace>
+    <AssemblyName>TVStore</AssemblyName>
+    <DebugType>portable</DebugType>
+    <Nullable>disable</Nullable>
+    <!-- Without this the app only starts on a 6.0.x platform runtime; on Tizen 9/10 the
+         launcher finds no framework and the icon does nothing (found in Overscan). -->
+    <RollForward>LatestMajor</RollForward>
+  </PropertyGroup>
+
+</Project>
