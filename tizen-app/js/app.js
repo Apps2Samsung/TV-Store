@@ -460,6 +460,11 @@
         var me = self(), info = selfInfo();
         return !!(me && info && info.packageId && !me.variants.some(function (v) { return v.packageId === info.packageId; }));
     }
+    // TV-Store cannot replace itself from here: the installer stops every process of the package
+    // it updates, and that includes the service driving the install, so the install never lands
+    // (#41). A head on a phone or PC is outside the package and updates it fine.
+    function isSelf(x) { return !!x && x === self(); }
+    var SELF_HOW = 'TV-Store cannot replace itself while it runs: the installer stops the service that drives the install. Update it from Apps2Samsung on a phone or PC (On the TV, Update).';
     function updates() { return catalogApps.filter(function (x) { return state(x).update; }); }
     function onTv() { return catalogApps.filter(function (x) { return state(x).installed; }); }
     function byKey(k) { for (var i = 0; i < catalogApps.length; i++) if (catalogApps[i].key === k) return catalogApps[i]; return null; }
@@ -582,11 +587,10 @@
         }
 
         // TV-Store is in its own catalog: say so when a newer one is there (like Moonfin's update
-        // popup, but from the signed catalog instead of the GitHub API, and installable from here).
+        // popup, but from the signed catalog instead of the GitHub API). Not installable from here
+        // (#41): the installer would stop the service doing it.
         var me = self(), ms = me ? state(me) : null;
-        if (ms && ms.update) h += '<div class="notice" style="display:flex;align-items:center;margin:0 0 26px"><span style="flex:1">TV-Store v' + esc(ms.latest)
-            + ' is out (this is v' + esc(ms.version) + '). TV-Store closes while it updates itself; open it again after a minute.</span>'
-            + '<button class="btn primary f" style="margin-left:20px" data-k="selfupd" data-act="selfupd">Update TV-Store</button></div>';
+        if (ms && ms.update) h += '<div class="notice" style="margin:0 0 26px">TV-Store v' + esc(ms.latest) + ' is out (this is v' + esc(ms.version) + '). ' + SELF_HOW + '</div>';
         else if (me && selfRenamed()) {
             // Installed under another package id: the platform lists this copy under that id, so
             // state() cannot see it. Compare the catalog's version with our own and send the user to
@@ -635,11 +639,12 @@
 
     function renderTv() {
         var all = onTv(), ups = all.filter(function (x) { return state(x).update; }), ok = all.filter(function (x) { return !state(x).update; });
+        var doable = ups.filter(function (x) { return !isSelf(x); });   // TV-Store itself updates from a head (#41)
         if (!tvSel || all.indexOf(tvSel) < 0) tvSel = ups[0] || ok[0] || null;
         var h = '<div class="tvtop"><div><h1>Your apps</h1><p>' + (all.length
             ? all.length + (all.length === 1 ? ' catalog app is' : ' catalog apps are') + ' on this TV. ' + (ups.length ? (ups.length === 1 ? 'One has' : ups.length + ' have') + ' a newer version in the catalog.' : 'All up to date.')
             : 'No apps from the catalog on this TV yet.') + '</p></div>';
-        if (ups.length && armed()) h += '<button class="btn primary f" data-k="updall" data-act="updall">' + (ups.length === 1 ? 'Update ' + esc(ups[0].name) : ups.length === 2 ? 'Update both' : 'Update all ' + ups.length) + '</button>';
+        if (doable.length && armed()) h += '<button class="btn primary f" data-k="updall" data-act="updall">' + (doable.length === 1 ? 'Update ' + esc(doable[0].name) : doable.length === 2 ? 'Update both' : 'Update all ' + doable.length) + '</button>';
         h += '</div>';
         if (!all.length) { pageEl.innerHTML = h + '<div class="empty">Install something from the store and it shows up here, with its updates.</div>'; return; }
         h += '<div class="tvcols"><div class="tvlist">';
@@ -657,11 +662,12 @@
             + '<div class="trow"><span class="k">In the catalog</span><span class="v"' + (st.update ? ' style="color:#F0A020"' : '') + '>v' + esc(st.latest || v.version) + '</span></div>'
             + (x.variants.length > 1 ? '<div class="trow"><span class="k">Variant</span><span class="v">' + esc(st.known ? v.label + (st.byPin ? ' · pinned' : '') : 'Not known: the builds share one package') + '</span></div>' : '') + '</div>'
             + '<div class="btns" style="margin-top:18px">';
-        if (st.update && st.known && !v.needsHead && armed()) h += '<button class="btn primary grow f" data-k="tvupd" data-act="tvupd">Update</button>';
+        if (st.update && st.known && !v.needsHead && !isSelf(x) && armed()) h += '<button class="btn primary grow f" data-k="tvupd" data-act="tvupd">Update</button>';
         else h += '<button class="btn grow f" data-k="tvsheet" data-act="tvsheet">Details</button>';
         if (v.appId) h += '<button class="btn f" data-k="tvopen" data-act="tvopen">Open</button>';
         h += '</div>';
-        if (st.update && v.needsHead) h += '<div class="hint" style="text-align:left">' + esc(x.name + ' ' + v.needsHead + ': update it with Apps2Samsung on a phone or PC.') + '</div>';
+        if (st.update && isSelf(x)) h += '<div class="hint" style="text-align:left">' + SELF_HOW + '</div>';
+        else if (st.update && v.needsHead) h += '<div class="hint" style="text-align:left">' + esc(x.name + ' ' + v.needsHead + ': update it with Apps2Samsung on a phone or PC.') + '</div>';
         else if (!st.known && x.variants.length > 1) h += '<div class="hint" style="text-align:left">' + esc('TV-Store cannot tell which build of ' + x.name + ' this is: the builds share one package. Open Details, pick your build and pin it; the pinned build is the one that gets updated.') + '</div>';
         return h + '</div>';
     }
@@ -731,11 +737,13 @@
         }
 
         var label = st.installed && st.known && st.variant === sheet.v ? (st.update ? 'Update to v' + v.version : 'Reinstall') : (st.installed ? 'Install this variant' : 'Install on this TV');
-        if (v.needsHead) h += '<div class="notice">' + esc(x.name + ' ' + v.needsHead + ', which this TV cannot do yet. Install it with Apps2Samsung on a phone or PC.') + '</div>';
+        var me = isSelf(x);
+        if (me) h += '<div class="notice">' + SELF_HOW + '</div>';
+        else if (v.needsHead) h += '<div class="notice">' + esc(x.name + ' ' + v.needsHead + ', which this TV cannot do yet. Install it with Apps2Samsung on a phone or PC.') + '</div>';
         else if (!armed()) h += '<div class="notice">Not armed yet. Open this TV’s Toolbox in Apps2Samsung 3.0 or newer on your phone or PC and press Arm TV-Store once; after that every install runs here.</div>';
-        var can = !v.needsHead && armed() && !(job && job.running);
+        var can = !v.needsHead && !me && armed() && !(job && job.running);
         h += '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="install" data-act="install"' + (can ? (x.variants.length > 1 ? '' : ' data-default') : ' disabled') + '>'
-            + esc(v.needsHead ? 'Install from a phone or PC' : job && job.running ? 'Another install is running' : label) + '</button>';
+            + esc(me ? (st.update ? 'Update' : 'Reinstall') + ' from a phone or PC' : v.needsHead ? 'Install from a phone or PC' : job && job.running ? 'Another install is running' : label) + '</button>';
         if (st.installed && x.variants[st.variant].appId) h += '<button class="btn f" data-k="open" data-act="open">Open</button>';
         // Pin this build to the top of the store (#29); for a one-build app the button pins the app.
         h += '<button class="btn f" data-k="pin" data-act="pin">' + (isPinned(x, sheet.v) ? 'Unpin' : 'Pin') + '</button>';
@@ -848,7 +856,7 @@
     }
 
     function startInstall(x, vIdx) {
-        if (job && job.running) return;
+        if ((job && job.running) || isSelf(x)) return;
         var v = x.variants[vIdx], st = state(x);
         job = { app: x, v: v, vIdx: vIdx, update: st.installed && st.known && st.variant === vIdx, running: true, finished: false, ok: false, step: 0, bytes: 0, line: '', error: null, started: Date.now() };
         if (sheet) { sheet = { mode: 'job' }; renderSheet(true); } else openSheet({ mode: 'job' });
@@ -951,10 +959,9 @@
             case 'adultno': confirmingAdult = false; renderSheet(); focusKey('opt:showAdult'); return;
             case 'tvupd': startInstall(tvSel, state(tvSel).variant); return;
             case 'tvsheet': openApp(tvSel); return;
-            case 'selfupd': openApp(self()); return;
             case 'tvopen': launch(tvSel.variants[state(tvSel).variant].appId); return;
             case 'updall':
-                queue = updates().filter(function (x) { var st = state(x), v = x.variants[st.variant]; return st.known && !v.needsHead; });
+                queue = updates().filter(function (x) { var st = state(x), v = x.variants[st.variant]; return st.known && !v.needsHead && !isSelf(x); });
                 if (queue.length) { var first = queue.shift(); startInstall(first, state(first).variant); }
                 return;
         }
