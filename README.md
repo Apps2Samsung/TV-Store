@@ -163,7 +163,7 @@ Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching 
 | Install through the TV's own `sdbd` | proven on a retail set |
 | Signing on the TV | done, identical output to the Apps2Samsung signer |
 | Arming from Apps2Samsung (phone, PC, CLI) | done |
-| The screens above | built (0.3.4); pins, developer search, your own .wgt or .tpk (0.3.10) |
+| The screens above | built (0.3.4); pins, developer search, your own .wgt or .tpk (0.3.10); finds itself under a renamed package id (0.3.11) |
 | First real install from the TV | done, 2019 Tizen 5.0 set (0.3.4) |
 | Tizen 3.0 and 4.0 sets (2017, 2018) | untested |
 | Tizen 10 sets (2025) | done, retail set (0.3.9) |
