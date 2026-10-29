@@ -198,7 +198,7 @@ function fromThisTv(req) {
     return /^127\./.test(a) || ownAddresses().indexOf(a) >= 0;
 }
 
-// This TV's own LAN IPv4 — the address sdbd accepts a connection on (phase 0: not loopback).
+// This TV's own LAN IPv4 is the address sdbd accepts a connection on (phase 0: not loopback).
 function ownIp() {
     try { var ifs = os.networkInterfaces();
         for (var n in ifs) for (var i = 0; i < ifs[n].length; i++) { var a = ifs[n][i]; if (a.family === 'IPv4' && !a.internal) return a.address; }
@@ -365,7 +365,7 @@ function withCatalog(cb, fresh) {
 }
 
 // The signing certificate a head hands over once (see #844): author/distributor key+cert as PEM
-// (not a .p12 — Node has no PKCS#12 parser). Kept in memory and persisted best-effort.
+// (not a .p12: Node has no PKCS#12 parser). Kept in memory and persisted best-effort.
 function loadCerts() {
     if (CERTS) return CERTS;
     for (var i = 0; i < CERT_DIRS.length; i++) {
