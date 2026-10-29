@@ -1,0 +1,93 @@
+name: Bug report
+description: Something in TV-Store on the TV doesn't work (the store screen, an install, arming)
+title: "[Bug] "
+labels: [bug]
+type: Bug
+assignees: [PatrickSt1991]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. Please read [Setting it up](https://github.com/Apps2Samsung/TV-Store#setting-it-up) first: most "waiting to be armed" and "the TV turned the install away" reports come down to Developer Mode's **Host PC IP**.
+
+        Problems with the **Apps2Samsung app** on your phone or PC (the catalog there, the Toolbox, the Arm TV-Store button) go to the [Apps2Samsung repo](https://github.com/Apps2Samsung/Apps2Samsung/issues).
+  - type: input
+    id: version
+    attributes:
+      label: TV-Store version
+      description: Bottom right of the TV-Store screen ("TV-Store v0.3.9"), or under Settings.
+      placeholder: v0.3.9
+    validations:
+      required: true
+  - type: dropdown
+    id: tizen
+    attributes:
+      label: Tizen version of the TV
+      description: Not sure? Pick "Don't know" and fill in the TV model below.
+      options:
+        - Tizen 3.0 (2017)
+        - Tizen 4.0 (2018)
+        - Tizen 5.0 (2019)
+        - Tizen 5.5 (2020)
+        - Tizen 6.0 (2021)
+        - Tizen 6.5 (2022)
+        - Tizen 7.0 (2023)
+        - Tizen 8.0 (2024)
+        - Tizen 9.0 (2025)
+        - Tizen 10.0 (2025)
+        - Don't know
+    validations:
+      required: true
+  - type: input
+    id: tv-model
+    attributes:
+      label: TV model
+      description: Shown bottom right of the TV-Store screen, or in the TV's Settings > Support > About.
+      placeholder: UE55AU7100
+  - type: dropdown
+    id: armed
+    attributes:
+      label: Is the TV armed?
+      description: Top right of the TV-Store screen says "Ready" once Apps2Samsung has handed over the certificate.
+      options:
+        - "Yes, it says Ready"
+        - "No, it still says Waiting to be armed"
+        - "It says Service stopped or No catalog"
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: host-pc-ip
+    attributes:
+      label: What is Host PC IP set to on the TV?
+      description: Apps, then 1 2 3 4 5 on the remote, opens Developer Mode. TV-Store needs the TV's own address there to install on its own.
+      options:
+        - The TV's own IP address
+        - My phone's or PC's IP address
+        - 127.0.0.1
+        - Don't know
+    validations:
+      required: true
+  - type: input
+    id: a2s-version
+    attributes:
+      label: Apps2Samsung version used to install and arm TV-Store
+      description: Shown in Settings of the phone or PC app. Leave empty if the problem has nothing to do with arming.
+      placeholder: v3.1.0
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead. Which app you tried to install, if any. A photo of the TV screen is welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: TV-Store log
+      description: |
+        Without the log we can't see what went wrong. Open `http://<TV IP>:8077/log.txt` on a phone or PC in the same network (the TV's IP is bottom right of the TV-Store screen), or scan the QR code under **Settings** on the TV, and paste the text inside a ``` code block or attach it as a .txt file. The same QR code is on the error screen when the service did not start.
+        When the problem is an install, turn on **Verbose logging** under Settings first, do it again, then fetch the log.
+      render: text
+    validations:
+      required: true
