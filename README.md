@@ -70,6 +70,20 @@ an API key). The TV cannot do that yet, so those are shown greyed with a "Phone 
 install from Apps2Samsung on a phone or PC instead. The same goes for apps that need root, and for
 any file the catalog has no hash for.
 
+## Your own app (.wgt or .tpk)
+
+Open `http://<TV IP>:8077/upload` on a phone or PC in the same network (Settings shows it as a QR
+code), pick a `.wgt` or `.tpk` and send it. The TV keeps the file and TV-Store asks on screen:
+who sent it, what the package calls itself, its hash, then **Install on this TV**, **Not now** or
+**Discard**. Nothing installs until OK is pressed on the remote. The file is signed with your
+certificate and installed like a catalog app, without the catalog's hash check (the file is yours).
+
+One file waits at a time (a new one replaces it), at most 400 MB, and it must be a Tizen package
+(a zip with `config.xml` or `tizen-manifest.xml` at its root). The upload page is open to the
+network like the log; the install is not: only the TV-Store screen can start it, with a key the
+service writes into the app's private data folder at every start, where no other app on the TV
+can read it. The TV must be armed first.
+
 ## Settings
 
 Press **▲** at the top of the list to reach **Settings**. The switches are remembered on the TV:
@@ -109,6 +123,7 @@ The header counts what the switches hide ("12 apps · 3 hidden").
 - `tizen-app/service/signer.js`: the package signer
 - `tizen-app/service/catalog.js` + `catalog-key.js`: the signed catalog check and its public key
 - `tizen-app/service/compat.js`: buffers that work on the TV's Node 4.4.3
+- `tizen-app/service/manifest.js`: the ids an uploaded package carries in its own manifest
 - `tizen-app/js/app.js`: the UI, and `window.A2SStore`, which Apps2Samsung calls to arm the TV
 - `tizen-app/js/qrcode.js`: QR codes for the log address and the Ko-fi link ([qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 1.4.4, MIT)
 - `test/`: a fake `sdbd` plus signer and transport tests
@@ -134,6 +149,8 @@ node test/sign.test.js      # the signer, with a certificate chain
 node --expose-gc test/stream-sign.test.js  # the file-to-file signer on a 24 MB package
 node test/bundle.test.js    # the bundled service starts however the platform loads it
 node test/catalog.test.js   # the signed catalog: signature, age, hashes
+node test/manifest.test.js  # the ids of a .wgt / .tpk from its manifest
+node test/upload.test.js    # send a file to the service, see it wait, token gate, discard
 ```
 
 Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching the version in

@@ -14,7 +14,7 @@ jobs:
           node-version: '20'
       - name: Syntax-check the service and UI
         run: |
-          for f in tizen-app/service/sdb.js tizen-app/service/zip.js tizen-app/service/index.js tizen-app/service/signer.js tizen-app/service/catalog.js tizen-app/service/catalog-key.js tizen-app/service/compat.js tizen-app/js/app.js test/fake-sdbd.js test/run.js test/sign.test.js test/config.test.js test/sdb-errors.test.js; do
+          for f in tizen-app/service/sdb.js tizen-app/service/zip.js tizen-app/service/index.js tizen-app/service/signer.js tizen-app/service/catalog.js tizen-app/service/catalog-key.js tizen-app/service/compat.js tizen-app/service/manifest.js tizen-app/js/app.js test/fake-sdbd.js test/run.js test/sign.test.js test/config.test.js test/sdb-errors.test.js test/manifest.test.js; do
             node --check "$f"
           done
       - name: config.xml ids (package id is 10 alphanumerics)
@@ -31,6 +31,8 @@ jobs:
         run: node test/catalog.test.js
       - name: sdb connect errors (refused, dropped without a reply)
         run: node test/sdb-errors.test.js
+      - name: Package manifest ids (.wgt config.xml, .tpk tizen-manifest.xml)
+        run: node test/manifest.test.js
       # The TV's own Node: v4.4.3 on a 2019 Tizen 5.0 set (#881). Buffer.from, Buffer.alloc,
       # crypto.sign and friends are newer than that, and only fail there; run every test on it too.
       - uses: actions/setup-node@v4
@@ -46,6 +48,7 @@ jobs:
           node test/bundle.test.js
           node test/catalog.test.js
           node test/sdb-errors.test.js
+          node test/manifest.test.js
       - name: Build the .wgt
         run: scripts/build-wgt.sh
       - uses: actions/upload-artifact@v4

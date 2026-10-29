@@ -21,6 +21,11 @@
  * A pinned card shows that build's own state (installed version, update waiting). For apps whose
  * builds share one package id the pin also tells TV-Store which build the TV has.
  *
+ * Your own file (#30): a .wgt or .tpk sent from a phone or PC to http://<TV IP>:8077/upload waits
+ * in the service until this screen shows it (who sent it, what it calls itself) and OK confirms
+ * the install. Only this page can: it sends the token the service writes into the package's
+ * private folder (wgt-private), which no other app on the TV can read.
+ *
  * Navigation is spatial: every focusable element carries the class `f`, and an arrow key moves to
  * the nearest one in that direction (inside the sheet while it is open). Scrolling follows the
  * focus: a row of cards sideways, the page and the variant list vertically. On the TV page, right
@@ -110,6 +115,9 @@
     var confirmingAdult = false;
     var device = '';
     var tvIp = '';             // this TV's IP now, from systeminfo
+    var upload = null;         // the file waiting in the service (#30), from /uploads
+    var seenUpload = null;     // the id this page already asked about
+    var uploadToken = null, uploadTokenError = null;
     var tried = [];            // what startService got from each address, for the error screen
 
     // ---- settings, remembered on the TV -------------------------------------------------------------
@@ -245,6 +253,19 @@
                 }, base, 2500);
             });
         })();
+    }
+
+    // The upload token (#30): the service writes it into the package's private data folder at
+    // every start, and only TV-Store's own page can read that folder, so only this screen can
+    // confirm an upload. Read fresh before each use: the service may have restarted since.
+    function withUploadToken(cb) {
+        function got(t) { t = String(t || '').trim(); if (t) { uploadToken = t; uploadTokenError = null; } else uploadTokenError = 'empty token file'; cb(); }
+        function failed(e) { uploadTokenError = (e && e.message) || String(e || 'cannot read wgt-private'); cb(); }
+        try {
+            tizen.filesystem.resolve('wgt-private', function (dir) {
+                try { dir.resolve('.a2s-upload-token').readAsText(got, failed, 'UTF-8'); } catch (e) { failed(e); }
+            }, failed, 'r');
+        } catch (e) { failed(e); }
     }
 
     // What the platform says is installed: packageId -> version. Empty off a TV.
@@ -652,6 +673,7 @@
         appEl.className = 'app behind'; sheetEl.className = 'sheet on';
         if (sheet.mode === 'settings') sheetEl.innerHTML = settingsHtml();
         else if (sheet.mode === 'job') sheetEl.innerHTML = job && job.finished && job.ok ? doneHtml() : jobHtml();
+        else if (sheet.mode === 'upload') sheetEl.innerHTML = uploadHtml();
         else sheetEl.innerHTML = appHtml();
         if (!(keep && focusKey(keep))) {
             var d = sheetEl.querySelector('[data-default]') || sheetEl.querySelector('.f:not([disabled])');
@@ -700,6 +722,34 @@
         return h;
     }
 
+    // The file a phone or PC sent (#30), as the app the install screens show: one build, no catalog.
+    function uploadApp(up) {
+        var ids = up.ids || {}, v = variant(up.name, up.name, '', ids.version, ids.appId, ids.packageId);
+        v.upload = up.id;
+        return { key: 'upload:' + up.id, name: ids.name || up.name.replace(/\.(wgt|tpk)$/i, ''), category: 'other', description: '', author: '', variants: [v], needsHead: null, adult: false, root: false };
+    }
+    function uploadHtml() {
+        var up = upload;
+        if (!up) return '<div class="shd"><div><div class="nm">Nothing waiting</div><div class="mt">The file is no longer on the TV.</div></div></div>'
+            + '<div class="sfoot"><div class="btns"><button class="btn grow f" data-k="close" data-act="close" data-default>Back to the store</button></div></div>';
+        var ids = up.ids || {}, x = uploadApp(up), have = ids.packageId && installed.hasOwnProperty(ids.packageId) ? installed[ids.packageId] : null;
+        var h = '<div class="shd">' + tile(x, 88) + '<div style="min-width:0"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc('Sent from ' + up.from + ' · ' + (up.size / 1048576).toFixed(1) + ' MB') + '</div></div></div>';
+        h += '<div class="sdesc">A file arrived from a phone or PC in your network. It is not from the Apps2Samsung catalog, so TV-Store cannot check it. Install it only if you sent it yourself or know where it came from.</div>';
+        var b = '';
+        if (have !== null) b += newer(ids.version, have) ? badge('b-warn', 'Update from v' + have) : badge('b-ok', 'Installed · v' + have);
+        if (b) h += '<div class="badges">' + b + '</div>';
+        h += '<div class="table kv"><div class="trow"><span class="k">File</span><span class="v">' + esc(up.name) + '</span></div>'
+            + '<div class="trow"><span class="k">Application</span><span class="v">' + esc((ids.appId || ids.packageId || 'unknown') + (ids.version ? ' · v' + ids.version : '')) + '</span></div>'
+            + '<div class="trow"><span class="k">SHA-256</span><span class="v mono">' + esc(String(up.sha256).slice(0, 20)) + '…</span></div></div>';
+        if (!armed()) h += '<div class="notice">Not armed yet. Open this TV’s Toolbox in Apps2Samsung on your phone or PC and press Arm TV-Store once; the file keeps waiting.</div>';
+        else if (uploadTokenError) h += '<div class="notice">TV-Store could not read its upload key on this TV (' + esc(uploadTokenError) + '), so it cannot confirm uploads here. Install the file with Apps2Samsung on a phone or PC instead.</div>';
+        var can = armed() && !uploadTokenError && !(job && job.running);
+        h += '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="upinstall" data-act="upinstall"' + (can ? ' data-default' : ' disabled') + '>' + (job && job.running ? 'Another install is running' : 'Install on this TV') + '</button>'
+            + '<button class="btn f" data-k="close" data-act="close"' + (can ? '' : ' data-default') + '>Not now</button><button class="btn danger f" data-k="updiscard" data-act="updiscard">Discard</button></div>'
+            + '<div class="hint">Signed with your certificate, like every install. RETURN keeps the file waiting.</div></div>';
+        return h;
+    }
+
     var STEPS = [['Downloaded', 'Downloading'], ['Checked and signed for this TV', 'Checking and signing'], ['Installed on the TV', 'Installing on the TV'], ['Ready to open', 'Ready to open']];
     function jobHtml() {
         var x = job.app, v = job.v, upd = job.update;
@@ -713,6 +763,7 @@
             else if (i === done && job.error) { ico = '<span class="ico fail">' + CROSS + '</span>'; cls = ''; }
             else if (i === done && job.running) { ico = '<span class="ico run"></span>'; cls = ''; }
             else { ico = '<span class="ico wait"></span>'; cls = ' pending'; }
+            if (i === 0 && v.upload) s = ['Received from your phone or PC', 'Picking up the file'];
             if (i === 0) side = job.bytes ? (job.bytes / 1048576).toFixed(1) + ' MB' : '';
             if (i === 1) side = 'with your certificate';
             if (i === 2) side = 'the TV is doing this part';
@@ -759,6 +810,12 @@
         h += '<div class="table kv"><div class="trow"><span class="k">Signing certificate</span><span class="v">' + (armed() ? 'handed over' : 'not yet') + '</span></div>'
             + '<div class="trow"><span class="k">Catalog</span><span class="v">' + esc(catalogApps.length + ' apps, signature checked') + '</span></div>'
             + '<div class="trow"><span class="k">TV-Store</span><span class="v">v' + VERSION + (ready && ready.node ? ' · Node ' + esc(ready.node) : '') + '</span></div></div>';
+        if (confirmingAdult) return h;    // the question needs the room the QR codes take
+        // Your own file (#30): the upload page's address, as a QR for a phone.
+        if (ready && ready.ownIp) {
+            var u = 'http://' + ready.ownIp + ':8077/upload';
+            h += '<div class="qrrow">' + qr(u, 120) + '<div><b>Install your own app</b><span>Scan with your phone, or open <span class="mono">' + esc(u) + '</span> on a computer in the same network, and send a .wgt or .tpk. TV-Store then asks here whether to install it.</span></div></div>';
+        }
         return h + logBlock();
     }
 
@@ -776,7 +833,8 @@
         renderHeader();
         var since = job.started - 2000, me = job;
         var timer = setInterval(function () { pollLog(me, since); }, 700);
-        xhr('POST', '/install', { url: v.url, file: v.file, appId: v.appId, packageId: v.packageId }, function (err, res) {
+        var req = v.upload ? { upload: v.upload, token: uploadToken } : { url: v.url, file: v.file, appId: v.appId, packageId: v.packageId };
+        xhr('POST', '/install', req, function (err, res) {
             clearInterval(timer);
             pollLog(me, since, function () {
                 me.running = false; me.finished = true; me.ended = Date.now();
@@ -802,7 +860,7 @@
                     var t = Date.parse(l.slice(0, 24)); if (t && t < since) return;
                     if (l.indexOf(' install:') < 0) return;
                     me.line = l.replace(/^\S+\s+install:\s*/, '');
-                    var m = /downloaded (\d+) bytes/.exec(l);
+                    var m = /(?:downloaded|uploaded) (\d+) bytes/.exec(l);
                     if (m) { me.bytes = parseInt(m[1], 10); me.step = Math.max(me.step, 1); }
                     if (/pushing to/.test(l)) me.step = Math.max(me.step, 2);
                     if (/vd_appinstall reply/.test(l)) me.step = Math.max(me.step, 3);
@@ -811,6 +869,20 @@
             }
             if (then) then();
         });
+    }
+
+    // Install the waiting file (#30): with a fresh token, so a restarted service still takes it.
+    function installUpload() {
+        if (!upload || (job && job.running)) return;
+        var x = uploadApp(upload);
+        withUploadToken(function () {
+            if (uploadTokenError) { renderSheet(true); return; }
+            startInstall(x, 0);
+        });
+    }
+    function discardUpload() {
+        var id = upload && upload.id;
+        xhr('POST', '/upload/discard', { id: id }, function () { if (upload && upload.id === id) upload = null; closeSheet(); });
     }
 
     function launch(appId) {
@@ -842,6 +914,8 @@
         if ((k = el.getAttribute('data-var'))) { sheet.v = parseInt(k, 10); renderSheet(); return; }
         if ((k = el.getAttribute('data-app'))) { var x = byKey(k), vi = el.getAttribute('data-vi'); if (x) openApp(x, vi != null ? parseInt(vi, 10) : null); return; }
         switch (act) {
+            case 'upinstall': if (!el.disabled) installUpload(); return;
+            case 'updiscard': discardUpload(); return;
             case 'author': var by = sheet.app.author; closeSheet(function () { searchFor(by); }); return;
             case 'pin': togglePin(sheet.app, sheet.v); renderPage(); renderSheet(); focusKey('pin'); return;
             case 'retry': location.reload(); return;
@@ -993,11 +1067,22 @@
     };
 
     // Until a head arms the TV, ask the service now and then, so the first-run screen turns into the
-    // store by itself (an arm from an older head never touches this page's API).
-    setInterval(function () { if (!loading && !problem && !armed()) xhr('GET', '/ping', null, function (err, res) { if (!err) setReady(res); }); }, 3000);
+    // store by itself (an arm from an older head never touches this page's API). The same tick asks
+    // for a file sent from a phone or PC (#30) and shows it once, when no sheet is open.
+    setInterval(function () {
+        if (loading || problem) return;
+        if (!armed()) xhr('GET', '/ping', null, function (err, res) { if (!err) setReady(res); });
+        xhr('GET', '/uploads', null, function (err, res) {
+            if (err || !res) return;
+            var was = upload; upload = res.pending || null;
+            if (upload && upload.id !== seenUpload && !sheet) { seenUpload = upload.id; openSheet({ mode: 'upload' }); return; }
+            if (sheet && sheet.mode === 'upload' && (!!was !== !!upload || (was && upload && was.id !== upload.id))) renderSheet(true);
+        }, null, 2500);
+    }, 3000);
 
     // ---- boot -------------------------------------------------------------------------------------
     renderHeader(); renderFoot(); renderPage(); readDevice();
+    withUploadToken(function () {});
     startService(function (err, ping) {
         if (err) { loading = false; problem = { title: 'The TV-Store service did not start', short: 'Service stopped', text: err.message + ' Close TV-Store and open it again; if it keeps happening, reinstall it from Apps2Samsung.' }; renderPage(); focusFirst(); return; }
         ready = ping; renderFoot(); syncVerbose();
