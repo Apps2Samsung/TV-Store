@@ -84,20 +84,35 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
 
 The header counts what the switches hide ("12 apps · 3 hidden").
 
+## Pins, search by developer
+
+- **Pin** in the app sheet pins that build of the app (the variant picked in the list) to a
+  **Pinned** row at the top of the store, remembered on the TV. A pinned card shows that build's
+  own state: its version, "Installed", or "Update to v…" when the catalog has a newer one; OK
+  opens the sheet on that build. **Unpin** takes it off again.
+- Apps whose builds share one package id (all Litefin builds are `LitefinApp`) cannot be told
+  apart by the TV. TV-Store remembers which file it installed itself; for an app installed from
+  a phone or PC, pin the build you have and TV-Store treats that as the installed one, on the
+  On the TV page and for updates.
+- The search box also matches the developer's name, and "by *developer*" in the app sheet is a
+  link: OK shows every app by them (as Apps2Samsung does on the phone and PC).
+- On the TV page, **▶** from an app in the list goes to its panel on the right (Details or
+  Update, Open) and **◀** comes back to the list.
+
 ## Layout
 
-- `tizen-app/` – the package: `config.xml`, `index.html`, `js/app.js`, `icon.png`, `service/`
-- `tizen-app/service/index.js` – the service: catalog, certificate, install pipeline. The `.wgt` carries
+- `tizen-app/`: the package: `config.xml`, `index.html`, `js/app.js`, `icon.png`, `service/`
+- `tizen-app/service/index.js`: the service: catalog, certificate, install pipeline. The `.wgt` carries
   `service/` as one file, bundled by `scripts/bundle-service.js` (Tizen 10 runs services in an embedded
   Node 20 and does not start split ones)
-- `tizen-app/service/sdb.js` – the SDB client (connect, push, install)
-- `tizen-app/service/signer.js` – the package signer
-- `tizen-app/service/catalog.js` + `catalog-key.js` – the signed catalog check and its public key
-- `tizen-app/service/compat.js` – buffers that work on the TV's Node 4.4.3
-- `tizen-app/js/app.js` – the UI, and `window.A2SStore`, which Apps2Samsung calls to arm the TV
-- `tizen-app/js/qrcode.js` – QR codes for the log address and the Ko-fi link ([qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 1.4.4, MIT)
-- `test/` – a fake `sdbd` plus signer and transport tests
-- `docs/design/` – the screens above
+- `tizen-app/service/sdb.js`: the SDB client (connect, push, install)
+- `tizen-app/service/signer.js`: the package signer
+- `tizen-app/service/catalog.js` + `catalog-key.js`: the signed catalog check and its public key
+- `tizen-app/service/compat.js`: buffers that work on the TV's Node 4.4.3
+- `tizen-app/js/app.js`: the UI, and `window.A2SStore`, which Apps2Samsung calls to arm the TV
+- `tizen-app/js/qrcode.js`: QR codes for the log address and the Ko-fi link ([qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 1.4.4, MIT)
+- `test/`: a fake `sdbd` plus signer and transport tests
+- `docs/design/`: the screens above
 
 ## Tizen 9 and 10
 
