@@ -438,13 +438,27 @@
         return { installed: true, version: st.version, update: newer(v.version, st.version), latest: v.version, exact: st.known };
     }
 
-    // TV-Store's own catalog entry.
+    // What the platform says about this very app: null off a TV.
+    function selfInfo() { try { return tizen.application.getCurrentApplication().appInfo || null; } catch (e) { return null; } }
+    // TV-Store's own catalog entry: by its package id, or, when a head installed it under another id
+    // (Apps2Samsung's "Install under a new package id" rewrites the package part only), by the
+    // application part of the id, which the rename keeps, plus the entry's name.
     function self() {
-        var pkg = '';
-        try { pkg = tizen.application.getCurrentApplication().appInfo.packageId; } catch (e) {}
+        var info = selfInfo(), pkg = info ? info.packageId : '', app = info && info.id ? String(info.id).split('.').pop() : '', byName = null;
         for (var i = 0; i < catalogApps.length; i++)
-            for (var j = 0; j < catalogApps[i].variants.length; j++) if (pkg && catalogApps[i].variants[j].packageId === pkg) return catalogApps[i];
-        return null;
+            for (var j = 0; j < catalogApps[i].variants.length; j++) {
+                var v = catalogApps[i].variants[j];
+                if (pkg && v.packageId === pkg) return catalogApps[i];
+                if (app && v.appId && String(v.appId).split('.').pop() === app && /TV-Store/i.test(catalogApps[i].name)) byName = byName || catalogApps[i];
+            }
+        return byName;
+    }
+    // This copy runs under a package id that is not its catalog one: a head renamed it at install.
+    // It cannot update itself then (an install from here would land a second TV-Store under the
+    // catalog id); the head that renamed it remembers the id and updates the right tile.
+    function selfRenamed() {
+        var me = self(), info = selfInfo();
+        return !!(me && info && info.packageId && !me.variants.some(function (v) { return v.packageId === info.packageId; }));
     }
     function updates() { return catalogApps.filter(function (x) { return state(x).update; }); }
     function onTv() { return catalogApps.filter(function (x) { return state(x).installed; }); }
@@ -573,6 +587,14 @@
         if (ms && ms.update) h += '<div class="notice" style="display:flex;align-items:center;margin:0 0 26px"><span style="flex:1">TV-Store v' + esc(ms.latest)
             + ' is out (this is v' + esc(ms.version) + '). TV-Store closes while it updates itself; open it again after a minute.</span>'
             + '<button class="btn primary f" style="margin-left:20px" data-k="selfupd" data-act="selfupd">Update TV-Store</button></div>';
+        else if (me && selfRenamed()) {
+            // Installed under another package id: the platform lists this copy under that id, so
+            // state() cannot see it. Compare the catalog's version with our own and send the user to
+            // the head that renamed it rather than install a second TV-Store from here.
+            var own = (selfInfo() || {}).version || '', latest = me.variants[0] ? me.variants[0].version : '';
+            if (own && latest && newer(latest, own)) h += '<div class="notice" style="margin:0 0 26px">TV-Store v' + esc(latest) + ' is out (this is v' + esc(own)
+                + '). This copy was installed under another package id by Apps2Samsung, so update it from Apps2Samsung (On the TV, Update) rather than from here.</div>';
+        }
 
         if (!hover || apps.indexOf(hover) < 0) hover = apps[0] || null;
         if (!query) {
