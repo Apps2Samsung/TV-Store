@@ -17,9 +17,14 @@
  *     the heads' Packaging/ folder), root packages (`flags: ["root"]`, which afterwards need Host
  *     PC IP set to 127.0.0.1) and files without a hash in the catalog (the TV cannot check those).
  *
+ * Pins (#29): the app sheet pins one build of an app to the top of the store, remembered on the TV.
+ * A pinned card shows that build's own state (installed version, update waiting). For apps whose
+ * builds share one package id the pin also tells TV-Store which build the TV has.
+ *
  * Navigation is spatial: every focusable element carries the class `f`, and an arrow key moves to
  * the nearest one in that direction (inside the sheet while it is open). Scrolling follows the
- * focus: a row of cards sideways, the page and the variant list vertically.
+ * focus: a row of cards sideways, the page and the variant list vertically. On the TV page, right
+ * from the list goes to the selected app's panel and left comes back (#29).
  */
 (function () {
     'use strict';
@@ -64,6 +69,31 @@
         if (!v.packageId) return;
         installedFile[v.packageId] = v.file;
         try { window.localStorage.setItem(VARIANTS_KEY, JSON.stringify(installedFile)); } catch (e) {}
+    }
+    // Pinned builds (#29): [{ key, file }], one entry per build, in the order they were pinned. The
+    // file names the build, so a catalog that reorders variants keeps the pin on the same one.
+    var PINS_KEY = 'a2s.tvstore.pins';
+    var pins = (function () {
+        try { var p = JSON.parse(window.localStorage.getItem(PINS_KEY)); return Array.isArray(p) ? p.filter(function (e) { return e && e.key && e.file; }) : []; }
+        catch (e) { return []; }
+    })();
+    function savePins() { try { window.localStorage.setItem(PINS_KEY, JSON.stringify(pins)); } catch (e) {} }
+    function pinAt(x, i) { var f = x.variants[i].file; for (var n = 0; n < pins.length; n++) if (pins[n].key === x.key && pins[n].file === f) return n; return -1; }
+    function isPinned(x, i) { return pinAt(x, i) >= 0; }
+    function togglePin(x, i) {
+        var n = pinAt(x, i);
+        if (n >= 0) pins.splice(n, 1); else pins.push({ key: x.key, file: x.variants[i].file });
+        savePins();
+    }
+    // The pinned builds that are in the store now: [{ app, v }]. A pin whose app or build left the
+    // catalog (or is hidden by Settings) stays stored and comes back with it.
+    function pinned() {
+        var out = [];
+        pins.forEach(function (p) {
+            var x = byKey(p.key); if (!x || apps.indexOf(x) < 0) return;
+            for (var i = 0; i < x.variants.length; i++) if (x.variants[i].file === p.file) { out.push({ app: x, v: i }); return; }
+        });
+        return out;
     }
     var ready = null;          // the service's /ping
     var problem = null;        // { title, text } when the service or the catalog failed
@@ -354,9 +384,10 @@
 
     // Installed / update state of an app: from the variants whose package id the TV lists. Several
     // can match (#17); then the installed application id narrows it down where the builds differ in
-    // it, and the file TV-Store itself installed settles it. Otherwise known is false: the screens
-    // say the variant is not known instead of naming the first one, and no update starts without
-    // the user picking the build (it could swap theirs for another).
+    // it, the file TV-Store itself installed settles it, and failing that the one build the user
+    // pinned (#29: an app installed from a phone leaves no file behind). Otherwise known is false:
+    // the screens say the variant is not known instead of naming the first one, and no update starts
+    // without the user picking the build (it could swap theirs for another).
     function state(x) {
         var hits = [];
         for (var i = 0; i < x.variants.length; i++) {
@@ -366,10 +397,24 @@
         if (!hits.length) return { installed: false };
         var byApp = hits.filter(function (i) { return x.variants[i].appId && appIds[x.variants[i].appId]; });
         if (byApp.length) hits = byApp;
-        var pick = hits[0], known = hits.length === 1, file = installedFile[x.variants[pick].packageId];
+        var pick = hits[0], known = hits.length === 1, byPin = false, file = installedFile[x.variants[pick].packageId];
         for (var j = 0; j < hits.length; j++) if (x.variants[hits[j]].file === file) { pick = hits[j]; known = true; }
+        if (!known) {
+            var pinnedHits = hits.filter(function (i) { return isPinned(x, i); });
+            if (pinnedHits.length === 1) { pick = pinnedHits[0]; known = true; byPin = true; }
+        }
         var pv = x.variants[pick], have = installed[pv.packageId];
-        return { installed: true, version: have, update: newer(pv.version, have), variant: pick, known: known, latest: pv.version };
+        return { installed: true, version: have, update: newer(pv.version, have), variant: pick, known: known, byPin: byPin, latest: pv.version };
+    }
+
+    // The state of one build of an app, for its pinned card (#29): installed when the TV has that
+    // build's package and nothing says it is another build; `other` when the TV is known to have a
+    // different build of the same package.
+    function variantState(x, i) {
+        var st = state(x), v = x.variants[i];
+        if (!st.installed || x.variants[st.variant].packageId !== v.packageId) return { installed: false };
+        if (st.known && st.variant !== i) return { installed: false, other: true };
+        return { installed: true, version: st.version, update: newer(v.version, st.version), latest: v.version, exact: st.known };
     }
 
     // TV-Store's own catalog entry.
@@ -403,6 +448,16 @@
         if (x.adult) b += badge('b-warn', '18+');
         if (x.root) b += badge('b-warn', 'root');
         if (x.needsHead) b += badge('b-mute', 'Phone or PC');
+        return b;
+    }
+    function pinBadges(x, i) {
+        var vs = variantState(x, i), v = x.variants[i], b = '';
+        if (vs.installed) b += vs.update ? badge('b-warn', 'Update to v' + vs.latest) : badge('b-ok', 'Installed' + (vs.version ? ' · v' + vs.version : ''));
+        else if (vs.other) b += badge('b-mute', 'Other build on the TV');
+        else if (v.version) b += badge('b-mute', 'v' + v.version);
+        if (x.adult) b += badge('b-warn', '18+');
+        if (x.root) b += badge('b-warn', 'root');
+        if (v.needsHead) b += badge('b-mute', 'Phone or PC');
         return b;
     }
     var CHECK = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#0D1B2A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>';
@@ -450,6 +505,12 @@
     function card(x, where) {
         return '<div class="card f' + (x.needsHead ? ' dim' : '') + '" tabindex="0" data-k="card:' + where + ':' + esc(x.key) + '" data-app="' + esc(x.key) + '">'
             + tile(x, 68) + '<div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(subline(x)) + '</div><div class="badges">' + cardBadges(x) + '</div></div>';
+    }
+    // A pinned build's card (#29): the build's own label and state, and OK opens the sheet on it.
+    function pinCard(x, i) {
+        var v = x.variants[i];
+        return '<div class="card f' + (v.needsHead ? ' dim' : '') + '" tabindex="0" data-k="card:pinned:' + esc(x.key) + ':' + i + '" data-app="' + esc(x.key) + '" data-vi="' + i + '">'
+            + tile(x, 68) + '<div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(x.variants.length > 1 ? v.label : (v.version ? 'v' + v.version : v.file)) + '</div><div class="badges">' + pinBadges(x, i) + '</div></div>';
     }
 
     function section(id, title, list, grid, more) {
@@ -499,6 +560,9 @@
             h += '<div class="chips"><span class="chip f' + (chip === 'all' ? ' on' : '') + '" tabindex="0" data-k="chip:all" data-chip="all">All</span>'
                 + cats.map(function (c) { return '<span class="chip f' + (chip === c ? ' on' : '') + '" tabindex="0" data-k="chip:' + c + '" data-chip="' + c + '">' + esc(catName(c)) + '</span>'; }).join('') + '</div>';
             if (chip === 'all') {
+                var pinnedNow = pinned();
+                if (pinnedNow.length) h += '<div class="sect"><div class="shead"><span class="t">Pinned</span><span class="n">' + pinnedNow.length + '</span></div>'
+                    + '<div class="strip"><div class="cards">' + pinnedNow.map(function (p) { return pinCard(p.app, p.v); }).join('') + '</div></div></div>';
                 cats.forEach(function (c) {
                     var list = apps.filter(function (x) { return x.category === c; });
                     h += section(c, catName(c), list, false, list.length > 6);
@@ -507,8 +571,9 @@
                 h += section(chip, catName(chip), apps.filter(function (x) { return x.category === chip; }), true, false);
             }
         } else {
+            // Name, description or developer (the heads match the author too since Apps2Samsung #906).
             var q = query.toLowerCase();
-            var found = apps.filter(function (x) { return x.name.toLowerCase().indexOf(q) >= 0 || (x.description || '').toLowerCase().indexOf(q) >= 0; });
+            var found = apps.filter(function (x) { return x.name.toLowerCase().indexOf(q) >= 0 || (x.description || '').toLowerCase().indexOf(q) >= 0 || (x.author || '').toLowerCase().indexOf(q) >= 0; });
             h += found.length ? section('search', 'Results for “' + query + '”', found, true, false)
                 : '<div class="empty">Nothing in the catalog matches “' + esc(query) + '”.</div>';
         }
@@ -547,13 +612,14 @@
         var h = '<div class="panel" id="tvpanel"><div class="phead">' + tile(x, 96) + '<div style="min-width:0"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(catName(x.category) + (v.appId ? ' · ' + v.appId : '')) + '</div></div></div>'
             + '<div class="table kv" style="margin-top:0"><div class="trow"><span class="k">Installed</span><span class="v">v' + esc(st.version) + '</span></div>'
             + '<div class="trow"><span class="k">In the catalog</span><span class="v"' + (st.update ? ' style="color:#F0A020"' : '') + '>v' + esc(st.latest || v.version) + '</span></div>'
-            + (x.variants.length > 1 ? '<div class="trow"><span class="k">Variant</span><span class="v">' + esc(st.known ? v.label : 'Not known: the builds share one package') + '</span></div>' : '') + '</div>'
+            + (x.variants.length > 1 ? '<div class="trow"><span class="k">Variant</span><span class="v">' + esc(st.known ? v.label + (st.byPin ? ' · pinned' : '') : 'Not known: the builds share one package') + '</span></div>' : '') + '</div>'
             + '<div class="btns" style="margin-top:18px">';
         if (st.update && st.known && !v.needsHead && armed()) h += '<button class="btn primary grow f" data-k="tvupd" data-act="tvupd">Update</button>';
         else h += '<button class="btn grow f" data-k="tvsheet" data-act="tvsheet">Details</button>';
         if (v.appId) h += '<button class="btn f" data-k="tvopen" data-act="tvopen">Open</button>';
         h += '</div>';
         if (st.update && v.needsHead) h += '<div class="hint" style="text-align:left">' + esc(x.name + ' ' + v.needsHead + ': update it with Apps2Samsung on a phone or PC.') + '</div>';
+        else if (!st.known && x.variants.length > 1) h += '<div class="hint" style="text-align:left">' + esc('TV-Store cannot tell which build of ' + x.name + ' this is: the builds share one package. Open Details, pick your build and pin it; the pinned build is the one that gets updated.') + '</div>';
         return h + '</div>';
     }
 
@@ -567,10 +633,17 @@
         if (!sheet) returnFocus = document.activeElement && document.activeElement.getAttribute('data-k');
         sheet = s; renderSheet(true);
     }
-    function closeSheet() {
+    function closeSheet(then) {
         sheet = null; confirmingAdult = false;
         sheetEl.className = 'sheet'; sheetEl.innerHTML = ''; appEl.className = 'app';
+        if (then) return then();
         renderPage(); focusKey(returnFocus) || focusFirst();
+    }
+    // Searches the store for `text` as if typed in the search box: the developer link in the sheet
+    // lands on every app by that developer (Apps2Samsung #906 does the same on the phone and PC).
+    function searchFor(text) {
+        query = text; searchEl.value = text; view = 'install'; chip = 'all';
+        renderPage(); focusFirst();
     }
 
     function renderSheet(focusDefault) {
@@ -588,7 +661,9 @@
 
     function appHtml() {
         var x = sheet.app, st = state(x), v = x.variants[sheet.v];
-        var h = '<div class="shd">' + tile(x, 88) + '<div style="min-width:0"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(catName(x.category) + (x.author ? ' · by ' + x.author : '')) + '</div></div></div>';
+        // The developer's name is a link: OK shows every app by them (#29, Apps2Samsung #906).
+        var h = '<div class="shd">' + tile(x, 88) + '<div style="min-width:0"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(catName(x.category))
+            + (x.author ? ' · <span class="by f" tabindex="0" data-k="author" data-act="author" title="All apps by ' + esc(x.author) + '">by ' + esc(x.author) + ' ›</span>' : '') + '</div></div></div>';
         if (x.description) h += '<div class="sdesc">' + esc(x.description) + '</div>';
         var b = '';
         if (st.installed) b += badge('b-ok', 'Installed' + (st.version ? ' · v' + st.version : ''));
@@ -605,7 +680,7 @@
                     var vv = x.variants[i], inst = st.installed && st.known && st.variant === i;
                     return '<div class="var f' + (i === sheet.v ? ' sel' : '') + '" tabindex="0" data-k="var:' + i + '" data-var="' + i + '"' + (i === sheet.v ? ' data-default' : '') + '>'
                         + '<span class="radio"></span><span class="vl">' + esc(vv.label) + '</span>'
-                        + (inst ? badge('b-ok', 'on the TV') : '') + (vv.needsHead ? badge('b-mute', 'Phone or PC') : '')
+                        + (inst ? badge('b-ok', 'on the TV') : '') + (isPinned(x, i) ? badge('b-pin', 'Pinned') : '') + (vv.needsHead ? badge('b-mute', 'Phone or PC') : '')
                         + '<span class="vv">' + esc(vv.version ? 'v' + vv.version : '') + '</span></div>';
                 }).join('') + '</div></div>';
             if (!sheet.all && x.variants.length > 4) h += '<span class="link f" tabindex="0" data-k="allvars" data-act="allvars">Show all ' + x.variants.length + ' variants ›</span>';
@@ -618,7 +693,9 @@
         h += '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="install" data-act="install"' + (can ? (x.variants.length > 1 ? '' : ' data-default') : ' disabled') + '>'
             + esc(v.needsHead ? 'Install from a phone or PC' : job && job.running ? 'Another install is running' : label) + '</button>';
         if (st.installed && x.variants[st.variant].appId) h += '<button class="btn f" data-k="open" data-act="open">Open</button>';
-        if (st.installed && !st.known && x.variants.length > 1) h = h.replace('<div class="sfoot">', '<div class="notice">' + esc('Your TV has ' + x.name + ' v' + st.version + ', but every build of it uses the same package, so TV-Store cannot tell which one. Pick yours above to reinstall or update it.') + '</div><div class="sfoot">');
+        // Pin this build to the top of the store (#29); for a one-build app the button pins the app.
+        h += '<button class="btn f" data-k="pin" data-act="pin">' + (isPinned(x, sheet.v) ? 'Unpin' : 'Pin') + '</button>';
+        if (st.installed && !st.known && x.variants.length > 1) h = h.replace('<div class="sfoot">', '<div class="notice">' + esc('Your TV has ' + x.name + ' v' + st.version + ', but every build of it uses the same package, so TV-Store cannot tell which one. Pick yours above to reinstall or update it, or pin it so TV-Store knows.') + '</div><div class="sfoot">');
         h += '</div><div class="hint">' + (can ? 'Takes about a minute. RETURN goes back to the store.' : 'RETURN goes back to the store.') + '</div></div>';
         return h;
     }
@@ -763,8 +840,10 @@
         if ((k = el.getAttribute('data-chip'))) { chip = k; renderPage(); focusKey('chip:' + k) || focusFirst(); return; }
         if ((k = el.getAttribute('data-opt'))) { toggle(k); return; }
         if ((k = el.getAttribute('data-var'))) { sheet.v = parseInt(k, 10); renderSheet(); return; }
-        if ((k = el.getAttribute('data-app'))) { var x = byKey(k); if (x) openApp(x); return; }
+        if ((k = el.getAttribute('data-app'))) { var x = byKey(k), vi = el.getAttribute('data-vi'); if (x) openApp(x, vi != null ? parseInt(vi, 10) : null); return; }
         switch (act) {
+            case 'author': var by = sheet.app.author; closeSheet(function () { searchFor(by); }); return;
+            case 'pin': togglePin(sheet.app, sheet.v); renderPage(); renderSheet(); focusKey('pin'); return;
             case 'retry': location.reload(); return;
             case 'allvars': sheet.all = true; renderSheet(); focusKey('var:' + sheet.v); return;
             case 'install': if (!el.disabled) startInstall(sheet.app, sheet.v); return;
@@ -842,6 +921,13 @@
     function move(dir) {
         var cur = document.activeElement, all = focusables();
         if (!cur || all.indexOf(cur) < 0) { if (all.length) focus(sheet ? (sheetEl.querySelector('[data-default]') || all[0]) : all[0]); return; }
+        // On the TV page the panel on the right belongs to the selected row: right from a row goes to
+        // the panel's first button, left from the panel back to that row. By distance alone the search
+        // box at the top won from the first row (#29).
+        if (!sheet && view === 'tv') {
+            if (dir === 'right' && closest(cur, 'tvlist')) { var pb = all.filter(function (el) { return closest(el, 'tvpanel'); }); if (pb.length) return focus(pb[0]); }
+            if (dir === 'left' && closest(cur, 'tvpanel') && tvSel) { var row = pageEl.querySelector('[data-k="tv:' + tvSel.key.replace(/"/g, '\\"') + '"]'); if (row) return focus(row); }
+        }
         var a = cur.getBoundingClientRect(), ax = (a.left + a.right) / 2, ay = (a.top + a.bottom) / 2, best = null, bestScore = 1e9;
         all.forEach(function (el) {
             if (el === cur) return;
