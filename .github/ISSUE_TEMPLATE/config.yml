@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Apps2Samsung app on your phone or PC
+    url: https://github.com/Apps2Samsung/Apps2Samsung/issues
+    about: Bugs in the phone, PC or CLI app, the Toolbox and the Arm TV-Store button belong in the Apps2Samsung repo.
+  - name: Request an app for the catalog
+    url: https://github.com/Apps2Samsung/tizen-community-packages/issues/new/choose
+    about: TV-Store shows the Apps2Samsung catalog; new apps are added there, not here.
+  - name: FAQ
+    url: https://github.com/Apps2Samsung/Apps2Samsung/wiki/FAQ
+    about: Common install errors and how to fix them.
