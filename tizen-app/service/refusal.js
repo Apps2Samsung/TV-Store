@@ -33,7 +33,7 @@ function refusal(code, reason, entry) {
     }
     if (/^(118,-12|118012)$/.test(c)) {
         if (/same id and different certificate/i.test(why) || (!why && entry.installed))
-            return { code: 'CERT_MISMATCH', message: appName(entry) + ' is already on this TV, signed with another certificate: it was installed from a phone or PC, or with a certificate that has since been renewed. The TV only updates an app with the certificate it came with. TV-Store can remove that copy and install again; the app’s settings and sign-ins on the TV go with it.' };
+            return { code: 'CERT_MISMATCH', message: appName(entry) + ' is already on this TV, signed with another certificate: it was installed from a phone or PC, or with a certificate that has since been renewed. The TV only updates an app with the certificate it came with.' };
         if (/not yet valid|not valid yet/i.test(why))
             return { code: 'CERT_REJECTED', message: m + '. The TV says the certificate is not valid yet, so its clock is behind: set the TV’s date and time (Settings, General, System Manager, Time) or wait a few minutes, then try again.' };
         if (/expired/i.test(why))

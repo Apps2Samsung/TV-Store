@@ -32,8 +32,8 @@ colours, big tiles for a couch.
 
 1. Install TV-Store from Apps2Samsung like any other app, with Developer Mode's **Host PC IP** set
    to your phone or PC as usual.
-2. In Apps2Samsung, open the TV's **Toolbox** and press **Arm TV-Store**. That hands your signing
-   certificate to the TV once. The TV-Store screen turns green by itself.
+2. In Apps2Samsung, open the TV's **Toolbox** and press **Arm TV-Store**. That hands every signing
+   certificate on that phone or PC to the TV once. The TV-Store screen turns green by itself.
 3. On the TV, set Developer Mode's **Host PC IP** to the TV's own address (TV-Store shows it).
 4. Pick an app in TV-Store and press OK. It installs into the Apps row; no phone or PC needed from
    here on. Set Host PC IP back to your phone or PC whenever you want to use Apps2Samsung again.
@@ -41,12 +41,15 @@ colours, big tiles for a couch.
 ## Apps installed from a phone or PC
 
 Every install is signed with an author certificate, and a Samsung TV only updates an app with the
-same author certificate it was installed with. Arming hands this TV the certificate of the phone or
-PC that pressed Arm; an app installed earlier from another device (or with a certificate that has
-since been renewed) carries a different one, and the TV answers `install failed[118, -12]` (`118012`
-on a 2018 set) when TV-Store tries to update it (#44). TV-Store then offers to remove the old copy
-and install again. That is the only way past it; the app's settings and sign-ins on the TV go with
-the old copy, which is why it asks first.
+same author certificate it was installed with. Arming hands this TV every signing profile the phone
+or PC holds (Public and Partner, the one older sets get, imported ones), and arming from a second
+device adds its profiles to those. TV-Store remembers which profile each package took and, when the
+TV answers `install failed[118, -12]` ("same id and different certificate"; `118012` on a 2018
+set), signs again with the next profile until the TV takes one (#44). So an app installed from a
+phone updates from TV-Store once that phone has armed the TV. Only when none of the profiles on the
+TV matches does TV-Store offer to remove the old copy and install again; the app's settings and
+sign-ins on the TV go with the old copy, which is why it asks first. The arming device's profiles
+are listed under Settings.
 
 ## How it works
 
@@ -137,6 +140,7 @@ The header counts what the switches hide ("12 apps · 3 hidden").
 - `tizen-app/service/compat.js`: buffers that work on the TV's Node 4.4.3
 - `tizen-app/service/manifest.js`: the ids and the required Tizen version a package carries in its own manifest
 - `tizen-app/service/refusal.js`: what the TV's `install failed[...]` codes mean and what TV-Store offers for each
+- `tizen-app/service/certs.js`: the signing profiles handed over, which one each package took, the order to try
 - `tizen-app/js/app.js`: the UI, and `window.A2SStore`, which Apps2Samsung calls to arm the TV
 - `tizen-app/js/qrcode.js`: QR codes for the log address and the Ko-fi link ([qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 1.4.4, MIT)
 - `test/`: a fake `sdbd` plus signer and transport tests

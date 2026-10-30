@@ -18,9 +18,10 @@
  *     PC IP set to 127.0.0.1) and files without a hash in the catalog (the TV cannot check those).
  *
  * Another certificate (#44): an app installed from a phone or PC carries that device's author
- * certificate, and the TV only updates it with the same one. When the TV answers [118, -12] for an
- * app that is on the TV, the install screen offers to remove the old copy and install again (the
- * service runs 0 vd_appuninstall first); the app's settings on the TV go with it, so it is a choice.
+ * certificate, and the TV only updates it with the same one. Arming hands over every profile the
+ * phone or PC holds, and the service tries them in turn on a [118, -12]. Only when none is taken
+ * does the install screen offer to remove the old copy and install again (0 vd_appuninstall first);
+ * the app's settings on the TV go with it, so it is a choice.
  *
  * Tizen version (#47): the catalog says what Tizen each file asks for (required_version). A build
  * this TV is too old for carries a "Needs Tizen X" badge, its card is dimmed, and its Install button
@@ -776,7 +777,7 @@
         // Came from a phone or PC (TV-Store never installed this package): the TV keeps that device's
         // certificate, and an update from here may need the old copy removed first (#44).
         var fromHead = can && st.installed && v.packageId && !installedFile.hasOwnProperty(v.packageId);
-        h += '</div><div class="hint">' + (fromHead ? esc(x.name + ' was installed from a phone or PC. If that device used another certificate, the TV refuses the update and TV-Store offers to remove the old copy first. RETURN goes back to the store.') : can ? 'Takes about a minute. RETURN goes back to the store.' : 'RETURN goes back to the store.') + '</div></div>';
+        h += '</div><div class="hint">' + (fromHead ? esc(x.name + ' was installed from a phone or PC. TV-Store signs with the certificate that installed it when that phone or PC armed this TV; otherwise it offers to remove the old copy first. RETURN goes back to the store.') : can ? 'Takes about a minute. RETURN goes back to the store.' : 'RETURN goes back to the store.') + '</div></div>';
         return h;
     }
 
@@ -868,7 +869,8 @@
             + opt('verboseLog', 'Verbose logging', 'Writes much more detail to the TV-Store log. Turn it on when a bug report asks for it, and off again afterwards.') + '</div>';
         if (confirmingAdult) h += '<div class="notice">These apps are meant for adults only. Turn them on only if you are 18 or older.</div>'
             + '<div class="btns" style="margin-top:16px"><button class="btn primary grow f" data-k="adultyes" data-act="adultyes" data-default>I am 18 or older</button><button class="btn f" data-k="adultno" data-act="adultno">Cancel</button></div>';
-        h += '<div class="table kv"><div class="trow"><span class="k">Signing certificate</span><span class="v">' + (armed() ? 'handed over' : 'not yet') + '</span></div>'
+        var certText = !armed() ? 'not yet' : ready.certCount > 1 ? ready.certCount + ' handed over: ' + (ready.certNames || []).join(', ') : 'handed over' + (ready.certNames && ready.certNames[0] ? ': ' + ready.certNames[0] : '');
+        h += '<div class="table kv"><div class="trow"><span class="k">Signing certificate' + (ready && ready.certCount > 1 ? 's' : '') + '</span><span class="v">' + esc(certText) + '</span></div>'
             + '<div class="trow"><span class="k">Catalog</span><span class="v">' + esc(catalogApps.length + ' apps, signature checked') + '</span></div>'
             + '<div class="trow"><span class="k">TV-Store</span><span class="v">v' + VERSION + (ready && ready.node ? ' · Node ' + esc(ready.node) : '') + '</span></div>'
             + '<div class="trow"><span class="k">This TV</span><span class="v">' + esc((device ? device + ' · ' : '') + (tvTizen ? 'Tizen ' + tvTizen : 'Tizen version not known')) + '</span></div></div>';
@@ -1125,7 +1127,7 @@
                     xhr('POST', '/cert', certs, function (err, res) {
                         if (err && ++tries < 30) return setTimeout(post, 500);
                         if (err) return resolve({ ok: false, error: err.message });
-                        if (res && res.ok) setReady({ ok: true, certReady: true, ownIp: ready && ready.ownIp, node: ready && ready.node });
+                        if (res && res.ok) setReady({ ok: true, certReady: true, certCount: res.certCount || 1, certNames: certs && certs.certificates ? certs.certificates.map(function (c) { return c.name; }) : [], ownIp: ready && ready.ownIp, node: ready && ready.node });
                         resolve(res || { ok: false, error: 'no answer from the service' });
                     });
                 })();
