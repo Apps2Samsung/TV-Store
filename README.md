@@ -38,6 +38,16 @@ colours, big tiles for a couch.
 4. Pick an app in TV-Store and press OK. It installs into the Apps row; no phone or PC needed from
    here on. Set Host PC IP back to your phone or PC whenever you want to use Apps2Samsung again.
 
+## Apps installed from a phone or PC
+
+Every install is signed with an author certificate, and a Samsung TV only updates an app with the
+same author certificate it was installed with. Arming hands this TV the certificate of the phone or
+PC that pressed Arm; an app installed earlier from another device (or with a certificate that has
+since been renewed) carries a different one, and the TV answers `install failed[118, -12]` (`118012`
+on a 2018 set) when TV-Store tries to update it (#44). TV-Store then offers to remove the old copy
+and install again. That is the only way past it; the app's settings and sign-ins on the TV go with
+the old copy, which is why it asks first.
+
 ## How it works
 
 A Samsung TV only installs sideloaded packages through its developer connection (`sdbd`), the
@@ -126,6 +136,7 @@ The header counts what the switches hide ("12 apps · 3 hidden").
 - `tizen-app/service/catalog.js` + `catalog-key.js`: the signed catalog check and its public key
 - `tizen-app/service/compat.js`: buffers that work on the TV's Node 4.4.3
 - `tizen-app/service/manifest.js`: the ids and the required Tizen version a package carries in its own manifest
+- `tizen-app/service/refusal.js`: what the TV's `install failed[...]` codes mean and what TV-Store offers for each
 - `tizen-app/js/app.js`: the UI, and `window.A2SStore`, which Apps2Samsung calls to arm the TV
 - `tizen-app/js/qrcode.js`: QR codes for the log address and the Ko-fi link ([qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 1.4.4, MIT)
 - `test/`: a fake `sdbd` plus signer and transport tests

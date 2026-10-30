@@ -19,6 +19,7 @@ var zip = require('./zip.js');
 var catalogTrust = require('./catalog.js');
 var CATALOG_KEY = require('./catalog-key.js');
 var manifest = require('./manifest.js');
+var refusals = require('./refusal.js');
 
 var PORT = 8077;
 // Signed by the Apps2Samsung catalog workflow; see catalog.js for why the content is checked
@@ -147,7 +148,7 @@ function installUpload(b, cb) {
     var up = UPLOAD, outFile = path.join(DATA_DIR, 'job-' + Date.now() + '.signed.wgt');
     UPLOAD_BUSY = true;
     log('install: uploaded ' + up.size + ' bytes, ' + up.name + ' from ' + up.from + ', SHA-256 ' + up.sha256 + ', confirmed on the TV; signing');
-    var entry = { appId: up.ids.appId, packageId: up.ids.packageId, file: up.name, requiredVersion: up.ids.requiredVersion, tizen: b.tizen };
+    var entry = { appId: up.ids.appId, packageId: up.ids.packageId, file: up.name, name: up.ids.name, requiredVersion: up.ids.requiredVersion, tizen: b.tizen, installed: !!b.installed, replace: !!b.replace };
     var gate = tizenGate(entry);
     if (gate) { UPLOAD_BUSY = false; return cb(gate); }
     signAndInstall(entry, up.name.replace(/[^A-Za-z0-9._-]/g, '_'), UPLOAD_FILE, outFile, function (err, r) {
@@ -294,24 +295,29 @@ function coded(code, message) { var e = new Error(message); e.code = code; retur
 // The page sends the TV's platform version with every install (entry.tizen, "4.0"); the package's
 // own manifest says what it asks for (entry.requiredVersion). A mismatch is refused here with the
 // reason, instead of by the TV with a bare [118, -19] (#44, #47). Either side unknown: no gate.
-function tizenVersionOf(entry) { var m = /^\s*(\d+(?:\.\d+)?)/.exec(String(entry.tizen || '')); return m ? m[1] : ''; }
 function tizenGate(entry) {
-    var tv = tizenVersionOf(entry), req = entry.requiredVersion || '';
+    var tv = refusals.tizenVersionOf(entry), req = entry.requiredVersion || '';
     if (!manifest.needsNewer(req, tv)) return null;
     log('install: ' + (entry.file || 'the package') + ' asks for Tizen ' + req + ', this TV runs Tizen ' + tv + '; not pushing it');
     return coded('NEEDS_NEWER_TIZEN', 'This app asks for Tizen ' + req + ' or newer, and this TV runs Tizen ' + tv + '. The TV would refuse it. If the catalog has a build for older sets, pick that one.');
 }
 
-// What the TV's refusal means where that is known. [118, -19] (118019 on a 2018 set) is the
-// installer's "parsing error" on the manifest, in practice a package that asks for a newer Tizen
-// than the set runs (#44); [118, -4] is the newer sets' spelling of that mismatch, next to "load
-// archive info fail" for a bad package id. The manifest's own number goes in when it is known.
-function refusal(code, reason, entry) {
-    var m = 'The TV refused the package [' + code + ']' + (reason ? ': ' + reason.trim() : '');
-    var c = String(code).replace(/\s/g, ''), tv = tizenVersionOf(entry), req = entry.requiredVersion || '';
-    if (!/^(118,-19|118019|118,-4|118004)$/.test(c)) return m;
-    if (req) return m + '. It asks for Tizen ' + req + ' or newer' + (tv ? ', and this TV runs Tizen ' + tv : '') + '.';
-    return m + '. The TV could not read the package, which usually means it asks for a newer Tizen than this set runs.';
+// An app installed from a phone or PC carries that device's author certificate, and the TV only
+// updates it with the same one (#44). When the page asks for a replace, the old copy goes first
+// (0 vd_appuninstall, the verb the heads use), on its own connection; a refusal is logged and the
+// install goes ahead anyway, so the TV's own answer is what the user sees.
+function removeOld(entry, cb) {
+    var ip = ownIp();
+    if (!entry.replace || !entry.packageId || !ip) return cb();
+    log('install: removing the old copy of ' + entry.packageId + ' first (installed with another certificate)');
+    connectSdb([ip, '127.0.0.1'], function (err, c) {
+        if (err) { log('install: could not remove the old copy: ' + err.message); return cb(); }
+        c.shell('0 vd_appuninstall ' + entry.packageId, function (err, out) {
+            c.end();
+            log('install: vd_appuninstall reply: ' + (err ? err.message : out.replace(/\s+/g, ' ').slice(0, 200)));
+            cb();
+        });
+    });
 }
 
 // sdbd on this TV, at the first address that completes the handshake. The LAN IP is what Developer
@@ -351,7 +357,7 @@ function signAndInstall(entry, remoteName, inFile, outFile, cb) {
         log('install: signed in ' + Math.round((Date.now() - started) / 1000) + ' s, ' + size + ' bytes');
         var ip = ownIp();
         if (!ip) return cb(new Error('could not determine this TV’s own IP'));
-        connectSdb([ip, '127.0.0.1'], function (err, c) {
+        removeOld(entry, function () { connectSdb([ip, '127.0.0.1'], function (err, c) {
             if (err) return cb(err);
             var remote = STAGING + '/' + remoteName, fd;
             try { fd = fs.openSync(outFile, 'r'); } catch (e) { c.end(); return cb(e); }
@@ -370,11 +376,11 @@ function signAndInstall(entry, remoteName, inFile, outFile, cb) {
                     // sdbd answers the shell call either way; the installer's own words say whether it
                     // worked ("install failed[118, -12], reason: ..." on a refused package).
                     var failed = /install failed\[([^\]]*)\](?:,\s*reason:\s*([^\n]*))?/i.exec(out);
-                    if (failed) return cb(coded('INSTALL_FAILED', refusal(failed[1], failed[2], entry)));
+                    if (failed) { var r = refusals.refusal(failed[1], failed[2], entry); return cb(coded(r.code, r.message)); }
                     cb(null, { reply: out });
                 });
             });
-        });
+        }); });
     });
 }
 

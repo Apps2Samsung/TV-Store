@@ -17,6 +17,11 @@
  *     the heads' Packaging/ folder), root packages (`flags: ["root"]`, which afterwards need Host
  *     PC IP set to 127.0.0.1) and files without a hash in the catalog (the TV cannot check those).
  *
+ * Another certificate (#44): an app installed from a phone or PC carries that device's author
+ * certificate, and the TV only updates it with the same one. When the TV answers [118, -12] for an
+ * app that is on the TV, the install screen offers to remove the old copy and install again (the
+ * service runs 0 vd_appuninstall first); the app's settings on the TV go with it, so it is a choice.
+ *
  * Tizen version (#47): the catalog says what Tizen each file asks for (required_version). A build
  * this TV is too old for carries a "Needs Tizen X" badge, its card is dimmed, and its Install button
  * is off: the TV would refuse it with install failed[118, -19] (#44). The service checks the same
@@ -768,7 +773,10 @@
         // Pin this build to the top of the store (#29); for a one-build app the button pins the app.
         h += '<button class="btn f" data-k="pin" data-act="pin">' + (isPinned(x, sheet.v) ? 'Unpin' : 'Pin') + '</button>';
         if (st.installed && !st.known && x.variants.length > 1) h = h.replace('<div class="sfoot">', '<div class="notice">' + esc('Your TV has ' + x.name + ' v' + st.version + ', but every build of it uses the same package, so TV-Store cannot tell which one. Pick yours above to reinstall or update it, or pin it so TV-Store knows.') + '</div><div class="sfoot">');
-        h += '</div><div class="hint">' + (can ? 'Takes about a minute. RETURN goes back to the store.' : 'RETURN goes back to the store.') + '</div></div>';
+        // Came from a phone or PC (TV-Store never installed this package): the TV keeps that device's
+        // certificate, and an update from here may need the old copy removed first (#44).
+        var fromHead = can && st.installed && v.packageId && !installedFile.hasOwnProperty(v.packageId);
+        h += '</div><div class="hint">' + (fromHead ? esc(x.name + ' was installed from a phone or PC. If that device used another certificate, the TV refuses the update and TV-Store offers to remove the old copy first. RETURN goes back to the store.') : can ? 'Takes about a minute. RETURN goes back to the store.' : 'RETURN goes back to the store.') + '</div></div>';
         return h;
     }
 
@@ -818,13 +826,14 @@
             if (i === 0 && v.upload) s = ['Received from your phone or PC', 'Picking up the file'];
             if (i === 0) side = job.bytes ? (job.bytes / 1048576).toFixed(1) + ' MB' : '';
             if (i === 1) side = 'with your certificate';
-            if (i === 2) side = 'the TV is doing this part';
+            if (i === 2) side = job.replace ? 'the old copy goes first' : 'the TV is doing this part';
             return '<div class="trow' + cls + '">' + ico + '<span style="flex:1">' + (i < done ? s[0] : s[1]) + '</span><span class="v">' + side + '</span></div>';
         }).join('') + '</div>';
         if (job.error) h += '<div class="notice bad">' + esc(job.error) + '</div>';
         else h += '<div class="notice info">You can keep browsing with RETURN; the ' + (upd ? 'update' : 'install') + ' carries on in the background and the app shows up under On the TV when it is in.</div>';
         h += '<div class="sfoot"><div class="btns">';
-        if (job.error) h += '<button class="btn primary grow f" data-k="retryjob" data-act="retryjob" data-default>Try again</button><button class="btn f" data-k="close" data-act="close">Back to the store</button>';
+        if (job.error && job.code === 'CERT_MISMATCH' && !job.replace) h += '<button class="btn primary grow f" data-k="replacejob" data-act="replacejob" data-default>Remove the old copy and install again</button><button class="btn f" data-k="close" data-act="close">Keep the old copy</button>';
+        else if (job.error) h += '<button class="btn primary grow f" data-k="retryjob" data-act="retryjob" data-default>Try again</button><button class="btn f" data-k="close" data-act="close">Back to the store</button>';
         else h += '<button class="btn grow f" data-k="close" data-act="close" data-default>Keep browsing</button>';
         h += '</div><div class="hint mono">' + esc(job.line || '') + '</div></div>';
         return h;
@@ -880,20 +889,23 @@
         openSheet({ mode: 'app', app: x, v: v, all: false });
     }
 
-    function startInstall(x, vIdx) {
+    function startInstall(x, vIdx, opts) {
         if ((job && job.running) || isSelf(x)) return;
-        var v = x.variants[vIdx], st = state(x);
-        job = { app: x, v: v, vIdx: vIdx, update: st.installed && st.known && st.variant === vIdx, running: true, finished: false, ok: false, step: 0, bytes: 0, line: '', error: null, started: Date.now() };
+        var v = x.variants[vIdx], st = state(x), replace = !!(opts && opts.replace);
+        job = { app: x, v: v, vIdx: vIdx, update: st.installed && st.known && st.variant === vIdx, replace: replace, running: true, finished: false, ok: false, step: 0, bytes: 0, line: '', error: null, code: null, started: Date.now() };
         if (sheet) { sheet = { mode: 'job' }; renderSheet(true); } else openSheet({ mode: 'job' });
         renderHeader();
         var since = job.started - 2000, me = job;
         var timer = setInterval(function () { pollLog(me, since); }, 700);
-        var req = v.upload ? { upload: v.upload, token: uploadToken, tizen: tvTizen } : { url: v.url, file: v.file, appId: v.appId, packageId: v.packageId, tizen: tvTizen };
+        // installed: whether the TV lists the package, so the service can read a bare [118, -12] from
+        // a 2018 set (no reason text) as "another certificate" (#44); replace: remove that copy first.
+        var onTv = !!(v.packageId && installed.hasOwnProperty(v.packageId));
+        var req = v.upload ? { upload: v.upload, token: uploadToken, tizen: tvTizen, installed: onTv, replace: replace } : { url: v.url, file: v.file, appId: v.appId, packageId: v.packageId, name: x.name, tizen: tvTizen, installed: onTv, replace: replace };
         xhr('POST', '/install', req, function (err, res) {
             clearInterval(timer);
             pollLog(me, since, function () {
                 me.running = false; me.finished = true; me.ended = Date.now();
-                if (err || !res.ok) { me.error = err ? err.message : res.error; renderHeader(); if (sheet && sheet.mode === 'job') renderSheet(true); queue = []; return; }
+                if (err || !res.ok) { me.error = err ? err.message : res.error; me.code = err ? null : (res.code || null); renderHeader(); if (sheet && sheet.mode === 'job') renderSheet(true); queue = []; return; }
                 me.ok = true; me.step = 4;
                 if (v.packageId) { installed[v.packageId] = v.version; claims = null; rememberVariant(v); }
                 if (v.appId) appIds[v.appId] = true;
@@ -917,7 +929,7 @@
                     me.line = l.replace(/^\S+\s+install:\s*/, '');
                     var m = /(?:downloaded|uploaded) (\d+) bytes/.exec(l);
                     if (m) { me.bytes = parseInt(m[1], 10); me.step = Math.max(me.step, 1); }
-                    if (/pushing to/.test(l)) me.step = Math.max(me.step, 2);
+                    if (/removing the old copy|pushing to/.test(l)) me.step = Math.max(me.step, 2);
                     if (/vd_appinstall reply/.test(l)) me.step = Math.max(me.step, 3);
                 });
                 if (sheet && sheet.mode === 'job' && job === me && me.running) renderSheet();
@@ -980,6 +992,7 @@
             case 'openjob': launch(job.v.appId); return;
             case 'close': closeSheet(); return;
             case 'retryjob': startInstall(job.app, job.vIdx); return;
+            case 'replacejob': startInstall(job.app, job.vIdx, { replace: true }); return;
             case 'adultyes': setSetting('showAdult', true); return;
             case 'adultno': confirmingAdult = false; renderSheet(); focusKey('opt:showAdult'); return;
             case 'tvupd': startInstall(tvSel, state(tvSel).variant); return;
