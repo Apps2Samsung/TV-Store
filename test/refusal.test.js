@@ -14,6 +14,9 @@ function check(code, reason, entry, wantCode, wantText) {
 check('118, -12', 'Check certificate error : :Package with the same id and different certificate has been already installed.:<-12>', { name: 'HackTV' }, 'CERT_MISMATCH', 'HackTV is already on this TV');
 check('118012', '', { file: 'HackTV.wgt', installed: true }, 'CERT_MISMATCH', 'HackTV is already on this TV');
 check('118012', '', { file: 'HackTV.wgt', installed: false }, 'CERT_REJECTED', 'internet during the install');
+// A 2022 Tizen 6.5 set words the mismatch as [118, -11] (#45, Moonfin from a PC).
+check('118, -11', 'Author certificate not match :', { name: 'Moonfin', installed: true }, 'CERT_MISMATCH', 'Moonfin is already on this TV');
+check('118011', '', { file: 'Moonfin.wgt', installed: true }, 'CERT_MISMATCH', 'Moonfin is already on this TV');
 check('118, -12', 'Check certificate error : :Invalid format of certificate in signature.:<-2>', { installed: true }, 'CERT_REJECTED', 'internet during the install');
 check('118, -12', 'Check certificate error : :Certificate in signature is not valid yet.:<-7>', { installed: true }, 'CERT_REJECTED', 'clock is behind');
 check('118, -12', 'certificate has expired', {}, 'CERT_REJECTED', 'expired');
