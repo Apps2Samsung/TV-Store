@@ -24,7 +24,9 @@ colours, big tiles for a couch.
   release that means the [3.0 beta](https://github.com/Apps2Samsung/Apps2Samsung/releases); 2.x has
   no Arm TV-Store button.
 - A Samsung TV in Developer Mode. Tested on Tizen 5.0 (2019) and Tizen 10 (2025); TV-Store asks for Tizen 3.0
-  (2017) or newer.
+  (2017) or newer. Every app in the catalog asks for its own Tizen version; one this TV is too old for
+  shows a "Needs Tizen X" badge and does not install from here (the TV would refuse it with
+  `install failed[118, -19]`, #44). Where the app has a build for older sets, the sheet lands on that one.
 
 ## Setting it up
 
@@ -123,7 +125,7 @@ The header counts what the switches hide ("12 apps · 3 hidden").
 - `tizen-app/service/signer.js`: the package signer
 - `tizen-app/service/catalog.js` + `catalog-key.js`: the signed catalog check and its public key
 - `tizen-app/service/compat.js`: buffers that work on the TV's Node 4.4.3
-- `tizen-app/service/manifest.js`: the ids an uploaded package carries in its own manifest
+- `tizen-app/service/manifest.js`: the ids and the required Tizen version a package carries in its own manifest
 - `tizen-app/js/app.js`: the UI, and `window.A2SStore`, which Apps2Samsung calls to arm the TV
 - `tizen-app/js/qrcode.js`: QR codes for the log address and the Ko-fi link ([qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 1.4.4, MIT)
 - `test/`: a fake `sdbd` plus signer and transport tests
