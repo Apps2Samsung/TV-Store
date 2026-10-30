@@ -25,6 +25,9 @@ jobs:
           node test/catalog.test.js
           node test/sdb-errors.test.js
           node test/manifest.test.js
+          node test/refusal.test.js
+          node test/certs.test.js
+          node test/install.test.js
       - name: Version in config.xml must match the tag
         run: |
           tag="${GITHUB_REF_NAME#v}"

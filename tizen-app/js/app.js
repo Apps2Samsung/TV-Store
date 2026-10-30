@@ -17,6 +17,17 @@
  *     the heads' Packaging/ folder), root packages (`flags: ["root"]`, which afterwards need Host
  *     PC IP set to 127.0.0.1) and files without a hash in the catalog (the TV cannot check those).
  *
+ * Another certificate (#44): an app installed from a phone or PC carries that device's author
+ * certificate, and the TV only updates it with the same one. Arming hands over every profile the
+ * phone or PC holds, and the service tries them in turn on a [118, -12]. Only when none is taken
+ * does the install screen offer to remove the old copy and install again (0 vd_appuninstall first);
+ * the app's settings on the TV go with it, so it is a choice.
+ *
+ * Tizen version (#47): the catalog says what Tizen each file asks for (required_version). A build
+ * this TV is too old for carries a "Needs Tizen X" badge, its card is dimmed, and its Install button
+ * is off: the TV would refuse it with install failed[118, -19] (#44). The service checks the same
+ * from the package itself before pushing, so a file sent in by hand is caught too.
+ *
  * Pins (#29): the app sheet pins one build of an app to the top of the store, remembered on the TV.
  * A pinned card shows that build's own state (installed version, update waiting). For apps whose
  * builds share one package id the pin also tells TV-Store which build the TV has.
@@ -39,7 +50,7 @@
     // TV's current IP and loopback too, and keeps whichever answers.
     var BASE = 'http://127.0.0.1:8077';
     var KOFI = 'https://ko-fi.com/patrickst';
-    var VERSION = '0.3.11';
+    var VERSION = '0.3.12';
     var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13, RETURN: 10009, ESC: 27, BACK: 8 };
 
     // What the manifest providers are called; resolved.json carries only their ids.
@@ -101,6 +112,7 @@
         return out;
     }
     var ready = null;          // the service's /ping
+    var tvTizen = '';          // the Tizen version this TV runs ("4.0"), from the platform; '' off a TV
     var problem = null;        // { title, text } when the service or the catalog failed
     var loading = true;
     var view = 'install';      // 'install' | 'tv'
@@ -123,12 +135,15 @@
     // ---- settings, remembered on the TV -------------------------------------------------------------
     var SETTINGS_KEY = 'a2s.store.settings';
     var settings = (function () {
-        var s = { showAdult: false, showNeedsHead: true, verboseLog: false };
+        // hideSelfNotice: the TV-Store version whose "vX is out" banner was dismissed (#43); the
+        // banner comes back for the next release.
+        var s = { showAdult: false, showNeedsHead: true, verboseLog: false, hideSelfNotice: '' };
         try {
             var saved = JSON.parse(window.localStorage.getItem(SETTINGS_KEY) || '{}');
             if (typeof saved.showAdult === 'boolean') s.showAdult = saved.showAdult;
             if (typeof saved.showNeedsHead === 'boolean') s.showNeedsHead = saved.showNeedsHead;
             if (typeof saved.verboseLog === 'boolean') s.verboseLog = saved.verboseLog;
+            if (typeof saved.hideSelfNotice === 'string') s.hideSelfNotice = saved.hideSelfNotice;
         } catch (e) {}
         return s;
     })();
@@ -281,6 +296,8 @@
     }
 
     function readDevice() {
+        // "4.0", "6.5", "10.0": what the apps' required_version is held against (#47).
+        try { var pv = /^\s*(\d+(?:\.\d+)?)/.exec(String(tizen.systeminfo.getCapability('http://tizen.org/feature/platform.version') || '')); if (pv) tvTizen = pv[1]; } catch (e) {}
         ['ETHERNET_NETWORK', 'WIFI_NETWORK'].forEach(function (t) {
             try { tizen.systeminfo.getPropertyValue(t, function (n) { if (n && n.ipAddress && !tvIp) tvIp = n.ipAddress; }, function () {}); } catch (e) {}
         });
@@ -293,9 +310,16 @@
     }
 
     // ---- the catalog ------------------------------------------------------------------------------
-    function variant(label, file, url, version, appId, packageId) {
-        return { label: label || file.replace(/\.(wgt|tpk)$/i, ''), file: file, url: url, version: version || '', appId: appId || '', packageId: packageId || '' };
+    function variant(label, file, url, version, appId, packageId, tizen) {
+        return { label: label || file.replace(/\.(wgt|tpk)$/i, ''), file: file, url: url, version: version || '', appId: appId || '', packageId: packageId || '', tizen: tizen || '' };
     }
+    // Whether this TV can run a build that asks for Tizen v.tizen ("6.0"): yes when either side is
+    // unknown; the service checks the package itself and the TV has the last word (#47).
+    function fits(v) { return !tvTizen || !v.tizen || !newer(v.tizen, tvTizen); }
+    // The lowest Tizen any build of the app asks for, '' when no build says.
+    function lowestTizen(x) { var low = ''; x.variants.forEach(function (v) { if (v.tizen && (!low || newer(low, v.tizen))) low = v.tizen; }); return low; }
+    // No build of the app runs on this TV.
+    function tooNew(x) { return !!tvTizen && x.variants.length > 0 && !x.variants.some(fits); }
 
     function ownerOf(repoOrUrl) {
         var m = /(?:repos\/)?([^\/]+)\/[^\/]+(?:\/releases)?$/.exec(String(repoOrUrl || '').replace(/^https?:\/\/[^\/]+\//, ''));
@@ -322,7 +346,7 @@
                 // The community bundle: the catalog is the truth, the release gives the download.
                 p.catalog.apps.forEach(function (e) {
                     var a = byFile[e.file]; if (!a) return;
-                    var v = variant(e.variant, e.file, a.browser_download_url, e.version || a.package_version, e.app_id || a.app_id, e.package_id || a.package_id);
+                    var v = variant(e.variant, e.file, a.browser_download_url, e.version || a.package_version, e.app_id || a.app_id, e.package_id || a.package_id, e.required_version || a.required_version);
                     var x = app('c:' + (e.group || e.name), e.group || e.name, e.category, e.description, ownerOf(e.repo));
                     x.variants.push(v);
                     if (e.adult) x.adult = true;
@@ -339,7 +363,7 @@
             var info = PROVIDERS[p.id] || { name: p.id, category: 'other', description: '' };
             var x = app('p:' + p.id, info.name, info.category, info.description, ownerOf(p.url));
             assets.forEach(function (a) {
-                var v = variant(null, a.name, a.browser_download_url, a.package_version, a.app_id, a.package_id);
+                var v = variant(null, a.name, a.browser_download_url, a.package_version, a.app_id, a.package_id, a.required_version);
                 if (!a.digest) v.needsHead = NO_HASH;
                 x.variants.push(v);
             });
@@ -485,6 +509,7 @@
     function cardBadges(x) {
         var st = state(x), b = '';
         if (st.installed) b += st.update ? badge('b-warn', 'Update') : badge('b-ok', 'Installed');
+        if (tooNew(x)) b += badge('b-warn', 'Needs Tizen ' + lowestTizen(x));
         if (x.adult) b += badge('b-warn', '18+');
         if (x.root) b += badge('b-warn', 'root');
         if (x.needsHead) b += badge('b-mute', 'Phone or PC');
@@ -495,6 +520,7 @@
         if (vs.installed) b += vs.update ? badge('b-warn', 'Update to v' + vs.latest) : badge('b-ok', 'Installed' + (vs.version ? ' · v' + vs.version : ''));
         else if (vs.other) b += badge('b-mute', 'Other build on the TV');
         else if (v.version) b += badge('b-mute', 'v' + v.version);
+        if (!fits(v)) b += badge('b-warn', 'Needs Tizen ' + v.tizen);
         if (x.adult) b += badge('b-warn', '18+');
         if (x.root) b += badge('b-warn', 'root');
         if (v.needsHead) b += badge('b-mute', 'Phone or PC');
@@ -534,6 +560,7 @@
         if (st.installed) b += st.update ? badge('b-warn', 'Update to v' + st.latest) : badge('b-ok', 'Installed' + (st.version ? ' · v' + st.version : ''));
         if (x.variants.length > 1) b += badge('b-mute', x.variants.length + ' variants');
         else if (x.variants[0].version && !st.installed) b += badge('b-mute', 'v' + x.variants[0].version);
+        if (tooNew(x)) b += badge('b-warn', 'Needs Tizen ' + lowestTizen(x));
         if (x.adult) b += badge('b-warn', '18+');
         if (x.needsHead) b += badge('b-mute', 'Phone or PC');
         return '<div class="selcard" id="selcard">' + tile(x, 110)
@@ -543,13 +570,13 @@
     }
 
     function card(x, where) {
-        return '<div class="card f' + (x.needsHead ? ' dim' : '') + '" tabindex="0" data-k="card:' + where + ':' + esc(x.key) + '" data-app="' + esc(x.key) + '">'
+        return '<div class="card f' + (x.needsHead || tooNew(x) ? ' dim' : '') + '" tabindex="0" data-k="card:' + where + ':' + esc(x.key) + '" data-app="' + esc(x.key) + '">'
             + tile(x, 68) + '<div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(subline(x)) + '</div><div class="badges">' + cardBadges(x) + '</div></div>';
     }
     // A pinned build's card (#29): the build's own label and state, and OK opens the sheet on it.
     function pinCard(x, i) {
         var v = x.variants[i];
-        return '<div class="card f' + (v.needsHead ? ' dim' : '') + '" tabindex="0" data-k="card:pinned:' + esc(x.key) + ':' + i + '" data-app="' + esc(x.key) + '" data-vi="' + i + '">'
+        return '<div class="card f' + (v.needsHead || !fits(v) ? ' dim' : '') + '" tabindex="0" data-k="card:pinned:' + esc(x.key) + ':' + i + '" data-app="' + esc(x.key) + '" data-vi="' + i + '">'
             + tile(x, 68) + '<div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(x.variants.length > 1 ? v.label : (v.version ? 'v' + v.version : v.file)) + '</div><div class="badges">' + pinBadges(x, i) + '</div></div>';
     }
 
@@ -588,17 +615,20 @@
 
         // TV-Store is in its own catalog: say so when a newer one is there (like Moonfin's update
         // popup, but from the signed catalog instead of the GitHub API). Not installable from here
-        // (#41): the installer would stop the service doing it.
-        var me = self(), ms = me ? state(me) : null;
-        if (ms && ms.update) h += '<div class="notice" style="margin:0 0 26px">TV-Store v' + esc(ms.latest) + ' is out (this is v' + esc(ms.version) + '). ' + SELF_HOW + '</div>';
+        // (#41): the installer would stop the service doing it. Nothing to do on the TV, so the banner
+        // has a Got it that hides it for that version (#43); the On the TV row and the sheet keep
+        // saying it. It comes back for the next release.
+        var me = self(), ms = me ? state(me) : null, selfLatest = '', selfText = '';
+        if (ms && ms.update) { selfLatest = ms.latest; selfText = 'TV-Store v' + ms.latest + ' is out (this is v' + ms.version + '). ' + SELF_HOW; }
         else if (me && selfRenamed()) {
             // Installed under another package id: the platform lists this copy under that id, so
             // state() cannot see it. Compare the catalog's version with our own and send the user to
             // the head that renamed it rather than install a second TV-Store from here.
             var own = (selfInfo() || {}).version || '', latest = me.variants[0] ? me.variants[0].version : '';
-            if (own && latest && newer(latest, own)) h += '<div class="notice" style="margin:0 0 26px">TV-Store v' + esc(latest) + ' is out (this is v' + esc(own)
-                + '). This copy was installed under another package id by Apps2Samsung, so update it from Apps2Samsung (On the TV, Update) rather than from here.</div>';
+            if (own && latest && newer(latest, own)) { selfLatest = latest; selfText = 'TV-Store v' + latest + ' is out (this is v' + own + '). This copy was installed under another package id by Apps2Samsung, so update it from Apps2Samsung (On the TV, Update) rather than from here.'; }
         }
+        if (selfLatest && settings.hideSelfNotice !== selfLatest)
+            h += '<div class="notice row" style="margin:0 0 26px"><span>' + esc(selfText) + '</span><button class="btn f" data-k="dismissself" data-act="dismissself" data-v="' + esc(selfLatest) + '">Got it</button></div>';
 
         if (!hover || apps.indexOf(hover) < 0) hover = apps[0] || null;
         if (!query) {
@@ -662,7 +692,7 @@
             + '<div class="trow"><span class="k">In the catalog</span><span class="v"' + (st.update ? ' style="color:#F0A020"' : '') + '>v' + esc(st.latest || v.version) + '</span></div>'
             + (x.variants.length > 1 ? '<div class="trow"><span class="k">Variant</span><span class="v">' + esc(st.known ? v.label + (st.byPin ? ' · pinned' : '') : 'Not known: the builds share one package') + '</span></div>' : '') + '</div>'
             + '<div class="btns" style="margin-top:18px">';
-        if (st.update && st.known && !v.needsHead && !isSelf(x) && armed()) h += '<button class="btn primary grow f" data-k="tvupd" data-act="tvupd">Update</button>';
+        if (st.update && st.known && !v.needsHead && fits(v) && !isSelf(x) && armed()) h += '<button class="btn primary grow f" data-k="tvupd" data-act="tvupd">Update</button>';
         else h += '<button class="btn grow f" data-k="tvsheet" data-act="tvsheet">Details</button>';
         if (v.appId) h += '<button class="btn f" data-k="tvopen" data-act="tvopen">Open</button>';
         h += '</div>';
@@ -720,6 +750,7 @@
         if (st.update) b += badge('b-warn', 'Update to v' + st.latest);
         if (x.adult) b += badge('b-warn', 'Adults only (18+)');
         if (x.root) b += badge('b-warn', 'Gains root on the TV');
+        if (v.tizen) b += badge(fits(v) ? 'b-mute' : 'b-warn', 'Tizen ' + v.tizen + ' or newer');
         if (b) h += '<div class="badges">' + b + '</div>';
 
         if (x.variants.length > 1) {
@@ -730,7 +761,7 @@
                     var vv = x.variants[i], inst = st.installed && st.known && st.variant === i;
                     return '<div class="var f' + (i === sheet.v ? ' sel' : '') + '" tabindex="0" data-k="var:' + i + '" data-var="' + i + '"' + (i === sheet.v ? ' data-default' : '') + '>'
                         + '<span class="radio"></span><span class="vl">' + esc(vv.label) + '</span>'
-                        + (inst ? badge('b-ok', 'on the TV') : '') + (isPinned(x, i) ? badge('b-pin', 'Pinned') : '') + (vv.needsHead ? badge('b-mute', 'Phone or PC') : '')
+                        + (inst ? badge('b-ok', 'on the TV') : '') + (isPinned(x, i) ? badge('b-pin', 'Pinned') : '') + (vv.needsHead ? badge('b-mute', 'Phone or PC') : '') + (fits(vv) ? '' : badge('b-warn', 'Needs Tizen ' + vv.tizen))
                         + '<span class="vv">' + esc(vv.version ? 'v' + vv.version : '') + '</span></div>';
                 }).join('') + '</div></div>';
             if (!sheet.all && x.variants.length > 4) h += '<span class="link f" tabindex="0" data-k="allvars" data-act="allvars">Show all ' + x.variants.length + ' variants ›</span>';
@@ -739,22 +770,26 @@
         var label = st.installed && st.known && st.variant === sheet.v ? (st.update ? 'Update to v' + v.version : 'Reinstall') : (st.installed ? 'Install this variant' : 'Install on this TV');
         var me = isSelf(x);
         if (me) h += '<div class="notice">' + SELF_HOW + '</div>';
+        else if (!fits(v)) h += '<div class="notice">' + esc(x.name + (x.variants.length > 1 ? ' (' + v.label + ')' : '') + ' asks for Tizen ' + v.tizen + ' or newer, and this TV runs Tizen ' + tvTizen + '. The TV would refuse it' + (x.variants.some(fits) ? ', so pick a build above that fits this set.' : '.')) + '</div>';
         else if (v.needsHead) h += '<div class="notice">' + esc(x.name + ' ' + v.needsHead + ', which this TV cannot do yet. Install it with Apps2Samsung on a phone or PC.') + '</div>';
         else if (!armed()) h += '<div class="notice">Not armed yet. Open this TV’s Toolbox in Apps2Samsung 3.0 or newer on your phone or PC and press Arm TV-Store once; after that every install runs here.</div>';
-        var can = !v.needsHead && !me && armed() && !(job && job.running);
+        var can = !v.needsHead && fits(v) && !me && armed() && !(job && job.running);
         h += '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="install" data-act="install"' + (can ? (x.variants.length > 1 ? '' : ' data-default') : ' disabled') + '>'
-            + esc(me ? (st.update ? 'Update' : 'Reinstall') + ' from a phone or PC' : v.needsHead ? 'Install from a phone or PC' : job && job.running ? 'Another install is running' : label) + '</button>';
+            + esc(me ? (st.update ? 'Update' : 'Reinstall') + ' from a phone or PC' : !fits(v) ? 'Needs Tizen ' + v.tizen + ' or newer' : v.needsHead ? 'Install from a phone or PC' : job && job.running ? 'Another install is running' : label) + '</button>';
         if (st.installed && x.variants[st.variant].appId) h += '<button class="btn f" data-k="open" data-act="open">Open</button>';
         // Pin this build to the top of the store (#29); for a one-build app the button pins the app.
         h += '<button class="btn f" data-k="pin" data-act="pin">' + (isPinned(x, sheet.v) ? 'Unpin' : 'Pin') + '</button>';
         if (st.installed && !st.known && x.variants.length > 1) h = h.replace('<div class="sfoot">', '<div class="notice">' + esc('Your TV has ' + x.name + ' v' + st.version + ', but every build of it uses the same package, so TV-Store cannot tell which one. Pick yours above to reinstall or update it, or pin it so TV-Store knows.') + '</div><div class="sfoot">');
-        h += '</div><div class="hint">' + (can ? 'Takes about a minute. RETURN goes back to the store.' : 'RETURN goes back to the store.') + '</div></div>';
+        // Came from a phone or PC (TV-Store never installed this package): the TV keeps that device's
+        // certificate, and an update from here may need the old copy removed first (#44).
+        var fromHead = can && st.installed && v.packageId && !installedFile.hasOwnProperty(v.packageId);
+        h += '</div><div class="hint">' + (fromHead ? esc(x.name + ' was installed from a phone or PC. TV-Store signs with the certificate that installed it when that phone or PC armed this TV; otherwise it offers to remove the old copy first. RETURN goes back to the store.') : can ? 'Takes about a minute. RETURN goes back to the store.' : 'RETURN goes back to the store.') + '</div></div>';
         return h;
     }
 
     // The file a phone or PC sent (#30), as the app the install screens show: one build, no catalog.
     function uploadApp(up) {
-        var ids = up.ids || {}, v = variant(up.name, up.name, '', ids.version, ids.appId, ids.packageId);
+        var ids = up.ids || {}, v = variant(up.name, up.name, '', ids.version, ids.appId, ids.packageId, ids.requiredVersion);
         v.upload = up.id;
         return { key: 'upload:' + up.id, name: ids.name || up.name.replace(/\.(wgt|tpk)$/i, ''), category: 'other', description: '', author: '', variants: [v], needsHead: null, adult: false, root: false };
     }
@@ -770,11 +805,13 @@
         if (b) h += '<div class="badges">' + b + '</div>';
         h += '<div class="table kv"><div class="trow"><span class="k">File</span><span class="v">' + esc(up.name) + '</span></div>'
             + '<div class="trow"><span class="k">Application</span><span class="v">' + esc((ids.appId || ids.packageId || 'unknown') + (ids.version ? ' · v' + ids.version : '')) + '</span></div>'
+            + (ids.requiredVersion ? '<div class="trow"><span class="k">Asks for</span><span class="v">' + esc('Tizen ' + ids.requiredVersion + ' or newer' + (tvTizen ? ' · this TV runs Tizen ' + tvTizen : '')) + '</span></div>' : '')
             + '<div class="trow"><span class="k">SHA-256</span><span class="v mono">' + esc(String(up.sha256).slice(0, 20)) + '…</span></div></div>';
         if (!armed()) h += '<div class="notice">Not armed yet. Open this TV’s Toolbox in Apps2Samsung on your phone or PC and press Arm TV-Store once; the file keeps waiting.</div>';
         else if (uploadTokenError) h += '<div class="notice">TV-Store could not read its upload key on this TV (' + esc(uploadTokenError) + '), so it cannot confirm uploads here. Install the file with Apps2Samsung on a phone or PC instead.</div>';
-        var can = armed() && !uploadTokenError && !(job && job.running);
-        h += '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="upinstall" data-act="upinstall"' + (can ? ' data-default' : ' disabled') + '>' + (job && job.running ? 'Another install is running' : 'Install on this TV') + '</button>'
+        else if (!fits(x.variants[0])) h += '<div class="notice">' + esc('This file asks for Tizen ' + ids.requiredVersion + ' or newer, and this TV runs Tizen ' + tvTizen + '. The TV would refuse it.') + '</div>';
+        var can = armed() && !uploadTokenError && fits(x.variants[0]) && !(job && job.running);
+        h += '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="upinstall" data-act="upinstall"' + (can ? ' data-default' : ' disabled') + '>' + (job && job.running ? 'Another install is running' : !fits(x.variants[0]) ? 'Needs Tizen ' + ids.requiredVersion + ' or newer' : 'Install on this TV') + '</button>'
             + '<button class="btn f" data-k="close" data-act="close"' + (can ? '' : ' data-default') + '>Not now</button><button class="btn danger f" data-k="updiscard" data-act="updiscard">Discard</button></div>'
             + '<div class="hint">Signed with your certificate, like every install. RETURN keeps the file waiting.</div></div>';
         return h;
@@ -796,13 +833,14 @@
             if (i === 0 && v.upload) s = ['Received from your phone or PC', 'Picking up the file'];
             if (i === 0) side = job.bytes ? (job.bytes / 1048576).toFixed(1) + ' MB' : '';
             if (i === 1) side = 'with your certificate';
-            if (i === 2) side = 'the TV is doing this part';
+            if (i === 2) side = job.replace ? 'the old copy goes first' : 'the TV is doing this part';
             return '<div class="trow' + cls + '">' + ico + '<span style="flex:1">' + (i < done ? s[0] : s[1]) + '</span><span class="v">' + side + '</span></div>';
         }).join('') + '</div>';
         if (job.error) h += '<div class="notice bad">' + esc(job.error) + '</div>';
         else h += '<div class="notice info">You can keep browsing with RETURN; the ' + (upd ? 'update' : 'install') + ' carries on in the background and the app shows up under On the TV when it is in.</div>';
         h += '<div class="sfoot"><div class="btns">';
-        if (job.error) h += '<button class="btn primary grow f" data-k="retryjob" data-act="retryjob" data-default>Try again</button><button class="btn f" data-k="close" data-act="close">Back to the store</button>';
+        if (job.error && job.code === 'CERT_MISMATCH' && !job.replace) h += '<button class="btn primary grow f" data-k="replacejob" data-act="replacejob" data-default>Remove the old copy and install again</button><button class="btn f" data-k="close" data-act="close">Keep the old copy</button>';
+        else if (job.error) h += '<button class="btn primary grow f" data-k="retryjob" data-act="retryjob" data-default>Try again</button><button class="btn f" data-k="close" data-act="close">Back to the store</button>';
         else h += '<button class="btn grow f" data-k="close" data-act="close" data-default>Keep browsing</button>';
         h += '</div><div class="hint mono">' + esc(job.line || '') + '</div></div>';
         return h;
@@ -837,9 +875,11 @@
             + opt('verboseLog', 'Verbose logging', 'Writes much more detail to the TV-Store log. Turn it on when a bug report asks for it, and off again afterwards.') + '</div>';
         if (confirmingAdult) h += '<div class="notice">These apps are meant for adults only. Turn them on only if you are 18 or older.</div>'
             + '<div class="btns" style="margin-top:16px"><button class="btn primary grow f" data-k="adultyes" data-act="adultyes" data-default>I am 18 or older</button><button class="btn f" data-k="adultno" data-act="adultno">Cancel</button></div>';
-        h += '<div class="table kv"><div class="trow"><span class="k">Signing certificate</span><span class="v">' + (armed() ? 'handed over' : 'not yet') + '</span></div>'
+        var certText = !armed() ? 'not yet' : ready.certCount > 1 ? ready.certCount + ' handed over: ' + (ready.certNames || []).join(', ') : 'handed over' + (ready.certNames && ready.certNames[0] ? ': ' + ready.certNames[0] : '');
+        h += '<div class="table kv"><div class="trow"><span class="k">Signing certificate' + (ready && ready.certCount > 1 ? 's' : '') + '</span><span class="v">' + esc(certText) + '</span></div>'
             + '<div class="trow"><span class="k">Catalog</span><span class="v">' + esc(catalogApps.length + ' apps, signature checked') + '</span></div>'
-            + '<div class="trow"><span class="k">TV-Store</span><span class="v">v' + VERSION + (ready && ready.node ? ' · Node ' + esc(ready.node) : '') + '</span></div></div>';
+            + '<div class="trow"><span class="k">TV-Store</span><span class="v">v' + VERSION + (ready && ready.node ? ' · Node ' + esc(ready.node) : '') + '</span></div>'
+            + '<div class="trow"><span class="k">This TV</span><span class="v">' + esc((device ? device + ' · ' : '') + (tvTizen ? 'Tizen ' + tvTizen : 'Tizen version not known')) + '</span></div></div>';
         if (confirmingAdult) return h;    // the question needs the room the QR codes take
         // Your own file (#30): the upload page's address, as a QR for a phone.
         if (ready && ready.ownIp) {
@@ -851,24 +891,29 @@
 
     // ---- actions ----------------------------------------------------------------------------------
     function openApp(x, vIdx) {
-        var st = state(x);
-        openSheet({ mode: 'app', app: x, v: vIdx != null ? vIdx : (st.installed ? st.variant : 0), all: false });
+        var st = state(x), v = vIdx != null ? vIdx : (st.installed ? st.variant : 0);
+        // Not a build this TV cannot run when another can (#47): the first that fits is the one to land on.
+        if (vIdx == null && !fits(x.variants[v])) for (var i = 0; i < x.variants.length; i++) if (fits(x.variants[i])) { v = i; break; }
+        openSheet({ mode: 'app', app: x, v: v, all: false });
     }
 
-    function startInstall(x, vIdx) {
+    function startInstall(x, vIdx, opts) {
         if ((job && job.running) || isSelf(x)) return;
-        var v = x.variants[vIdx], st = state(x);
-        job = { app: x, v: v, vIdx: vIdx, update: st.installed && st.known && st.variant === vIdx, running: true, finished: false, ok: false, step: 0, bytes: 0, line: '', error: null, started: Date.now() };
+        var v = x.variants[vIdx], st = state(x), replace = !!(opts && opts.replace);
+        job = { app: x, v: v, vIdx: vIdx, update: st.installed && st.known && st.variant === vIdx, replace: replace, running: true, finished: false, ok: false, step: 0, bytes: 0, line: '', error: null, code: null, started: Date.now() };
         if (sheet) { sheet = { mode: 'job' }; renderSheet(true); } else openSheet({ mode: 'job' });
         renderHeader();
         var since = job.started - 2000, me = job;
         var timer = setInterval(function () { pollLog(me, since); }, 700);
-        var req = v.upload ? { upload: v.upload, token: uploadToken } : { url: v.url, file: v.file, appId: v.appId, packageId: v.packageId };
+        // installed: whether the TV lists the package, so the service can read a bare [118, -12] from
+        // a 2018 set (no reason text) as "another certificate" (#44); replace: remove that copy first.
+        var onTv = !!(v.packageId && installed.hasOwnProperty(v.packageId));
+        var req = v.upload ? { upload: v.upload, token: uploadToken, tizen: tvTizen, installed: onTv, replace: replace } : { url: v.url, file: v.file, appId: v.appId, packageId: v.packageId, name: x.name, tizen: tvTizen, installed: onTv, replace: replace };
         xhr('POST', '/install', req, function (err, res) {
             clearInterval(timer);
             pollLog(me, since, function () {
                 me.running = false; me.finished = true; me.ended = Date.now();
-                if (err || !res.ok) { me.error = err ? err.message : res.error; renderHeader(); if (sheet && sheet.mode === 'job') renderSheet(true); queue = []; return; }
+                if (err || !res.ok) { me.error = err ? err.message : res.error; me.code = err ? null : (res.code || null); renderHeader(); if (sheet && sheet.mode === 'job') renderSheet(true); queue = []; return; }
                 me.ok = true; me.step = 4;
                 if (v.packageId) { installed[v.packageId] = v.version; claims = null; rememberVariant(v); }
                 if (v.appId) appIds[v.appId] = true;
@@ -892,7 +937,7 @@
                     me.line = l.replace(/^\S+\s+install:\s*/, '');
                     var m = /(?:downloaded|uploaded) (\d+) bytes/.exec(l);
                     if (m) { me.bytes = parseInt(m[1], 10); me.step = Math.max(me.step, 1); }
-                    if (/pushing to/.test(l)) me.step = Math.max(me.step, 2);
+                    if (/removing the old copy|pushing to/.test(l)) me.step = Math.max(me.step, 2);
                     if (/vd_appinstall reply/.test(l)) me.step = Math.max(me.step, 3);
                 });
                 if (sheet && sheet.mode === 'job' && job === me && me.running) renderSheet();
@@ -949,12 +994,14 @@
             case 'author': var by = sheet.app.author; closeSheet(function () { searchFor(by); }); return;
             case 'pin': togglePin(sheet.app, sheet.v); renderPage(); renderSheet(); focusKey('pin'); return;
             case 'retry': location.reload(); return;
+            case 'dismissself': settings.hideSelfNotice = el.getAttribute('data-v') || ''; saveSettings(); renderPage(); focusFirst(); return;
             case 'allvars': sheet.all = true; renderSheet(); focusKey('var:' + sheet.v); return;
             case 'install': if (!el.disabled) startInstall(sheet.app, sheet.v); return;
             case 'open': var s = state(sheet.app); launch(sheet.app.variants[s.variant].appId); return;
             case 'openjob': launch(job.v.appId); return;
             case 'close': closeSheet(); return;
             case 'retryjob': startInstall(job.app, job.vIdx); return;
+            case 'replacejob': startInstall(job.app, job.vIdx, { replace: true }); return;
             case 'adultyes': setSetting('showAdult', true); return;
             case 'adultno': confirmingAdult = false; renderSheet(); focusKey('opt:showAdult'); return;
             case 'tvupd': startInstall(tvSel, state(tvSel).variant); return;
@@ -1087,7 +1134,7 @@
                     xhr('POST', '/cert', certs, function (err, res) {
                         if (err && ++tries < 30) return setTimeout(post, 500);
                         if (err) return resolve({ ok: false, error: err.message });
-                        if (res && res.ok) setReady({ ok: true, certReady: true, ownIp: ready && ready.ownIp, node: ready && ready.node });
+                        if (res && res.ok) setReady({ ok: true, certReady: true, certCount: res.certCount || 1, certNames: certs && certs.certificates ? certs.certificates.map(function (c) { return c.name; }) : [], ownIp: ready && ready.ownIp, node: ready && ready.node });
                         resolve(res || { ok: false, error: 'no answer from the service' });
                     });
                 })();

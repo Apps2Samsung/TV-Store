@@ -1,6 +1,9 @@
 /* What a package calls itself (#30): the ids vd_appinstall and the screens need, read from the
  * package's own manifest. A .wgt carries config.xml at its root (<tizen:application id package/>),
  * a .tpk carries tizen-manifest.xml (<manifest package version> with <ui-application appid/>).
+ * Also the Tizen version the package asks for (#47): required_version on <tizen:application>,
+ * api-version on <manifest>. A TV below it refuses the package with install failed[118, -19]
+ * (118019 on a 2018 set, #44), so the service checks before the push.
  * The catalog gives these for its own files; an uploaded file has only itself. Pure, file-based,
  * on the zip reader the signer uses. ES5 for the TV's Node 4.4.3. */
 'use strict';
@@ -17,15 +20,29 @@ function text(xml, tag) {
     return m ? m[1].trim() : '';
 }
 
-// The ids in a manifest's XML: { kind, appId, packageId, version, name }. Missing ones are ''.
+// The ids in a manifest's XML: { kind, appId, packageId, version, name, requiredVersion }. Missing ones are ''.
 function parse(kind, xml) {
     if (kind === 'wgt') {
         var pkg = attr(xml, 'tizen:application', 'package');
-        return { kind: kind, appId: attr(xml, 'tizen:application', 'id'), packageId: pkg, version: attr(xml, 'widget', 'version'), name: text(xml, 'name') };
+        return { kind: kind, appId: attr(xml, 'tizen:application', 'id'), packageId: pkg, version: attr(xml, 'widget', 'version'), name: text(xml, 'name'),
+                 requiredVersion: attr(xml, 'tizen:application', 'required_version') };
     }
     var p = attr(xml, 'manifest', 'package');
     var appId = attr(xml, 'ui-application', 'appid') || attr(xml, 'service-application', 'appid') || attr(xml, 'widget-application', 'appid') || attr(xml, 'watch-application', 'appid');
-    return { kind: kind, appId: appId, packageId: p, version: attr(xml, 'manifest', 'version'), name: text(xml, 'label') };
+    return { kind: kind, appId: appId, packageId: p, version: attr(xml, 'manifest', 'version'), name: text(xml, 'label'),
+             requiredVersion: attr(xml, 'manifest', 'api-version') };
+}
+
+// True when a package that asks for Tizen `required` ("6.0") cannot run on a TV at `tv` ("4.0").
+// Lenient like the heads: an unknown value on either side is no refusal, the TV has the last word.
+function needsNewer(required, tv) {
+    var x = String(required || '').match(/\d+/g), y = String(tv || '').match(/\d+/g);
+    if (!x || !y) return false;
+    for (var i = 0; i < Math.max(x.length, y.length); i++) {
+        var p = parseInt(x[i] || '0', 10), q = parseInt(y[i] || '0', 10);
+        if (p !== q) return p > q;
+    }
+    return false;
 }
 
 // cb(err, ids) for the package at `file`; err when it is not a zip or has no manifest at its root.
@@ -51,4 +68,4 @@ function read(file, cb) {
     });
 }
 
-module.exports = { read: read, parse: parse };
+module.exports = { read: read, parse: parse, needsNewer: needsNewer };

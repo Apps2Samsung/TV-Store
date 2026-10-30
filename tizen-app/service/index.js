@@ -19,8 +19,12 @@ var zip = require('./zip.js');
 var catalogTrust = require('./catalog.js');
 var CATALOG_KEY = require('./catalog-key.js');
 var manifest = require('./manifest.js');
+var refusals = require('./refusal.js');
+var certs = require('./certs.js');
 
 var PORT = 8077;
+// sdbd's port; a test points the service at a fake sdbd (test/install.test.js).
+var SDB_PORT = parseInt(process.env.A2S_SDB_PORT || '', 10) || 26101;
 // Signed by the Apps2Samsung catalog workflow; see catalog.js for why the content is checked
 // instead of the connection.
 var CATALOG_URL = 'https://apps2samsung.com/catalog/resolved.json.signed';
@@ -147,7 +151,10 @@ function installUpload(b, cb) {
     var up = UPLOAD, outFile = path.join(DATA_DIR, 'job-' + Date.now() + '.signed.wgt');
     UPLOAD_BUSY = true;
     log('install: uploaded ' + up.size + ' bytes, ' + up.name + ' from ' + up.from + ', SHA-256 ' + up.sha256 + ', confirmed on the TV; signing');
-    signAndInstall({ appId: up.ids.appId, packageId: up.ids.packageId, file: up.name }, up.name.replace(/[^A-Za-z0-9._-]/g, '_'), UPLOAD_FILE, outFile, function (err, r) {
+    var entry = { appId: up.ids.appId, packageId: up.ids.packageId, file: up.name, name: up.ids.name, requiredVersion: up.ids.requiredVersion, tizen: b.tizen, installed: !!b.installed, replace: !!b.replace };
+    var gate = tizenGate(entry);
+    if (gate) { UPLOAD_BUSY = false; return cb(gate); }
+    signAndInstall(entry, up.name.replace(/[^A-Za-z0-9._-]/g, '_'), UPLOAD_FILE, outFile, function (err, r) {
         UPLOAD_BUSY = false;
         unlink(outFile);
         // The file is gone once signed (signAndInstall drops it); a failure before that (no
@@ -273,19 +280,55 @@ function install(entry, cb) {
             if (err) return clean(err);
             if (got.sha256 !== want) { log('install: hash mismatch, got ' + got.sha256 + ' want ' + want); return clean(coded('HASH_MISMATCH', 'the download does not match the catalog (SHA-256 differs); not installing it')); }
             log('install: downloaded ' + got.size + ' bytes, SHA-256 matches the catalog; signing');
-            signAndInstall(entry, remoteName, inFile, outFile, clean);
+            // The Tizen version the package asks for, against the one the page reports for this TV
+            // (#47): a package the TV would refuse with [118, -19] is turned away before the push.
+            manifest.read(inFile, function (err, ids) {
+                if (err) logv('install: could not read the manifest (' + err.message + '); the TV decides');
+                else entry.requiredVersion = ids.requiredVersion;
+                var gate = tizenGate(entry);
+                if (gate) return clean(gate);
+                signAndInstall(entry, remoteName, inFile, outFile, clean);
+            });
         });
     });
 }
 
 function coded(code, message) { var e = new Error(message); e.code = code; return e; }
 
+// The page sends the TV's platform version with every install (entry.tizen, "4.0"); the package's
+// own manifest says what it asks for (entry.requiredVersion). A mismatch is refused here with the
+// reason, instead of by the TV with a bare [118, -19] (#44, #47). Either side unknown: no gate.
+function tizenGate(entry) {
+    var tv = refusals.tizenVersionOf(entry), req = entry.requiredVersion || '';
+    if (!manifest.needsNewer(req, tv)) return null;
+    log('install: ' + (entry.file || 'the package') + ' asks for Tizen ' + req + ', this TV runs Tizen ' + tv + '; not pushing it');
+    return coded('NEEDS_NEWER_TIZEN', 'This app asks for Tizen ' + req + ' or newer, and this TV runs Tizen ' + tv + '. The TV would refuse it. If the catalog has a build for older sets, pick that one.');
+}
+
+// An app installed from a phone or PC carries that device's author certificate, and the TV only
+// updates it with the same one (#44). When the page asks for a replace, the old copy goes first
+// (0 vd_appuninstall, the verb the heads use), on its own connection; a refusal is logged and the
+// install goes ahead anyway, so the TV's own answer is what the user sees.
+function removeOld(entry, cb) {
+    var ip = ownIp();
+    if (!entry.replace || !entry.packageId || !ip) return cb();
+    log('install: removing the old copy of ' + entry.packageId + ' first (installed with another certificate)');
+    connectSdb([ip, '127.0.0.1'], function (err, c) {
+        if (err) { log('install: could not remove the old copy: ' + err.message); return cb(); }
+        c.shell('0 vd_appuninstall ' + entry.packageId, function (err, out) {
+            c.end();
+            log('install: vd_appuninstall reply: ' + (err ? err.message : out.replace(/\s+/g, ' ').slice(0, 200)));
+            cb();
+        });
+    });
+}
+
 // sdbd on this TV, at the first address that completes the handshake. The LAN IP is what Developer
 // Mode's Host PC IP lets in; loopback is a fallback for a Host PC IP of 127.0.0.1.
 // When none gets in, the error says what to change on the TV instead of the socket error (#26).
 function connectSdb(hosts, cb, i, seen) {
     i = i || 0; seen = seen || [];
-    var c = new sdb.SdbClient(hosts[i]);
+    var c = new sdb.SdbClient(hosts[i], SDB_PORT);
     c.trace = VERBOSE ? function (m) { logv('sdb ' + hosts[i] + ': ' + m); } : null;
     c.connect(function (err) {
         if (!err) { log('install: sdb connected to ' + hosts[i] + ', first frame ' + c.firstFrame); return cb(null, c); }
@@ -308,40 +351,62 @@ function sdbAdvice(err, seen, ip) {
     return err;
 }
 
+// Signs with the profile the package took last time (else the head's first choice), pushes and
+// installs. A TV only updates an app with the author certificate it was installed with (#44): when
+// it refuses the certificate ("same id and different certificate", or any other [118, -12]: a
+// distributor that does not cover this set, a chain the TV will not take), the next profile on
+// this TV is tried, from the same input file, until one is taken or none is left. The answer is
+// then the mismatch when any attempt was one, else the last refusal. inFile is gone once an
+// attempt was signed; a failure before that (no certificate yet) keeps it, so an upload stays waiting.
 function signAndInstall(entry, remoteName, inFile, outFile, cb) {
-    var started = Date.now();
-    signer.signFile(inFile, outFile, loadCerts(), function (err) {
-        if (err) { log('install: ' + err.message); return cb(err); }        // NO_CERT surfaces here
-        try { fs.unlinkSync(inFile); } catch (e) {}
-        var size = fs.statSync(outFile).size;
-        log('install: signed in ' + Math.round((Date.now() - started) / 1000) + ' s, ' + size + ' bytes');
-        var ip = ownIp();
-        if (!ip) return cb(new Error('could not determine this TV’s own IP'));
-        connectSdb([ip, '127.0.0.1'], function (err, c) {
-            if (err) return cb(err);
-            var remote = STAGING + '/' + remoteName, fd;
-            try { fd = fs.openSync(outFile, 'r'); } catch (e) { c.end(); return cb(e); }
-            log('install: pushing to ' + remote);
-            var pushStarted = Date.now();
-            c.push(remote, { size: size, read: function (off, len) { return zip.readAt(fd, off, len); } }, function (err) {
-                try { fs.closeSync(fd); } catch (e) {}
-                if (err) { c.end(); return cb(err); }
-                logv('timing: push took ' + (Date.now() - pushStarted) + ' ms');
-                var installStarted = Date.now();
-                c.shell('0 vd_appinstall ' + (entry.appId || entry.packageId || '') + ' ' + remote, function (err, out) {
-                    c.end();
-                    if (err) return cb(err);
-                    logv('timing: vd_appinstall took ' + (Date.now() - installStarted) + ' ms');
-                    log('install: vd_appinstall reply: ' + out.replace(/\s+/g, ' ').slice(0, 200));
-                    // sdbd answers the shell call either way; the installer's own words say whether it
-                    // worked ("install failed[118, -12], reason: ..." on a refused package).
-                    var failed = /install failed\[([^\]]*)\](?:,\s*reason:\s*([^\n]*))?/i.exec(out);
-                    if (failed) return cb(coded('INSTALL_FAILED', 'The TV refused the package [' + failed[1] + ']' + (failed[2] ? ': ' + failed[2].trim() : '')));
-                    cb(null, { reply: out });
+    var tries = certs.order(loadCerts(), entry.packageId ? certByPackage()[entry.packageId] : null), tried = [], i = 0, mismatch = null;
+    if (!tries.length) { var none = coded('NO_CERT', 'No signing certificate available on this TV yet (#844 cert hand-over).'); log('install: ' + none.message); return cb(none); }
+    var ip = ownIp();
+    if (!ip) return cb(new Error('could not determine this TV’s own IP'));
+    function finish(err, r) { try { fs.unlinkSync(inFile); } catch (e) {} try { fs.unlinkSync(outFile); } catch (e) {} cb(err, r); }
+    removeOld(entry, function () { (function attempt() {
+        var cert = tries[i++], started = Date.now();
+        tried.push(cert);
+        signer.signFile(inFile, outFile, cert, function (err) {
+            if (err) { log('install: ' + err.message); return tried.length > 1 ? finish(err) : cb(err); }
+            var size = fs.statSync(outFile).size;
+            log('install: signed with ' + certLabel(cert) + ' in ' + Math.round((Date.now() - started) / 1000) + ' s, ' + size + ' bytes');
+            connectSdb([ip, '127.0.0.1'], function (err, c) {
+                if (err) return finish(err);
+                var remote = STAGING + '/' + remoteName, fd;
+                try { fd = fs.openSync(outFile, 'r'); } catch (e) { c.end(); return finish(e); }
+                log('install: pushing to ' + remote);
+                var pushStarted = Date.now();
+                c.push(remote, { size: size, read: function (off, len) { return zip.readAt(fd, off, len); } }, function (err) {
+                    try { fs.closeSync(fd); } catch (e) {}
+                    if (err) { c.end(); return finish(err); }
+                    logv('timing: push took ' + (Date.now() - pushStarted) + ' ms');
+                    var installStarted = Date.now();
+                    c.shell('0 vd_appinstall ' + (entry.appId || entry.packageId || '') + ' ' + remote, function (err, out) {
+                        c.end();
+                        if (err) return finish(err);
+                        logv('timing: vd_appinstall took ' + (Date.now() - installStarted) + ' ms');
+                        log('install: vd_appinstall reply: ' + out.replace(/\s+/g, ' ').slice(0, 200));
+                        // sdbd answers the shell call either way; the installer's own words say whether it
+                        // worked ("install failed[118, -12], reason: ..." on a refused package).
+                        var failed = /install failed\[([^\]]*)\](?:,\s*reason:\s*([^\n]*))?/i.exec(out);
+                        if (failed) {
+                            var r = refusals.refusal(failed[1], failed[2], entry);
+                            if (r.code === 'CERT_MISMATCH') mismatch = r;
+                            if ((r.code === 'CERT_MISMATCH' || r.code === 'CERT_REJECTED') && i < tries.length) {
+                                log('install: the TV refused the copy signed with ' + certLabel(cert) + (r.code === 'CERT_MISMATCH' ? ' (another certificate installed it)' : ' (' + (failed[2] || failed[1]).trim() + ')') + '; trying ' + certLabel(tries[i]));
+                                return attempt();
+                            }
+                            if (mismatch) r = { code: 'CERT_MISMATCH', message: mismatch.message + ' None of the ' + tried.length + ' certificate' + (tried.length === 1 ? '' : 's') + ' on this TV (' + tried.map(certLabel).join(', ') + ') is the one it was installed with: arm this TV from the phone or PC that installed it, or let TV-Store remove the old copy.' };
+                            return finish(coded(r.code, r.message));
+                        }
+                        rememberCert(entry.packageId, cert.id);
+                        finish(null, { reply: out, certificate: cert.name });
+                    });
                 });
             });
         });
-    });
+    })(); });
 }
 
 // The signed catalog, fetched and verified, cached for 10 minutes (the workflow publishes every
@@ -364,18 +429,35 @@ function withCatalog(cb, fresh) {
     });
 }
 
-// The signing certificate a head hands over once (see #844): author/distributor key+cert as PEM
-// (not a .p12: Node has no PKCS#12 parser). Kept in memory and persisted best-effort.
+// The signing certificates a head hands over (see #844): author/distributor key+cert as PEM (not
+// a .p12: Node has no PKCS#12 parser), every profile the head holds since #44 (certs.js has the
+// shape). Kept in memory and persisted best-effort.
 function loadCerts() {
     if (CERTS) return CERTS;
     for (var i = 0; i < CERT_DIRS.length; i++) {
-        var f = path.join(CERT_DIRS[i], CERT_NAME);
-        try { CERTS = JSON.parse(fs.readFileSync(f, 'utf8')); CERT_FILE = f; } catch (e) { continue; }
-        // Found in a worse place (0.3.3 kept it in $HOME or /tmp): move it up where it persists.
-        if (i > 0) saveCerts(CERTS);
+        var f = path.join(CERT_DIRS[i], CERT_NAME), raw;
+        try { raw = JSON.parse(fs.readFileSync(f, 'utf8')); } catch (e) { continue; }
+        var store = certs.fromStored(raw);
+        if (!store) continue;
+        CERTS = store; CERT_FILE = f;
+        // Found in a worse place (0.3.3 kept it in $HOME or /tmp), or in the one-profile shape: write it back.
+        if (i > 0 || !Array.isArray(raw.certificates)) saveCerts(CERTS);
         return CERTS;
     }
     return null;
+}
+// Which profile each package was last signed with here, so an update takes the same one first.
+var CERT_BY_PKG = null, CERT_BY_PKG_NAME = '.a2s-tvstore-cert-by-package.json';
+function certByPackage() {
+    if (CERT_BY_PKG) return CERT_BY_PKG;
+    try { CERT_BY_PKG = JSON.parse(fs.readFileSync(path.join(DATA_DIR, CERT_BY_PKG_NAME), 'utf8')) || {}; } catch (e) { CERT_BY_PKG = {}; }
+    return CERT_BY_PKG;
+}
+function rememberCert(packageId, certId) {
+    if (!packageId || !certId || !DATA_DIR) return;
+    var map = certByPackage(); if (map[packageId] === certId) return;
+    map[packageId] = certId;
+    try { fs.writeFileSync(path.join(DATA_DIR, CERT_BY_PKG_NAME), JSON.stringify(map)); } catch (e) {}
 }
 function saveCerts(b) {
     CERTS = b; CERT_ERROR = null;
@@ -385,7 +467,8 @@ function saveCerts(b) {
         catch (e) { CERT_ERROR = f + ': ' + e.message; log('cert: cannot write ' + CERT_ERROR); }
     }
 }
-function haveCerts() { var c = loadCerts(); return !!(c && c.authorKeyPem && c.distributorKeyPem); }
+function haveCerts() { var c = loadCerts(); return !!(c && c.certificates && c.certificates.length); }
+function certLabel(c) { return '\u2018' + (c.name || c.id.slice(0, 12)) + '\u2019'; }
 
 http.createServer(function (req, res) {
     if (req.method === 'OPTIONS') { cors(res, 204, 'text/plain'); return res.end(); }
@@ -402,6 +485,7 @@ http.createServer(function (req, res) {
     // certificate or start an install.
     if (!fromThisTv(req)) { cors(res, 403, 'text/plain'); return res.end('only this TV may use TV-Store'); }
     if (route === '/ping') return json(res, 200, { ok: true, service: 'tv-store', ownIp: ownIp(), logUrl: 'http://' + ownIp() + ':' + PORT + '/log.txt', signerReady: signer.ready, certReady: haveCerts(),
+        certCount: haveCerts() ? loadCerts().certificates.length : 0, certNames: certs.names(loadCerts()),
         certFile: CERT_FILE, certError: CERT_ERROR, node: process.version, verbose: VERBOSE });
     if (route === '/settings' && req.method === 'POST') return body(req, function (err, b) {
         if (err || !b || typeof b.verbose !== 'boolean') return json(res, 400, { ok: false, error: 'need { verbose: true|false }' });
@@ -418,12 +502,15 @@ http.createServer(function (req, res) {
     });
     if (route === '/catalog') return withCatalog(function (err, cat) { if (err) { log('catalog: failed: ' + err.message); return json(res, 502, { ok: false, error: err.message }); } cors(res, 200, 'application/json'); res.end(cat.payload); });
     if (route === '/cert' && req.method === 'POST') return body(req, function (err, b) {
-        if (err || !b || !b.authorKeyPem || !b.authorCertPem || !b.distributorKeyPem || !b.distributorCertPem) {
-            log('cert: refused a handover that is not { authorKeyPem, authorCertPem, distributorKeyPem, distributorCertPem }');
-            return json(res, 400, { ok: false, error: 'need { authorKeyPem, authorCertPem, distributorKeyPem, distributorCertPem }' });
+        var incoming = err ? [] : certs.normalize(b);
+        if (!incoming.length) {
+            log('cert: refused a handover that is not { authorKeyPem, authorCertPem, distributorKeyPem, distributorCertPem } or { certificates: [...] }');
+            return json(res, 400, { ok: false, error: 'need { authorKeyPem, authorCertPem, distributorKeyPem, distributorCertPem } or { certificates: [ ... ] }' });
         }
-        log('cert: received signing certificate from a head'); saveCerts(b);
-        json(res, 200, { ok: true, certFile: CERT_FILE, certError: CERT_FILE ? null : CERT_ERROR });
+        var store = certs.merge(loadCerts(), incoming);
+        log('cert: received ' + incoming.length + ' signing certificate(s) from a head (' + incoming.map(certLabel).join(', ') + '); ' + store.certificates.length + ' on this TV now');
+        saveCerts(store);
+        json(res, 200, { ok: true, certFile: CERT_FILE, certError: CERT_FILE ? null : CERT_ERROR, certCount: store.certificates.length });
     });
     if (route === '/install' && req.method === 'POST') return body(req, function (err, b) {
         if (err || !b || !(b.url || b.upload)) return json(res, 400, { ok: false, error: 'need { url, file, appId } or { upload, token }' });
