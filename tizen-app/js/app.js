@@ -135,12 +135,15 @@
     // ---- settings, remembered on the TV -------------------------------------------------------------
     var SETTINGS_KEY = 'a2s.store.settings';
     var settings = (function () {
-        var s = { showAdult: false, showNeedsHead: true, verboseLog: false };
+        // hideSelfNotice: the TV-Store version whose "vX is out" banner was dismissed (#43); the
+        // banner comes back for the next release.
+        var s = { showAdult: false, showNeedsHead: true, verboseLog: false, hideSelfNotice: '' };
         try {
             var saved = JSON.parse(window.localStorage.getItem(SETTINGS_KEY) || '{}');
             if (typeof saved.showAdult === 'boolean') s.showAdult = saved.showAdult;
             if (typeof saved.showNeedsHead === 'boolean') s.showNeedsHead = saved.showNeedsHead;
             if (typeof saved.verboseLog === 'boolean') s.verboseLog = saved.verboseLog;
+            if (typeof saved.hideSelfNotice === 'string') s.hideSelfNotice = saved.hideSelfNotice;
         } catch (e) {}
         return s;
     })();
@@ -612,17 +615,20 @@
 
         // TV-Store is in its own catalog: say so when a newer one is there (like Moonfin's update
         // popup, but from the signed catalog instead of the GitHub API). Not installable from here
-        // (#41): the installer would stop the service doing it.
-        var me = self(), ms = me ? state(me) : null;
-        if (ms && ms.update) h += '<div class="notice" style="margin:0 0 26px">TV-Store v' + esc(ms.latest) + ' is out (this is v' + esc(ms.version) + '). ' + SELF_HOW + '</div>';
+        // (#41): the installer would stop the service doing it. Nothing to do on the TV, so the banner
+        // has a Got it that hides it for that version (#43); the On the TV row and the sheet keep
+        // saying it. It comes back for the next release.
+        var me = self(), ms = me ? state(me) : null, selfLatest = '', selfText = '';
+        if (ms && ms.update) { selfLatest = ms.latest; selfText = 'TV-Store v' + ms.latest + ' is out (this is v' + ms.version + '). ' + SELF_HOW; }
         else if (me && selfRenamed()) {
             // Installed under another package id: the platform lists this copy under that id, so
             // state() cannot see it. Compare the catalog's version with our own and send the user to
             // the head that renamed it rather than install a second TV-Store from here.
             var own = (selfInfo() || {}).version || '', latest = me.variants[0] ? me.variants[0].version : '';
-            if (own && latest && newer(latest, own)) h += '<div class="notice" style="margin:0 0 26px">TV-Store v' + esc(latest) + ' is out (this is v' + esc(own)
-                + '). This copy was installed under another package id by Apps2Samsung, so update it from Apps2Samsung (On the TV, Update) rather than from here.</div>';
+            if (own && latest && newer(latest, own)) { selfLatest = latest; selfText = 'TV-Store v' + latest + ' is out (this is v' + own + '). This copy was installed under another package id by Apps2Samsung, so update it from Apps2Samsung (On the TV, Update) rather than from here.'; }
         }
+        if (selfLatest && settings.hideSelfNotice !== selfLatest)
+            h += '<div class="notice row" style="margin:0 0 26px"><span>' + esc(selfText) + '</span><button class="btn f" data-k="dismissself" data-act="dismissself" data-v="' + esc(selfLatest) + '">Got it</button></div>';
 
         if (!hover || apps.indexOf(hover) < 0) hover = apps[0] || null;
         if (!query) {
@@ -988,6 +994,7 @@
             case 'author': var by = sheet.app.author; closeSheet(function () { searchFor(by); }); return;
             case 'pin': togglePin(sheet.app, sheet.v); renderPage(); renderSheet(); focusKey('pin'); return;
             case 'retry': location.reload(); return;
+            case 'dismissself': settings.hideSelfNotice = el.getAttribute('data-v') || ''; saveSettings(); renderPage(); focusFirst(); return;
             case 'allvars': sheet.all = true; renderSheet(); focusKey('var:' + sheet.v); return;
             case 'install': if (!el.disabled) startInstall(sheet.app, sheet.v); return;
             case 'open': var s = state(sheet.app); launch(sheet.app.variants[s.variant].appId); return;
