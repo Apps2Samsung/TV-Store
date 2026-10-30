@@ -37,7 +37,7 @@ jobs:
         run: node test/refusal.test.js
       - name: Signing profiles handed over (#44)
         run: node test/certs.test.js
-      - name: Install against a fake sdbd: retry with the next profile, replace
+      - name: Install against a fake sdbd (retry with the next profile, replace)
         run: node test/install.test.js
           node test/certs.test.js
           node test/install.test.js
