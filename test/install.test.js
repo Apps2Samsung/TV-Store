@@ -22,6 +22,8 @@ var wgt = zip.write([{ name: 'index.html', data: Buf.from('<html></html>') },
 // What the fake sdbd answers: a script of replies per vd_appinstall, and a record of every shell call.
 var MISMATCH = 'install A2SProbe01.Probe package_path /x was_install_app return WAS_TRUE app_id[A2SProbe01.Probe] install start installing[7] app_id[A2SProbe01.Probe] install failed[118, -12], reason: Check certificate error : :Package with the same id and different certificate has been already installed.:<-12>\n';
 var OK = 'install A2SProbe01.Probe package_path /x was_install_app return WAS_TRUE installing[100] app_id[A2SProbe01.Probe] install completed\n';
+// A profile whose distributor does not cover this set (a PC's bundled one on a 2024 TV): a certificate refusal with another reason.
+var CHAIN = 'install A2SProbe01.Probe package_path /x was_install_app return WAS_TRUE app_id[A2SProbe01.Probe] install failed[118, -12], reason: Check certificate error : :Invalid certificate chain.:<-3>\n';
 var replies = [], shells = [];
 var child = null, err = '', handle = null;
 var WD = setTimeout(function () { stop(); fail('watchdog (40 s)' + (err ? '\n' + err : '')); }, 40000);
@@ -90,6 +92,22 @@ function run() {
                         installUpload({}, function (j, calls) {
                             if (j.ok || j.code !== 'CERT_MISMATCH' || j.error.indexOf('None of the 2 certificates') < 0 || j.error.indexOf('Phone - Public') < 0) fail('all refused: ' + JSON.stringify(j));
                             if (calls.some(function (c) { return c.indexOf('vd_appuninstall') >= 0; })) fail('nothing may be removed without replace');
+                            // 3b. A profile the TV rejects for another reason (its distributor does not cover this set) is
+                            // stepped over too; a mismatch seen on the way is what the answer says when all fail.
+                            replies = [CHAIN, OK];
+                            installUpload({}, function (j, calls) {
+                                if (!j.ok || j.result.certificate !== 'PC - Public') fail('a chain refusal must move to the next profile: ' + JSON.stringify(j));
+                                replies = [MISMATCH, CHAIN];
+                                installUpload({}, function (j) {
+                                    if (j.ok || j.code !== 'CERT_MISMATCH' || j.error.indexOf('None of the 2 certificates') < 0) fail('mismatch then chain must answer the mismatch: ' + JSON.stringify(j));
+                                    replies = [CHAIN, CHAIN];
+                                    installUpload({}, function (j) {
+                                        if (j.ok || j.code !== 'CERT_REJECTED') fail('only chain refusals must answer the rejection: ' + JSON.stringify(j));
+                                        step4();
+                                    });
+                                });
+                            });
+                            function step4() {
                             // 4. replace: the old copy goes first, then the install.
                             replies = [OK];
                             installUpload({ replace: true }, function (j, calls) {
@@ -102,6 +120,7 @@ function run() {
                                 console.log('PASS: a refused signature is retried with the next profile, the one taken is remembered, all refused is CERT_MISMATCH, replace uninstalls first');
                                 process.exit(0);
                             });
+                            }
                         });
                     });
                 });

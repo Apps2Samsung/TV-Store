@@ -353,11 +353,13 @@ function sdbAdvice(err, seen, ip) {
 
 // Signs with the profile the package took last time (else the head's first choice), pushes and
 // installs. A TV only updates an app with the author certificate it was installed with (#44): when
-// it answers "same id and different certificate", the next profile on this TV is tried, from the
-// same input file, until one is taken or none is left. inFile is gone once an attempt was signed;
-// a failure before that (no certificate yet) keeps it, so an upload stays waiting.
+// it refuses the certificate ("same id and different certificate", or any other [118, -12]: a
+// distributor that does not cover this set, a chain the TV will not take), the next profile on
+// this TV is tried, from the same input file, until one is taken or none is left. The answer is
+// then the mismatch when any attempt was one, else the last refusal. inFile is gone once an
+// attempt was signed; a failure before that (no certificate yet) keeps it, so an upload stays waiting.
 function signAndInstall(entry, remoteName, inFile, outFile, cb) {
-    var tries = certs.order(loadCerts(), entry.packageId ? certByPackage()[entry.packageId] : null), tried = [], i = 0;
+    var tries = certs.order(loadCerts(), entry.packageId ? certByPackage()[entry.packageId] : null), tried = [], i = 0, mismatch = null;
     if (!tries.length) { var none = coded('NO_CERT', 'No signing certificate available on this TV yet (#844 cert hand-over).'); log('install: ' + none.message); return cb(none); }
     var ip = ownIp();
     if (!ip) return cb(new Error('could not determine this TV’s own IP'));
@@ -390,11 +392,12 @@ function signAndInstall(entry, remoteName, inFile, outFile, cb) {
                         var failed = /install failed\[([^\]]*)\](?:,\s*reason:\s*([^\n]*))?/i.exec(out);
                         if (failed) {
                             var r = refusals.refusal(failed[1], failed[2], entry);
-                            if (r.code === 'CERT_MISMATCH' && i < tries.length) {
-                                log('install: the TV refused the copy signed with ' + certLabel(cert) + ' (another certificate installed it); trying ' + certLabel(tries[i]));
+                            if (r.code === 'CERT_MISMATCH') mismatch = r;
+                            if ((r.code === 'CERT_MISMATCH' || r.code === 'CERT_REJECTED') && i < tries.length) {
+                                log('install: the TV refused the copy signed with ' + certLabel(cert) + (r.code === 'CERT_MISMATCH' ? ' (another certificate installed it)' : ' (' + (failed[2] || failed[1]).trim() + ')') + '; trying ' + certLabel(tries[i]));
                                 return attempt();
                             }
-                            if (r.code === 'CERT_MISMATCH') r.message += ' None of the ' + tried.length + ' certificate' + (tried.length === 1 ? '' : 's') + ' on this TV (' + tried.map(certLabel).join(', ') + ') is the one it was installed with: arm this TV from the phone or PC that installed it, or let TV-Store remove the old copy.';
+                            if (mismatch) r = { code: 'CERT_MISMATCH', message: mismatch.message + ' None of the ' + tried.length + ' certificate' + (tried.length === 1 ? '' : 's') + ' on this TV (' + tried.map(certLabel).join(', ') + ') is the one it was installed with: arm this TV from the phone or PC that installed it, or let TV-Store remove the old copy.' };
                             return finish(coded(r.code, r.message));
                         }
                         rememberCert(entry.packageId, cert.id);
