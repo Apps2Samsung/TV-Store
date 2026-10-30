@@ -50,7 +50,7 @@
     // TV's current IP and loopback too, and keeps whichever answers.
     var BASE = 'http://127.0.0.1:8077';
     var KOFI = 'https://ko-fi.com/patrickst';
-    var VERSION = '0.3.12';
+    var VERSION = '0.3.13';
     var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13, RETURN: 10009, ESC: 27, BACK: 8 };
 
     // What the manifest providers are called; resolved.json carries only their ids.
