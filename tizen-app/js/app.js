@@ -23,6 +23,14 @@
  * does the install screen offer to remove the old copy and install again (0 vd_appuninstall first);
  * the app's settings on the TV go with it, so it is a choice.
  *
+ * Public or Partner (#50): a phone or PC holds a Public profile and, when the user made one, a
+ * Partner one, and arming hands both over. The service tells which is which (the Samsung CA that
+ * issued the distributor certificate). An app the catalog marks cert_level: partner (SushyDev's
+ * YouTube) carries a "Partner certificate" badge and is signed Partner by itself; when the TV
+ * holds no Partner profile its Install button is off and the sheet says how to get one. When the
+ * TV holds both, the sheet has "Sign with": Automatic (the default), Public or Partner, remembered
+ * per package, for the apps the catalog does not know about. A file sent in by hand gets the same.
+ *
  * Tizen version (#47): the catalog says what Tizen each file asks for (required_version). A build
  * this TV is too old for carries a "Needs Tizen X" badge, its card is dimmed, and its Install button
  * is off: the TV would refuse it with install failed[118, -19] (#44). The service checks the same
@@ -86,6 +94,34 @@
         installedFile[v.packageId] = v.file;
         try { window.localStorage.setItem(VARIANTS_KEY, JSON.stringify(installedFile)); } catch (e) {}
     }
+    // Sign with (#50): packageId -> 'public' | 'partner', only when chosen by hand; Automatic is no entry.
+    var CERT_CHOICE_KEY = 'a2s.tvstore.certchoice';
+    var certChoice = (function () { try { return JSON.parse(window.localStorage.getItem(CERT_CHOICE_KEY)) || {}; } catch (e) { return {}; } })();
+    function chooseCert(v, level) {
+        var k = v.packageId || v.file; if (!k) return;
+        if (level === 'public' || level === 'partner') certChoice[k] = level; else delete certChoice[k];
+        try { window.localStorage.setItem(CERT_CHOICE_KEY, JSON.stringify(certChoice)); } catch (e) {}
+    }
+    function certChoiceOf(v) { var c = certChoice[v.packageId || v.file]; return c === 'public' || c === 'partner' ? c : ''; }
+    // The levels this TV holds, from the service: { public, partner }. A chain from elsewhere counts as public.
+    function levelsHeld() {
+        var out = { public: false, partner: false };
+        ((ready && ready.certificates) || []).forEach(function (c) { if (c.level === 'partner') out.partner = true; else out.public = true; });
+        if (!ready || !ready.certificates) out.public = armed();   // an older service: one level, taken as public
+        return out;
+    }
+    // What an install of v signs with, as the sheet says it: the choice, else what the catalog or
+    // the TV decides; with `auto` what Automatic would do, the choice set aside.
+    function signPlan(v, auto) {
+        var held = levelsHeld(), choice = auto ? '' : certChoiceOf(v);
+        if (choice) return { level: choice, by: 'chosen', missing: !held[choice] };
+        if (v.certLevel === 'partner') return { level: 'partner', by: 'catalog', missing: !held.partner };
+        if (v.manifestPartner && held.partner) return { level: 'partner', by: 'manifest', missing: false };
+        return { level: held.public ? 'public' : 'partner', by: 'auto', missing: false };
+    }
+    function levelName(l) { return l === 'partner' ? 'Partner' : 'Public'; }
+    var PARTNER_HOW = 'In Apps2Samsung on your phone or PC, set the signing certificate to Partner in Settings and install any app once, so it creates one; then press Arm TV-Store again. Both certificates come along.';
+
     // Pinned builds (#29): [{ key, file }], one entry per build, in the order they were pinned. The
     // file names the build, so a catalog that reorders variants keeps the pin on the same one.
     var PINS_KEY = 'a2s.tvstore.pins';
@@ -310,8 +346,9 @@
     }
 
     // ---- the catalog ------------------------------------------------------------------------------
-    function variant(label, file, url, version, appId, packageId, tizen) {
-        return { label: label || file.replace(/\.(wgt|tpk)$/i, ''), file: file, url: url, version: version || '', appId: appId || '', packageId: packageId || '', tizen: tizen || '' };
+    function variant(label, file, url, version, appId, packageId, tizen, certLevel) {
+        return { label: label || file.replace(/\.(wgt|tpk)$/i, ''), file: file, url: url, version: version || '', appId: appId || '', packageId: packageId || '', tizen: tizen || '',
+                 certLevel: String(certLevel || '').toLowerCase() === 'partner' ? 'partner' : '' };
     }
     // Whether this TV can run a build that asks for Tizen v.tizen ("6.0"): yes when either side is
     // unknown; the service checks the package itself and the TV has the last word (#47).
@@ -331,7 +368,7 @@
         function app(key, name, category, description, author) {
             if (!byKey[key]) {
                 byKey[key] = { key: key, name: name, category: CATEGORY_NAMES[category] ? category : 'other', description: description || '', author: author || '',
-                               variants: [], needsHead: null, adult: false, root: false };
+                               variants: [], needsHead: null, adult: false, root: false, partner: false };
                 out.push(byKey[key]);
             }
             return byKey[key];
@@ -346,9 +383,10 @@
                 // The community bundle: the catalog is the truth, the release gives the download.
                 p.catalog.apps.forEach(function (e) {
                     var a = byFile[e.file]; if (!a) return;
-                    var v = variant(e.variant, e.file, a.browser_download_url, e.version || a.package_version, e.app_id || a.app_id, e.package_id || a.package_id, e.required_version || a.required_version);
+                    var v = variant(e.variant, e.file, a.browser_download_url, e.version || a.package_version, e.app_id || a.app_id, e.package_id || a.package_id, e.required_version || a.required_version, e.cert_level || p.cert_level);
                     var x = app('c:' + (e.group || e.name), e.group || e.name, e.category, e.description, ownerOf(e.repo));
                     x.variants.push(v);
+                    if (v.certLevel === 'partner') x.partner = true;
                     if (e.adult) x.adult = true;
                     var root = (e.flags || []).indexOf('root') >= 0;
                     if (root) x.root = true;
@@ -363,9 +401,10 @@
             var info = PROVIDERS[p.id] || { name: p.id, category: 'other', description: '' };
             var x = app('p:' + p.id, info.name, info.category, info.description, ownerOf(p.url));
             assets.forEach(function (a) {
-                var v = variant(null, a.name, a.browser_download_url, a.package_version, a.app_id, a.package_id, a.required_version);
+                var v = variant(null, a.name, a.browser_download_url, a.package_version, a.app_id, a.package_id, a.required_version, p.cert_level);
                 if (!a.digest) v.needsHead = NO_HASH;
                 x.variants.push(v);
+                if (v.certLevel === 'partner') x.partner = true;
             });
         });
 
@@ -512,6 +551,7 @@
         if (tooNew(x)) b += badge('b-warn', 'Needs Tizen ' + lowestTizen(x));
         if (x.adult) b += badge('b-warn', '18+');
         if (x.root) b += badge('b-warn', 'root');
+        if (x.partner) b += badge('b-mute', 'Partner certificate');
         if (x.needsHead) b += badge('b-mute', 'Phone or PC');
         return b;
     }
@@ -523,6 +563,7 @@
         if (!fits(v)) b += badge('b-warn', 'Needs Tizen ' + v.tizen);
         if (x.adult) b += badge('b-warn', '18+');
         if (x.root) b += badge('b-warn', 'root');
+        if (v.certLevel === 'partner') b += badge('b-mute', 'Partner');
         if (v.needsHead) b += badge('b-mute', 'Phone or PC');
         return b;
     }
@@ -669,7 +710,8 @@
 
     function renderTv() {
         var all = onTv(), ups = all.filter(function (x) { return state(x).update; }), ok = all.filter(function (x) { return !state(x).update; });
-        var doable = ups.filter(function (x) { return !isSelf(x); });   // TV-Store itself updates from a head (#41)
+        // TV-Store itself updates from a head (#41); an app that needs a certificate level this TV lacks waits too (#50).
+        var doable = ups.filter(function (x) { return !isSelf(x) && !signPlan(x.variants[state(x).variant]).missing; });
         if (!tvSel || all.indexOf(tvSel) < 0) tvSel = ups[0] || ok[0] || null;
         var h = '<div class="tvtop"><div><h1>Your apps</h1><p>' + (all.length
             ? all.length + (all.length === 1 ? ' catalog app is' : ' catalog apps are') + ' on this TV. ' + (ups.length ? (ups.length === 1 ? 'One has' : ups.length + ' have') + ' a newer version in the catalog.' : 'All up to date.')
@@ -692,7 +734,7 @@
             + '<div class="trow"><span class="k">In the catalog</span><span class="v"' + (st.update ? ' style="color:#F0A020"' : '') + '>v' + esc(st.latest || v.version) + '</span></div>'
             + (x.variants.length > 1 ? '<div class="trow"><span class="k">Variant</span><span class="v">' + esc(st.known ? v.label + (st.byPin ? ' · pinned' : '') : 'Not known: the builds share one package') + '</span></div>' : '') + '</div>'
             + '<div class="btns" style="margin-top:18px">';
-        if (st.update && st.known && !v.needsHead && fits(v) && !isSelf(x) && armed()) h += '<button class="btn primary grow f" data-k="tvupd" data-act="tvupd">Update</button>';
+        if (st.update && st.known && !v.needsHead && fits(v) && !isSelf(x) && armed() && !signPlan(v).missing) h += '<button class="btn primary grow f" data-k="tvupd" data-act="tvupd">Update</button>';
         else h += '<button class="btn grow f" data-k="tvsheet" data-act="tvsheet">Details</button>';
         if (v.appId) h += '<button class="btn f" data-k="tvopen" data-act="tvopen">Open</button>';
         h += '</div>';
@@ -751,6 +793,7 @@
         if (x.adult) b += badge('b-warn', 'Adults only (18+)');
         if (x.root) b += badge('b-warn', 'Gains root on the TV');
         if (v.tizen) b += badge(fits(v) ? 'b-mute' : 'b-warn', 'Tizen ' + v.tizen + ' or newer');
+        if (v.certLevel === 'partner') b += badge(levelsHeld().partner ? 'b-mute' : 'b-warn', 'Partner certificate');
         if (b) h += '<div class="badges">' + b + '</div>';
 
         if (x.variants.length > 1) {
@@ -761,21 +804,23 @@
                     var vv = x.variants[i], inst = st.installed && st.known && st.variant === i;
                     return '<div class="var f' + (i === sheet.v ? ' sel' : '') + '" tabindex="0" data-k="var:' + i + '" data-var="' + i + '"' + (i === sheet.v ? ' data-default' : '') + '>'
                         + '<span class="radio"></span><span class="vl">' + esc(vv.label) + '</span>'
-                        + (inst ? badge('b-ok', 'on the TV') : '') + (isPinned(x, i) ? badge('b-pin', 'Pinned') : '') + (vv.needsHead ? badge('b-mute', 'Phone or PC') : '') + (fits(vv) ? '' : badge('b-warn', 'Needs Tizen ' + vv.tizen))
+                        + (inst ? badge('b-ok', 'on the TV') : '') + (isPinned(x, i) ? badge('b-pin', 'Pinned') : '') + (vv.needsHead ? badge('b-mute', 'Phone or PC') : '') + (fits(vv) ? '' : badge('b-warn', 'Needs Tizen ' + vv.tizen)) + (vv.certLevel === 'partner' ? badge('b-mute', 'Partner') : '')
                         + '<span class="vv">' + esc(vv.version ? 'v' + vv.version : '') + '</span></div>';
                 }).join('') + '</div></div>';
             if (!sheet.all && x.variants.length > 4) h += '<span class="link f" tabindex="0" data-k="allvars" data-act="allvars">Show all ' + x.variants.length + ' variants ›</span>';
         }
 
         var label = st.installed && st.known && st.variant === sheet.v ? (st.update ? 'Update to v' + v.version : 'Reinstall') : (st.installed ? 'Install this variant' : 'Install on this TV');
-        var me = isSelf(x);
+        var me = isSelf(x), plan = signPlan(v);
+        if (!me && fits(v) && !v.needsHead && armed()) h += signWithHtml(v, plan);
         if (me) h += '<div class="notice">' + SELF_HOW + '</div>';
         else if (!fits(v)) h += '<div class="notice">' + esc(x.name + (x.variants.length > 1 ? ' (' + v.label + ')' : '') + ' asks for Tizen ' + v.tizen + ' or newer, and this TV runs Tizen ' + tvTizen + '. The TV would refuse it' + (x.variants.some(fits) ? ', so pick a build above that fits this set.' : '.')) + '</div>';
         else if (v.needsHead) h += '<div class="notice">' + esc(x.name + ' ' + v.needsHead + ', which this TV cannot do yet. Install it with Apps2Samsung on a phone or PC.') + '</div>';
         else if (!armed()) h += '<div class="notice">Not armed yet. Open this TV’s Toolbox in Apps2Samsung 3.0 or newer on your phone or PC and press Arm TV-Store once; after that every install runs here.</div>';
-        var can = !v.needsHead && fits(v) && !me && armed() && !(job && job.running);
+        else if (plan.missing) h += '<div class="notice">' + esc(missingLevelText(x.name, plan)) + '</div>';
+        var can = !v.needsHead && fits(v) && !me && armed() && !plan.missing && !(job && job.running);
         h += '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="install" data-act="install"' + (can ? (x.variants.length > 1 ? '' : ' data-default') : ' disabled') + '>'
-            + esc(me ? (st.update ? 'Update' : 'Reinstall') + ' from a phone or PC' : !fits(v) ? 'Needs Tizen ' + v.tizen + ' or newer' : v.needsHead ? 'Install from a phone or PC' : job && job.running ? 'Another install is running' : label) + '</button>';
+            + esc(me ? (st.update ? 'Update' : 'Reinstall') + ' from a phone or PC' : !fits(v) ? 'Needs Tizen ' + v.tizen + ' or newer' : v.needsHead ? 'Install from a phone or PC' : plan.missing ? 'Needs a ' + levelName(plan.level) + ' certificate' : job && job.running ? 'Another install is running' : label) + '</button>';
         if (st.installed && x.variants[st.variant].appId) h += '<button class="btn f" data-k="open" data-act="open">Open</button>';
         // Pin this build to the top of the store (#29); for a one-build app the button pins the app.
         h += '<button class="btn f" data-k="pin" data-act="pin">' + (isPinned(x, sheet.v) ? 'Unpin' : 'Pin') + '</button>';
@@ -787,10 +832,28 @@
         return h;
     }
 
+    // Sign with (#50): only when the TV holds both levels; otherwise there is nothing to choose and
+    // the plan is said in one line where it matters (a Partner app on a Public-only TV).
+    function signWithHtml(v, plan) {
+        var held = levelsHeld();
+        if (!(held.public && held.partner)) return '';
+        var choice = certChoiceOf(v) || 'auto';
+        var auto = plan.by === 'chosen' ? signPlan(v, true) : plan;
+        var why = auto.by === 'catalog' ? 'Automatic: Partner, the catalog says this app needs it' : auto.by === 'manifest' ? 'Automatic: Partner, the package asks for partner-level rights' : 'Automatic: Public';
+        return '<div class="vhead"><span class="t">Sign with</span><span class="h">' + esc(why) + '</span></div><div class="chips" style="margin-bottom:0">'
+            + [['auto', 'Automatic'], ['public', 'Public'], ['partner', 'Partner']].map(function (o) {
+                return '<div class="chip f' + (o[0] === choice ? ' on' : '') + '" tabindex="0" data-k="cert:' + o[0] + '" data-cert="' + o[0] + '">' + o[1] + '</div>';
+            }).join('') + '</div>';
+    }
+    function missingLevelText(name, plan) {
+        if (plan.level === 'partner') return name + ' needs a Partner certificate' + (plan.by === 'chosen' ? ' (your choice)' : '') + ', and this TV only has a Public one. ' + PARTNER_HOW;
+        return 'Public was chosen for ' + name + ', and this TV only has a Partner certificate. Arm it again from a phone or PC with a Public one, or pick Partner.';
+    }
+
     // The file a phone or PC sent (#30), as the app the install screens show: one build, no catalog.
     function uploadApp(up) {
         var ids = up.ids || {}, v = variant(up.name, up.name, '', ids.version, ids.appId, ids.packageId, ids.requiredVersion);
-        v.upload = up.id;
+        v.upload = up.id; v.manifestPartner = !!ids.partner;
         return { key: 'upload:' + up.id, name: ids.name || up.name.replace(/\.(wgt|tpk)$/i, ''), category: 'other', description: '', author: '', variants: [v], needsHead: null, adult: false, root: false };
     }
     function uploadHtml() {
@@ -802,18 +865,23 @@
         h += '<div class="sdesc">A file arrived from a phone or PC in your network. It is not from the Apps2Samsung catalog, so TV-Store cannot check it. Install it only if you sent it yourself or know where it came from.</div>';
         var b = '';
         if (have !== null) b += newer(ids.version, have) ? badge('b-warn', 'Update from v' + have) : badge('b-ok', 'Installed · v' + have);
+        if (ids.partner) b += badge(levelsHeld().partner ? 'b-mute' : 'b-warn', 'Asks for partner-level rights');
         if (b) h += '<div class="badges">' + b + '</div>';
         h += '<div class="table kv"><div class="trow"><span class="k">File</span><span class="v">' + esc(up.name) + '</span></div>'
             + '<div class="trow"><span class="k">Application</span><span class="v">' + esc((ids.appId || ids.packageId || 'unknown') + (ids.version ? ' · v' + ids.version : '')) + '</span></div>'
             + (ids.requiredVersion ? '<div class="trow"><span class="k">Asks for</span><span class="v">' + esc('Tizen ' + ids.requiredVersion + ' or newer' + (tvTizen ? ' · this TV runs Tizen ' + tvTizen : '')) + '</span></div>' : '')
             + '<div class="trow"><span class="k">SHA-256</span><span class="v mono">' + esc(String(up.sha256).slice(0, 20)) + '…</span></div></div>';
+        var plan = signPlan(x.variants[0]);
+        if (armed() && !uploadTokenError && fits(x.variants[0])) h += signWithHtml(x.variants[0], plan);
         if (!armed()) h += '<div class="notice">Not armed yet. Open this TV’s Toolbox in Apps2Samsung on your phone or PC and press Arm TV-Store once; the file keeps waiting.</div>';
         else if (uploadTokenError) h += '<div class="notice">TV-Store could not read its upload key on this TV (' + esc(uploadTokenError) + '), so it cannot confirm uploads here. Install the file with Apps2Samsung on a phone or PC instead.</div>';
         else if (!fits(x.variants[0])) h += '<div class="notice">' + esc('This file asks for Tizen ' + ids.requiredVersion + ' or newer, and this TV runs Tizen ' + tvTizen + '. The TV would refuse it.') + '</div>';
-        var can = armed() && !uploadTokenError && fits(x.variants[0]) && !(job && job.running);
-        h += '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="upinstall" data-act="upinstall"' + (can ? ' data-default' : ' disabled') + '>' + (job && job.running ? 'Another install is running' : !fits(x.variants[0]) ? 'Needs Tizen ' + ids.requiredVersion + ' or newer' : 'Install on this TV') + '</button>'
+        else if (plan.missing) h += '<div class="notice">' + esc(missingLevelText(x.name, plan)) + '</div>';
+        else if (ids.partner && !levelsHeld().partner) h += '<div class="notice info">' + esc('This file asks for partner-level rights, and this TV only has a Public certificate. It will install, but those parts of the app will not work. ' + PARTNER_HOW) + '</div>';
+        var can = armed() && !uploadTokenError && fits(x.variants[0]) && !plan.missing && !(job && job.running);
+        h += '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="upinstall" data-act="upinstall"' + (can ? ' data-default' : ' disabled') + '>' + (job && job.running ? 'Another install is running' : !fits(x.variants[0]) ? 'Needs Tizen ' + ids.requiredVersion + ' or newer' : plan.missing ? 'Needs a ' + levelName(plan.level) + ' certificate' : 'Install on this TV') + '</button>'
             + '<button class="btn f" data-k="close" data-act="close"' + (can ? '' : ' data-default') + '>Not now</button><button class="btn danger f" data-k="updiscard" data-act="updiscard">Discard</button></div>'
-            + '<div class="hint">Signed with your certificate, like every install. RETURN keeps the file waiting.</div></div>';
+            + '<div class="hint">' + esc('Signed with your ' + (levelsHeld().public && levelsHeld().partner ? levelName(plan.level) + ' ' : '') + 'certificate, like every install. RETURN keeps the file waiting.') + '</div></div>';
         return h;
     }
 
@@ -832,7 +900,7 @@
             else { ico = '<span class="ico wait"></span>'; cls = ' pending'; }
             if (i === 0 && v.upload) s = ['Received from your phone or PC', 'Picking up the file'];
             if (i === 0) side = job.bytes ? (job.bytes / 1048576).toFixed(1) + ' MB' : '';
-            if (i === 1) side = 'with your certificate';
+            if (i === 1) side = job.certificate ? 'with ' + job.certificate : job.plan && (levelsHeld().public && levelsHeld().partner || job.plan.by === 'catalog') ? 'with your ' + levelName(job.plan.level) + ' certificate' : 'with your certificate';
             if (i === 2) side = job.replace ? 'the old copy goes first' : 'the TV is doing this part';
             return '<div class="trow' + cls + '">' + ico + '<span style="flex:1">' + (i < done ? s[0] : s[1]) + '</span><span class="v">' + side + '</span></div>';
         }).join('') + '</div>';
@@ -853,7 +921,7 @@
             + '<h2>' + esc(x.name) + ' is on your TV</h2><p>' + esc((job.update ? 'Updated to v' : 'Installed v') + (v.version || '') + '. You will find it in the Apps row' + (job.update ? ', right where it was.' : '.')) + '</p></div>';
         h += '<div class="table kv" style="margin-top:38px"><div class="trow"><span class="k">Variant</span><span class="v">' + esc(v.label) + '</span></div>'
             + '<div class="trow"><span class="k">Took</span><span class="v">' + secs + ' seconds</span></div>'
-            + '<div class="trow"><span class="k">Signed with</span><span class="v">your certificate</span></div></div>';
+            + '<div class="trow"><span class="k">Signed with</span><span class="v">' + esc(job.certificate ? job.certificate + (job.level === 'partner' || job.level === 'public' ? ' (' + levelName(job.level) + ')' : '') : 'your certificate') + '</span></div></div>';
         // The heads end an install the same way: a thank-you and the Ko-fi link, as a QR here.
         h += '<div class="qrrow">' + qr(KOFI, 150) + '<div><b>That was easy, right?</b><span>Scan the code to buy me a beer.</span></div></div>';
         h += '<div class="sfoot"><div class="btns">' + (v.appId ? '<button class="btn primary grow f" data-k="openjob" data-act="openjob" data-default>Open ' + esc(x.name) + '</button>' : '')
@@ -875,7 +943,8 @@
             + opt('verboseLog', 'Verbose logging', 'Writes much more detail to the TV-Store log. Turn it on when a bug report asks for it, and off again afterwards.') + '</div>';
         if (confirmingAdult) h += '<div class="notice">These apps are meant for adults only. Turn them on only if you are 18 or older.</div>'
             + '<div class="btns" style="margin-top:16px"><button class="btn primary grow f" data-k="adultyes" data-act="adultyes" data-default>I am 18 or older</button><button class="btn f" data-k="adultno" data-act="adultno">Cancel</button></div>';
-        var certText = !armed() ? 'not yet' : ready.certCount > 1 ? ready.certCount + ' handed over: ' + (ready.certNames || []).join(', ') : 'handed over' + (ready.certNames && ready.certNames[0] ? ': ' + ready.certNames[0] : '');
+        var certList = (ready && ready.certificates ? ready.certificates.map(function (c) { return c.name + (c.level === 'partner' || c.level === 'public' ? ' (' + levelName(c.level) + ')' : ''); }) : (ready && ready.certNames) || []);
+        var certText = !armed() ? 'not yet' : ready.certCount > 1 ? ready.certCount + ' handed over: ' + certList.join(', ') : 'handed over' + (certList[0] ? ': ' + certList[0] : '');
         h += '<div class="table kv"><div class="trow"><span class="k">Signing certificate' + (ready && ready.certCount > 1 ? 's' : '') + '</span><span class="v">' + esc(certText) + '</span></div>'
             + '<div class="trow"><span class="k">Catalog</span><span class="v">' + esc(catalogApps.length + ' apps, signature checked') + '</span></div>'
             + '<div class="trow"><span class="k">TV-Store</span><span class="v">v' + VERSION + (ready && ready.node ? ' · Node ' + esc(ready.node) : '') + '</span></div>'
@@ -900,7 +969,7 @@
     function startInstall(x, vIdx, opts) {
         if ((job && job.running) || isSelf(x)) return;
         var v = x.variants[vIdx], st = state(x), replace = !!(opts && opts.replace);
-        job = { app: x, v: v, vIdx: vIdx, update: st.installed && st.known && st.variant === vIdx, replace: replace, running: true, finished: false, ok: false, step: 0, bytes: 0, line: '', error: null, code: null, started: Date.now() };
+        job = { app: x, v: v, vIdx: vIdx, update: st.installed && st.known && st.variant === vIdx, replace: replace, running: true, finished: false, ok: false, step: 0, bytes: 0, line: '', error: null, code: null, started: Date.now(), plan: signPlan(v), certificate: '', level: '' };
         if (sheet) { sheet = { mode: 'job' }; renderSheet(true); } else openSheet({ mode: 'job' });
         renderHeader();
         var since = job.started - 2000, me = job;
@@ -909,12 +978,14 @@
         // a 2018 set (no reason text) as "another certificate" (#44); replace: remove that copy first.
         var onTv = !!(v.packageId && installed.hasOwnProperty(v.packageId));
         var req = v.upload ? { upload: v.upload, token: uploadToken, tizen: tvTizen, installed: onTv, replace: replace } : { url: v.url, file: v.file, appId: v.appId, packageId: v.packageId, name: x.name, tizen: tvTizen, installed: onTv, replace: replace };
+        // Sign with (#50): the choice made on the TV; the service takes the catalog's and the manifest's word otherwise.
+        if (certChoiceOf(v)) req.certLevel = certChoiceOf(v);
         xhr('POST', '/install', req, function (err, res) {
             clearInterval(timer);
             pollLog(me, since, function () {
                 me.running = false; me.finished = true; me.ended = Date.now();
                 if (err || !res.ok) { me.error = err ? err.message : res.error; me.code = err ? null : (res.code || null); renderHeader(); if (sheet && sheet.mode === 'job') renderSheet(true); queue = []; return; }
-                me.ok = true; me.step = 4;
+                me.ok = true; me.step = 4; me.certificate = (res.result && res.result.certificate) || ''; me.level = (res.result && res.result.level) || '';
                 if (v.packageId) { installed[v.packageId] = v.version; claims = null; rememberVariant(v); }
                 if (v.appId) appIds[v.appId] = true;
                 readInstalled(function (map) {
@@ -987,6 +1058,7 @@
         if ((k = el.getAttribute('data-chip'))) { chip = k; renderPage(); focusKey('chip:' + k) || focusFirst(); return; }
         if ((k = el.getAttribute('data-opt'))) { toggle(k); return; }
         if ((k = el.getAttribute('data-var'))) { sheet.v = parseInt(k, 10); renderSheet(); return; }
+        if ((k = el.getAttribute('data-cert'))) { chooseCert(sheet.mode === 'upload' ? uploadApp(upload).variants[0] : sheet.app.variants[sheet.v], k); renderSheet(); focusKey('cert:' + k); return; }
         if ((k = el.getAttribute('data-app'))) { var x = byKey(k), vi = el.getAttribute('data-vi'); if (x) openApp(x, vi != null ? parseInt(vi, 10) : null); return; }
         switch (act) {
             case 'upinstall': if (!el.disabled) installUpload(); return;
@@ -1008,7 +1080,7 @@
             case 'tvsheet': openApp(tvSel); return;
             case 'tvopen': launch(tvSel.variants[state(tvSel).variant].appId); return;
             case 'updall':
-                queue = updates().filter(function (x) { var st = state(x), v = x.variants[st.variant]; return st.known && !v.needsHead && !isSelf(x); });
+                queue = updates().filter(function (x) { var st = state(x), v = x.variants[st.variant]; return st.known && !v.needsHead && !isSelf(x) && !signPlan(v).missing; });
                 if (queue.length) { var first = queue.shift(); startInstall(first, state(first).variant); }
                 return;
         }
@@ -1134,7 +1206,7 @@
                     xhr('POST', '/cert', certs, function (err, res) {
                         if (err && ++tries < 30) return setTimeout(post, 500);
                         if (err) return resolve({ ok: false, error: err.message });
-                        if (res && res.ok) setReady({ ok: true, certReady: true, certCount: res.certCount || 1, certNames: certs && certs.certificates ? certs.certificates.map(function (c) { return c.name; }) : [], ownIp: ready && ready.ownIp, node: ready && ready.node });
+                        if (res && res.ok) setReady({ ok: true, certReady: true, certCount: res.certCount || 1, certNames: certs && certs.certificates ? certs.certificates.map(function (c) { return c.name; }) : [], certificates: res.certificates || null, ownIp: ready && ready.ownIp, node: ready && ready.node });
                         resolve(res || { ok: false, error: 'no answer from the service' });
                     });
                 })();

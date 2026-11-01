@@ -152,7 +152,8 @@ function installUpload(b, cb) {
     var up = UPLOAD, outFile = path.join(DATA_DIR, 'job-' + Date.now() + '.signed.wgt');
     UPLOAD_BUSY = true;
     log('install: uploaded ' + up.size + ' bytes, ' + up.name + ' from ' + up.from + ', SHA-256 ' + up.sha256 + ', confirmed on the TV; signing');
-    var entry = { appId: up.ids.appId, packageId: up.ids.packageId, file: up.name, name: up.ids.name, requiredVersion: up.ids.requiredVersion, tizen: b.tizen, installed: !!b.installed, replace: !!b.replace };
+    var entry = { appId: up.ids.appId, packageId: up.ids.packageId, file: up.name, name: up.ids.name, requiredVersion: up.ids.requiredVersion, tizen: b.tizen, installed: !!b.installed, replace: !!b.replace,
+                  certLevel: b.certLevel, manifestPartner: !!up.ids.partner };
     var gate = tizenGate(entry);
     if (gate) { UPLOAD_BUSY = false; return cb(gate); }
     signAndInstall(entry, up.name.replace(/[^A-Za-z0-9._-]/g, '_'), UPLOAD_FILE, outFile, function (err, r) {
@@ -271,6 +272,7 @@ function install(entry, cb) {
         if (!cat.index.hasOwnProperty(downloadUrl)) return cb(coded('NOT_IN_CATALOG', 'this download is not in the signed catalog'));
         var want = cat.index[downloadUrl];
         if (!want) return cb(coded('NO_HASH', 'the catalog has no hash for this file, so the TV cannot check it; install it from Apps2Samsung on a phone or PC'));
+        entry.catalogLevel = cat.levels[downloadUrl] || '';
         if (!DATA_DIR) return cb(new Error('the service has no folder it can write to'));
         var base = path.join(DATA_DIR, 'job-' + Date.now()), inFile = base + '.in.wgt', outFile = base + '.signed.wgt';
         function clean(err, r) { [inFile, outFile].forEach(function (f) { try { fs.unlinkSync(f); } catch (e) {} }); cb(err, r); }
@@ -285,7 +287,7 @@ function install(entry, cb) {
             // (#47): a package the TV would refuse with [118, -19] is turned away before the push.
             manifest.read(inFile, function (err, ids) {
                 if (err) logv('install: could not read the manifest (' + err.message + '); the TV decides');
-                else entry.requiredVersion = ids.requiredVersion;
+                else { entry.requiredVersion = ids.requiredVersion; entry.manifestPartner = !!ids.partner; }
                 var gate = tizenGate(entry);
                 if (gate) return clean(gate);
                 signAndInstall(entry, remoteName, inFile, outFile, clean);
@@ -359,6 +361,26 @@ function sdbAdvice(err, seen) {
     return err;
 }
 
+// Which privilege level an install signs with (#50), from entry: certLevel is the choice made on
+// the TV ('public' | 'partner', Sign with in the app sheet); catalogLevel 'partner' is the
+// catalog's word that the app cannot do without one; manifestPartner is a partner-level privilege
+// in the package's own manifest. The first two are firm: { want } names the level and the install
+// is refused when the TV holds no such profile. The manifest alone only makes Partner the first
+// choice for a package the TV has not installed before, when it holds one: { prefer }.
+function wantedLevel(entry, store, remembered) {
+    var wish = /^(public|partner)$/.test(String(entry.certLevel || '')) ? entry.certLevel : '';
+    var want = wish || (entry.catalogLevel === 'partner' ? 'partner' : '');
+    var why = wish ? 'chosen on the TV' : want ? 'the catalog says this app needs one' : '';
+    if (want) return { want: want, why: why, missing: !certs.has(store, want) };
+    if (entry.manifestPartner && !remembered && certs.has(store, 'partner')) return { prefer: 'partner', why: 'the package asks for partner-level privileges' };
+    return {};
+}
+function missingLevel(want, store) {
+    var have = certs.summary(store).map(function (c) { return '\u2018' + c.name + '\u2019' + (c.level === 'unknown' ? '' : ' (' + levelName(c.level) + ')'); }).join(', ');
+    if (want === 'partner') return coded('NEEDS_PARTNER', 'This app needs a Partner certificate, and this TV only holds ' + (have || 'none') + '. In Apps2Samsung on your phone or PC, set the signing certificate to Partner in Settings and install any app once, so it creates one; then press Arm TV-Store again. Both certificates come along.');
+    return coded('NEEDS_PUBLIC', 'Public was chosen for this app, and this TV only holds ' + (have || 'none') + '. Arm this TV again from a phone or PC that has a Public certificate, or pick Partner.');
+}
+
 // Signs with the profile the package took last time (else the head's first choice), pushes and
 // installs. A TV only updates an app with the author certificate it was installed with (#44): when
 // it refuses the certificate ("same id and different certificate", or any other [118, -12]: a
@@ -367,8 +389,12 @@ function sdbAdvice(err, seen) {
 // then the mismatch when any attempt was one, else the last refusal. inFile is gone once an
 // attempt was signed; a failure before that (no certificate yet) keeps it, so an upload stays waiting.
 function signAndInstall(entry, remoteName, inFile, outFile, cb) {
-    var tries = certs.order(loadCerts(), entry.packageId ? certByPackage()[entry.packageId] : null), tried = [], i = 0, mismatch = null;
-    if (!tries.length) { var none = coded('NO_CERT', 'No signing certificate available on this TV yet (#844 cert hand-over).'); log('install: ' + none.message); return cb(none); }
+    var store = loadCerts(), remembered = entry.packageId ? certByPackage()[entry.packageId] : null;
+    if (!certs.order(store).length) { var none = coded('NO_CERT', 'No signing certificate available on this TV yet (#844 cert hand-over).'); log('install: ' + none.message); return cb(none); }
+    var lvl = wantedLevel(entry, store, remembered);
+    if (lvl.missing) { var miss = missingLevel(lvl.want, store); log('install: ' + lvl.why + ', but the TV holds no ' + levelName(lvl.want) + ' certificate; not installing'); return cb(miss); }
+    if (lvl.want || lvl.prefer) log('install: signing with a ' + levelName(lvl.want || lvl.prefer) + ' certificate: ' + lvl.why);
+    var tries = certs.order(store, remembered, lvl.want || lvl.prefer), tried = [], i = 0, mismatch = null;
     function finish(err, r) { try { fs.unlinkSync(inFile); } catch (e) {} try { fs.unlinkSync(outFile); } catch (e) {} cb(err, r); }
     removeOld(entry, function () { (function attempt() {
         var cert = tries[i++], started = Date.now();
@@ -403,11 +429,11 @@ function signAndInstall(entry, remoteName, inFile, outFile, cb) {
                                 log('install: the TV refused the copy signed with ' + certLabel(cert) + (r.code === 'CERT_MISMATCH' ? ' (another certificate installed it)' : ' (' + (failed[2] || failed[1]).trim() + ')') + '; trying ' + certLabel(tries[i]));
                                 return attempt();
                             }
-                            if (mismatch) r = { code: 'CERT_MISMATCH', message: mismatch.message + ' None of the ' + tried.length + ' certificate' + (tried.length === 1 ? '' : 's') + ' on this TV (' + tried.map(certLabel).join(', ') + ') is the one it was installed with: arm this TV from the phone or PC that installed it, or let TV-Store remove the old copy.' };
+                            if (mismatch) r = { code: 'CERT_MISMATCH', message: mismatch.message + ' None of the ' + tried.length + ' ' + (lvl.want ? levelName(lvl.want) + ' ' : '') + 'certificate' + (tried.length === 1 ? '' : 's') + ' on this TV (' + tried.map(certLabel).join(', ') + ') is the one it was installed with: ' + (lvl.want ? 'it was installed with another certificate, so let TV-Store remove the old copy and install it again signed ' + levelName(lvl.want) + '.' : 'arm this TV from the phone or PC that installed it, or let TV-Store remove the old copy.') };
                             return finish(coded(r.code, r.message));
                         }
                         rememberCert(entry.packageId, cert.id);
-                        finish(null, { reply: out, certificate: cert.name });
+                        finish(null, { reply: out, certificate: cert.name, level: cert.level });
                     });
                 });
             });
@@ -474,7 +500,8 @@ function saveCerts(b) {
     }
 }
 function haveCerts() { var c = loadCerts(); return !!(c && c.certificates && c.certificates.length); }
-function certLabel(c) { return '\u2018' + (c.name || c.id.slice(0, 12)) + '\u2019'; }
+function certLabel(c) { return '\u2018' + (c.name || c.id.slice(0, 12)) + '\u2019' + (c.level === 'partner' ? ' (Partner)' : c.level === 'public' ? ' (Public)' : ''); }
+function levelName(l) { return l === 'partner' ? 'Partner' : 'Public'; }
 
 http.createServer(function (req, res) {
     if (req.method === 'OPTIONS') { cors(res, 204, 'text/plain'); return res.end(); }
@@ -491,7 +518,7 @@ http.createServer(function (req, res) {
     // certificate or start an install.
     if (!fromThisTv(req)) { cors(res, 403, 'text/plain'); return res.end('only this TV may use TV-Store'); }
     if (route === '/ping') return json(res, 200, { ok: true, service: 'tv-store', ownIp: ownIp(), logUrl: 'http://' + ownIp() + ':' + PORT + '/log.txt', signerReady: signer.ready, certReady: haveCerts(),
-        certCount: haveCerts() ? loadCerts().certificates.length : 0, certNames: certs.names(loadCerts()),
+        certCount: haveCerts() ? loadCerts().certificates.length : 0, certNames: certs.names(loadCerts()), certificates: certs.summary(loadCerts()),
         certFile: CERT_FILE, certError: CERT_ERROR, node: process.version, verbose: VERBOSE });
     if (route === '/settings' && req.method === 'POST') return body(req, function (err, b) {
         if (err || !b || typeof b.verbose !== 'boolean') return json(res, 400, { ok: false, error: 'need { verbose: true|false }' });
@@ -516,7 +543,7 @@ http.createServer(function (req, res) {
         var store = certs.merge(loadCerts(), incoming);
         log('cert: received ' + incoming.length + ' signing certificate(s) from a head (' + incoming.map(certLabel).join(', ') + '); ' + store.certificates.length + ' on this TV now');
         saveCerts(store);
-        json(res, 200, { ok: true, certFile: CERT_FILE, certError: CERT_FILE ? null : CERT_ERROR, certCount: store.certificates.length });
+        json(res, 200, { ok: true, certFile: CERT_FILE, certError: CERT_FILE ? null : CERT_ERROR, certCount: store.certificates.length, certificates: certs.summary(store) });
     });
     if (route === '/install' && req.method === 'POST') return body(req, function (err, b) {
         if (err || !b || !(b.url || b.upload)) return json(res, 400, { ok: false, error: 'need { url, file, appId } or { upload, token }' });
