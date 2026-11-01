@@ -23,8 +23,8 @@ function wgt(pkgId, privs) {
             + (privs || []).map(function (p) { return '<tizen:privilege name="' + p + '"/>'; }).join('') + '</widget>') }]);
 }
 var PLAIN = wgt('A2SProbe01', ['http://tizen.org/privilege/internet']);
-var DRM1 = wgt('A2SProbeD1', ['http://tizen.org/privilege/internet', 'http://developer.samsung.com/privilege/drmplay']);
-var DRM2 = wgt('A2SProbeD2', ['http://developer.samsung.com/privilege/drmplay']);
+var DRM1 = wgt('A2SProbeD1', ['http://tizen.org/privilege/internet', 'http://tizen.org/privilege/vpnservice']);
+var DRM2 = wgt('A2SProbeD2', ['http://tizen.org/privilege/vpnservice']);
 
 function reply(pkgId, failed) {
     return failed ? 'install ' + pkgId + '.Probe package_path /x was_install_app return WAS_TRUE app_id[' + pkgId + '.Probe] install start installing[7] app_id[' + pkgId + '.Probe] install failed[118, -12], reason: Check certificate error : :Package with the same id and different certificate has been already installed.:<-12>\n'
@@ -95,7 +95,7 @@ function run() {
                     if (!j.pending || j.pending.id !== up.id) fail('the upload must keep waiting after NEEDS_PARTNER: ' + JSON.stringify(j));
                     // 2. A package with a partner-level privilege: the upload says so; with no Partner profile it installs Public.
                     installUpload(DRM1, {}, function (j, calls, up) {
-                        if (up.ids.partner !== true || up.ids.privileges.indexOf('http://developer.samsung.com/privilege/drmplay') < 0) fail('the upload must carry the privileges: ' + JSON.stringify(up.ids));
+                        if (up.ids.partner !== true || up.ids.privileges.indexOf('http://tizen.org/privilege/vpnservice') < 0) fail('the upload must carry the privileges: ' + JSON.stringify(up.ids));
                         if (!j.ok || j.result.certificate !== 'PC - Public' || j.result.level !== 'public' || installs(calls) !== 1) fail('Public-only TV installs a partner-privilege package Public: ' + JSON.stringify(j));
                         bothLevels();
                     });

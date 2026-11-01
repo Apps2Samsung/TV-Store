@@ -21,14 +21,16 @@ function text(xml, tag) {
     return m ? m[1].trim() : '';
 }
 
-// Privileges a Public certificate does not grant (#50). Tizen ignores a privilege the signing
-// certificate does not cover, so a package that asks for one of these installs fine when signed
-// Public and then fails at the call: DRM playback, Samsung sign-in, a VPN, killing other apps.
-// Samsung's own list is longer and changes per platform; this is the part a sideloaded TV app
-// is known to use. A match makes Partner the first choice when the TV holds one, never a block:
-// the catalog (cert_level) is what says an app cannot do without it.
+// Privileges a Public certificate does not grant on a Samsung TV (#50). Only the ones a Public
+// certificate truly cannot cover belong here: a VPN, managing or killing other packages, system
+// settings, the key manager, Samsung partner sign-in. An app that asks for one of these installs
+// fine signed Public and then fails at the call. This list only makes Partner the first choice when
+// the TV already holds one, never a block; the catalog (cert_level) is what says an app cannot do
+// without it.
+// Deliberately NOT here: drmplay/drminfo (DRM playback) and externalstorage, which Public DOES grant
+// on a TV (every media app and emulator in the catalog declares them and runs Public), so flagging
+// them would push working apps onto Partner for no reason (#50 follow-up).
 var PARTNER_PRIVILEGES = [
-    'http://developer.samsung.com/privilege/drminfo', 'http://developer.samsung.com/privilege/drmplay',
     'http://developer.samsung.com/privilege/sso.partner', 'http://developer.samsung.com/privilege/tvinputdevice.admin',
     'http://tizen.org/privilege/vpnservice', 'http://tizen.org/privilege/vpnservice.admin',
     'http://tizen.org/privilege/appmanager.kill', 'http://tizen.org/privilege/appmanager.certificate',
@@ -36,7 +38,7 @@ var PARTNER_PRIVILEGES = [
     'http://tizen.org/privilege/packagemanager.clearcache', 'http://tizen.org/privilege/systemsettings.admin',
     'http://tizen.org/privilege/systemmanager', 'http://tizen.org/privilege/keymanager.admin',
     'http://tizen.org/privilege/bluetooth.admin', 'http://tizen.org/privilege/bluetoothmanager',
-    'http://tizen.org/privilege/telephony.admin', 'http://tizen.org/privilege/datasharing', 'http://tizen.org/privilege/externalstorage'
+    'http://tizen.org/privilege/telephony.admin', 'http://tizen.org/privilege/datasharing'
 ];
 // Every privilege the manifest names: <tizen:privilege name="..."/> in a .wgt, <privilege>...</privilege> in a .tpk.
 function privileges(kind, xml) {

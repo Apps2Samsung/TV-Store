@@ -13,7 +13,7 @@ function pkg(name, entries) { var f = path.join(dir, name); fs.writeFileSync(f, 
 
 var wgt = pkg('a.wgt', [
     { name: 'index.html', data: Buf.from('<html></html>') },
-    { name: 'config.xml', data: Buf.from('<?xml version="1.0"?><widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets" id="https://x" version="1.2.3"><name>Nuvio Legacy</name>\n  <tizen:application id="NuvioTV002.Nuvio" package="NuvioTV002" required_version="4.0"/>\n  <tizen:privilege name="http://tizen.org/privilege/internet"/>\n  <tizen:privilege name="http://developer.samsung.com/privilege/drmplay"/>\n  <tizen:privilege name="http://tizen.org/privilege/internet"/></widget>') }
+    { name: 'config.xml', data: Buf.from('<?xml version="1.0"?><widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets" id="https://x" version="1.2.3"><name>Nuvio Legacy</name>\n  <tizen:application id="NuvioTV002.Nuvio" package="NuvioTV002" required_version="4.0"/>\n  <tizen:privilege name="http://tizen.org/privilege/internet"/>\n  <tizen:privilege name="http://tizen.org/privilege/vpnservice"/>\n  <tizen:privilege name="http://tizen.org/privilege/internet"/></widget>') }
 ]);
 var tpk = pkg('b.tpk', [
     { name: 'bin/app', data: Buf.from('x') },
@@ -25,15 +25,17 @@ var notZip = path.join(dir, 'd.wgt'); fs.writeFileSync(notZip, 'hello');
 manifest.read(wgt, function (err, ids) {
     if (err) fail('wgt: ' + err.message);
     if (ids.kind !== 'wgt' || ids.appId !== 'NuvioTV002.Nuvio' || ids.packageId !== 'NuvioTV002' || ids.version !== '1.2.3' || ids.name !== 'Nuvio Legacy' || ids.requiredVersion !== '4.0') fail('wgt ids ' + JSON.stringify(ids));
-    // Privileges (#50): each once, and drmplay is partner-level.
-    if (ids.privileges.join() !== 'http://tizen.org/privilege/internet,http://developer.samsung.com/privilege/drmplay' || ids.partner !== true) fail('wgt privileges ' + JSON.stringify(ids));
+    // Privileges (#50): each once, and vpnservice is partner-level.
+    if (ids.privileges.join() !== 'http://tizen.org/privilege/internet,http://tizen.org/privilege/vpnservice' || ids.partner !== true) fail('wgt privileges ' + JSON.stringify(ids));
     manifest.read(tpk, function (err, ids) {
         if (err) fail('tpk: ' + err.message);
         if (ids.kind !== 'tpk' || ids.appId !== 'org.apps2samsung.overscan.app' || ids.packageId !== 'org.apps2samsung.overscan' || ids.version !== '0.2.0' || ids.name !== 'Overscan' || ids.requiredVersion !== '4.0') fail('tpk ids ' + JSON.stringify(ids));
         if (ids.privileges.join() !== 'http://tizen.org/privilege/display' || ids.partner !== false) fail('tpk privileges ' + JSON.stringify(ids));
         var plain = manifest.parse('wgt', '<widget version="1"><tizen:application id="A.b" package="A"/><tizen:privilege name="http://tizen.org/privilege/internet"/></widget>');
         if (plain.partner !== false || plain.privileges.length !== 1) fail('a public-only manifest: ' + JSON.stringify(plain));
-        if (!manifest.needsPartner(['http://tizen.org/privilege/vpnservice']) || manifest.needsPartner([]) || manifest.needsPartner(['http://developer.samsung.com/privilege/network.public'])) fail('needsPartner');
+        // drmplay/drminfo/externalstorage are NOT partner on a TV (Public grants them), so they must not flag (#50 follow-up).
+        if (!manifest.needsPartner(['http://tizen.org/privilege/vpnservice']) || !manifest.needsPartner(['http://tizen.org/privilege/packagemanager.admin'])) fail('needsPartner true cases');
+        if (manifest.needsPartner([]) || manifest.needsPartner(['http://developer.samsung.com/privilege/network.public']) || manifest.needsPartner(['http://developer.samsung.com/privilege/drmplay']) || manifest.needsPartner(['http://tizen.org/privilege/externalstorage'])) fail('needsPartner false cases (drmplay/externalstorage are public)');
         var noReq = manifest.parse('wgt', '<widget version="1"><tizen:application id="A.b" package="A"/></widget>');
         if (noReq.requiredVersion !== '') fail('a manifest without required_version must give \'\', got ' + JSON.stringify(noReq.requiredVersion));
         // The gate: 6.0 on a 4.0 set is refused, 2.3 on 4.0 and 4.0 on 4.0 are not, unknown on either side is not (#44).
