@@ -19,6 +19,7 @@ jobs:
         run: |
           node test/config.test.js
           node test/run.js
+          node test/relay.test.js
           node test/sign.test.js
           node --expose-gc test/stream-sign.test.js
           node test/bundle.test.js

@@ -14,6 +14,7 @@ var fs = require('fs');
 var path = require('path');
 var crypto = require('crypto');
 var sdb = require('./sdb.js');
+var relayMod = require('./relay.js');
 var signer = require('./signer.js');
 var zip = require('./zip.js');
 var catalogTrust = require('./catalog.js');
@@ -26,6 +27,11 @@ var sdbhosts = require('./sdbhosts.js');
 var PORT = 8077;
 // sdbd's port; a test points the service at a fake sdbd (test/install.test.js).
 var SDB_PORT = parseInt(process.env.A2S_SDB_PORT || '', 10) || 26101;
+// The on-TV sdb relay listens here (TV-Store#52). Default 26201; env override for a test.
+var RELAY_PORT_DEFAULT = 26201;
+function validPort(n) { return typeof n === 'number' && isFinite(n) && n === Math.floor(n) && n >= 1 && n <= 65535; }
+function parsePort(v, dflt) { var n = parseInt(v, 10); return validPort(n) ? n : dflt; }
+var RELAY_PORT = parsePort(process.env.A2S_RELAY_PORT, RELAY_PORT_DEFAULT);
 // Signed by the Apps2Samsung catalog workflow; see catalog.js for why the content is checked
 // instead of the connection.
 var CATALOG_URL = 'https://apps2samsung.com/catalog/resolved.json.signed';
@@ -89,6 +95,52 @@ function logPlatform() {
     logv('platform: ' + os.type() + ' ' + os.release() + ' ' + process.arch + ', node ' + process.version + ', pid ' + process.pid + ', uptime ' + Math.round(os.uptime()) + ' s');
     logv('platform: network ' + nets.join('; '));
     logv('platform: package ' + PKG + ', data ' + DATA_DIR + ', cert ' + (CERT_FILE || 'none yet') + ', cert folders ' + CERT_DIRS.join(', '));
+}
+
+// The on-TV sdb relay (TV-Store#52): a TCP proxy from a LAN port to the TV's own sdbd over loopback,
+// so clients connect without re-entering Developer Mode's Host PC IP (set it to 127.0.0.1 once). It is
+// off until turned on from Settings, since any LAN client that reaches the port can push and install;
+// an optional allow list pins it to specific client IPs. The config lives next to the other settings.
+var RELAY_FILE = DATA_DIR ? path.join(DATA_DIR, '.a2s-relay.json') : null;
+var RELAY_CFG = { enabled: false, port: RELAY_PORT, allow: [] };
+try {
+    if (RELAY_FILE) {
+        var rc = JSON.parse(fs.readFileSync(RELAY_FILE, 'utf8'));
+        if (rc && typeof rc === 'object') {
+            RELAY_CFG.enabled = !!rc.enabled;
+            RELAY_CFG.port = parsePort(rc.port, RELAY_PORT);
+            RELAY_CFG.allow = relayMod.normList(rc.allow);
+        }
+    }
+} catch (e) {}
+var relay = new relayMod.Relay({ sdbPort: SDB_PORT, allow: RELAY_CFG.allow, log: log });
+function saveRelayCfg() {
+    if (!RELAY_FILE) return;
+    try { fs.writeFileSync(RELAY_FILE, JSON.stringify(RELAY_CFG)); }
+    catch (e) { log('relay: cannot save settings: ' + e.message); }
+}
+function startRelay() {
+    relay.setAllow(RELAY_CFG.allow);
+    relay.start(RELAY_CFG.port, function (err) { if (err) log('relay: not started: ' + err.message); });
+}
+function relayStatus() {
+    var s = relay.status();
+    s.enabled = RELAY_CFG.enabled;
+    s.configuredPort = RELAY_CFG.port;
+    return s;
+}
+// Apply { enabled?, port?, allow? } from Settings: persist, then restart the listener to match.
+function applyRelaySettings(r) {
+    if (typeof r.enabled === 'boolean') RELAY_CFG.enabled = r.enabled;
+    if (r.port !== undefined) RELAY_CFG.port = parsePort(r.port, RELAY_CFG.port);
+    if (r.allow !== undefined) RELAY_CFG.allow = relayMod.normList(r.allow);
+    saveRelayCfg();
+    relay.stop();
+    if (RELAY_CFG.enabled) startRelay();
+    log('relay: ' + (RELAY_CFG.enabled
+        ? 'enabled on port ' + RELAY_CFG.port + (RELAY_CFG.allow.length ? ', allow ' + RELAY_CFG.allow.join(', ') : ', any LAN client')
+        : 'disabled'));
+    return relayStatus();
 }
 // Uploads (#30): a .wgt or .tpk that anyone in the network sends to http://<TV IP>:8077/upload
 // waits here, one at a time, until the person at the TV presses Install or Discard on the
@@ -519,11 +571,12 @@ http.createServer(function (req, res) {
     if (!fromThisTv(req)) { cors(res, 403, 'text/plain'); return res.end('only this TV may use TV-Store'); }
     if (route === '/ping') return json(res, 200, { ok: true, service: 'tv-store', ownIp: ownIp(), logUrl: 'http://' + ownIp() + ':' + PORT + '/log.txt', signerReady: signer.ready, certReady: haveCerts(),
         certCount: haveCerts() ? loadCerts().certificates.length : 0, certNames: certs.names(loadCerts()), certificates: certs.summary(loadCerts()),
-        certFile: CERT_FILE, certError: CERT_ERROR, node: process.version, verbose: VERBOSE });
+        certFile: CERT_FILE, certError: CERT_ERROR, node: process.version, verbose: VERBOSE, relay: relayStatus() });
     if (route === '/settings' && req.method === 'POST') return body(req, function (err, b) {
-        if (err || !b || typeof b.verbose !== 'boolean') return json(res, 400, { ok: false, error: 'need { verbose: true|false }' });
-        setVerbose(b.verbose);
-        json(res, 200, { ok: true, verbose: VERBOSE });
+        if (err || !b || (typeof b.verbose !== 'boolean' && !b.relay)) return json(res, 400, { ok: false, error: 'need { verbose: true|false } and/or { relay: { enabled, port, allow } }' });
+        if (typeof b.verbose === 'boolean') setVerbose(b.verbose);
+        if (b.relay && typeof b.relay === 'object') applyRelaySettings(b.relay);
+        json(res, 200, { ok: true, verbose: VERBOSE, relay: relayStatus() });
     });
     if (route === '/logs') return json(res, 200, { logs: LOGS });
     if (route === '/uploads') return json(res, 200, { pending: publicUpload(), busy: UPLOAD_BUSY });
@@ -550,7 +603,7 @@ http.createServer(function (req, res) {
         (b.upload ? installUpload : install)(b, function (err, r) { if (err) { log('install: failed' + (err.code ? ' [' + err.code + ']' : '') + ': ' + err.message); return json(res, 200, { ok: false, error: err.message, code: err.code || null }); } json(res, 200, { ok: true, result: r }); });
     });
     cors(res, 404, 'text/plain'); res.end('not found');
-}).listen(PORT, '0.0.0.0', function () { log('TV-Store service on port ' + PORT + ', node ' + process.version + ' ' + process.arch + ', this TV ' + ownIp() + ', data ' + DATA_DIR + (VERBOSE ? ', verbose logging on' : '')); logPlatform(); });
+}).listen(PORT, '0.0.0.0', function () { log('TV-Store service on port ' + PORT + ', node ' + process.version + ' ' + process.arch + ', this TV ' + ownIp() + ', data ' + DATA_DIR + (VERBOSE ? ', verbose logging on' : '')); logPlatform(); if (RELAY_CFG.enabled) { log('relay: enabled, starting on port ' + RELAY_CFG.port); startRelay(); } });
 
 module.exports.onStart = function () { log('service onStart'); };
 module.exports.onRequest = function () { log('service onRequest'); };
