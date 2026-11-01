@@ -4,6 +4,7 @@
  * Also the Tizen version the package asks for (#47): required_version on <tizen:application>,
  * api-version on <manifest>. A TV below it refuses the package with install failed[118, -19]
  * (118019 on a 2018 set, #44), so the service checks before the push.
+ * Also the privileges it asks for, and whether any of them needs a Partner certificate (#50).
  * The catalog gives these for its own files; an uploaded file has only itself. Pure, file-based,
  * on the zip reader the signer uses. ES5 for the TV's Node 4.4.3. */
 'use strict';
@@ -20,17 +21,44 @@ function text(xml, tag) {
     return m ? m[1].trim() : '';
 }
 
-// The ids in a manifest's XML: { kind, appId, packageId, version, name, requiredVersion }. Missing ones are ''.
+// Privileges a Public certificate does not grant (#50). Tizen ignores a privilege the signing
+// certificate does not cover, so a package that asks for one of these installs fine when signed
+// Public and then fails at the call: DRM playback, Samsung sign-in, a VPN, killing other apps.
+// Samsung's own list is longer and changes per platform; this is the part a sideloaded TV app
+// is known to use. A match makes Partner the first choice when the TV holds one, never a block:
+// the catalog (cert_level) is what says an app cannot do without it.
+var PARTNER_PRIVILEGES = [
+    'http://developer.samsung.com/privilege/drminfo', 'http://developer.samsung.com/privilege/drmplay',
+    'http://developer.samsung.com/privilege/sso.partner', 'http://developer.samsung.com/privilege/tvinputdevice.admin',
+    'http://tizen.org/privilege/vpnservice', 'http://tizen.org/privilege/vpnservice.admin',
+    'http://tizen.org/privilege/appmanager.kill', 'http://tizen.org/privilege/appmanager.certificate',
+    'http://tizen.org/privilege/packagemanager.install', 'http://tizen.org/privilege/packagemanager.admin',
+    'http://tizen.org/privilege/packagemanager.clearcache', 'http://tizen.org/privilege/systemsettings.admin',
+    'http://tizen.org/privilege/systemmanager', 'http://tizen.org/privilege/keymanager.admin',
+    'http://tizen.org/privilege/bluetooth.admin', 'http://tizen.org/privilege/bluetoothmanager',
+    'http://tizen.org/privilege/telephony.admin', 'http://tizen.org/privilege/datasharing', 'http://tizen.org/privilege/externalstorage'
+];
+// Every privilege the manifest names: <tizen:privilege name="..."/> in a .wgt, <privilege>...</privilege> in a .tpk.
+function privileges(kind, xml) {
+    var out = [], re = kind === 'wgt' ? /<tizen:privilege\b[^>]*\bname\s*=\s*"([^"]*)"/gi : /<privilege\b[^>]*>([^<]*)<\/privilege>/gi, m;
+    while ((m = re.exec(xml)) !== null) { var v = m[1].trim(); if (v && out.indexOf(v) < 0) out.push(v); }
+    return out;
+}
+function needsPartner(privs) { return (privs || []).some(function (p) { return PARTNER_PRIVILEGES.indexOf(p) >= 0; }); }
+
+// The ids in a manifest's XML: { kind, appId, packageId, version, name, requiredVersion,
+// privileges, partner }. Missing ones are ''; partner: a privilege needs a Partner certificate.
 function parse(kind, xml) {
+    var privs = privileges(kind, xml), partner = needsPartner(privs);
     if (kind === 'wgt') {
         var pkg = attr(xml, 'tizen:application', 'package');
         return { kind: kind, appId: attr(xml, 'tizen:application', 'id'), packageId: pkg, version: attr(xml, 'widget', 'version'), name: text(xml, 'name'),
-                 requiredVersion: attr(xml, 'tizen:application', 'required_version') };
+                 requiredVersion: attr(xml, 'tizen:application', 'required_version'), privileges: privs, partner: partner };
     }
     var p = attr(xml, 'manifest', 'package');
     var appId = attr(xml, 'ui-application', 'appid') || attr(xml, 'service-application', 'appid') || attr(xml, 'widget-application', 'appid') || attr(xml, 'watch-application', 'appid');
     return { kind: kind, appId: appId, packageId: p, version: attr(xml, 'manifest', 'version'), name: text(xml, 'label'),
-             requiredVersion: attr(xml, 'manifest', 'api-version') };
+             requiredVersion: attr(xml, 'manifest', 'api-version'), privileges: privs, partner: partner };
 }
 
 // True when a package that asks for Tizen `required` ("6.0") cannot run on a TV at `tv` ("4.0").
@@ -68,4 +96,4 @@ function read(file, cb) {
     });
 }
 
-module.exports = { read: read, parse: parse, needsNewer: needsNewer };
+module.exports = { read: read, parse: parse, needsNewer: needsNewer, needsPartner: needsPartner, PARTNER_PRIVILEGES: PARTNER_PRIVILEGES };

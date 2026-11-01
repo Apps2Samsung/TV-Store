@@ -51,6 +51,27 @@ TV matches does TV-Store offer to remove the old copy and install again; the app
 sign-ins on the TV go with the old copy, which is why it asks first. The arming device's profiles
 are listed under Settings.
 
+## Public or Partner certificate
+
+Apps2Samsung signs with a Public certificate unless an app needs a Partner one (restricted rights:
+DRM playback, Samsung sign-in, a VPN; SushyDev's YouTube for Tizen is one). A TV armed from a
+device that has both profiles holds both, and TV-Store tells them apart by the Samsung CA that
+issued the distributor certificate (the chain the phone or PC hands over), so a TV armed before
+0.3.13 knows its levels too; Settings lists each certificate with its level (#50).
+
+- An app the catalog marks `cert_level: partner` carries a **Partner certificate** badge and is
+  signed Partner by itself. When the TV holds no Partner certificate its Install button is off and
+  the sheet says how to get one: in Apps2Samsung, set the signing certificate to Partner and
+  install any app once, so it creates one, then press Arm TV-Store again.
+- Any other package whose manifest asks for a partner-level privilege is signed Partner when the
+  TV holds one, Public otherwise (those parts of the app then do not work). A file sent in from a
+  browser gets the same, and its sheet says so.
+- When the TV holds both, the app sheet has **Sign with**: Automatic, Public or Partner, remembered
+  per package.
+- A package the TV already has keeps the certificate it was installed with, as above. Switching it
+  from Public to Partner is a certificate mismatch, and the install screen offers to remove the old
+  copy and install it again.
+
 ## How it works
 
 A Samsung TV only installs sideloaded packages through its developer connection (`sdbd`), the
@@ -138,9 +159,9 @@ The header counts what the switches hide ("12 apps · 3 hidden").
 - `tizen-app/service/signer.js`: the package signer
 - `tizen-app/service/catalog.js` + `catalog-key.js`: the signed catalog check and its public key
 - `tizen-app/service/compat.js`: buffers that work on the TV's Node 4.4.3
-- `tizen-app/service/manifest.js`: the ids and the required Tizen version a package carries in its own manifest
+- `tizen-app/service/manifest.js`: the ids, the required Tizen version and the privileges a package carries in its own manifest
 - `tizen-app/service/refusal.js`: what the TV's `install failed[...]` codes mean and what TV-Store offers for each
-- `tizen-app/service/certs.js`: the signing profiles handed over, which one each package took, the order to try
+- `tizen-app/service/certs.js`: the signing profiles handed over, their Public or Partner level, which one each package took, the order to try
 - `tizen-app/js/app.js`: the UI, and `window.A2SStore`, which Apps2Samsung calls to arm the TV
 - `tizen-app/js/qrcode.js`: QR codes for the log address and the Ko-fi link ([qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 1.4.4, MIT)
 - `test/`: a fake `sdbd` plus signer and transport tests
@@ -166,8 +187,11 @@ node test/sign.test.js      # the signer, with a certificate chain
 node --expose-gc test/stream-sign.test.js  # the file-to-file signer on a 24 MB package
 node test/bundle.test.js    # the bundled service starts however the platform loads it
 node test/catalog.test.js   # the signed catalog: signature, age, hashes
-node test/manifest.test.js  # the ids of a .wgt / .tpk from its manifest
+node test/manifest.test.js  # the ids and privileges of a .wgt / .tpk from its manifest
 node test/upload.test.js    # send a file to the service, see it wait, token gate, discard
+node test/certs.test.js     # the profiles handed over: merge, order per package, Public or Partner level
+node test/install.test.js   # a certificate mismatch is retried with the next profile; replace
+node test/certlevel.test.js # Public or Partner per install: refused up front, picked by privilege, chosen by hand
 ```
 
 Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching the version in
@@ -180,7 +204,7 @@ Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching 
 | Install through the TV's own `sdbd` | proven on a retail set |
 | Signing on the TV | done, identical output to the Apps2Samsung signer |
 | Arming from Apps2Samsung (phone, PC, CLI) | done |
-| The screens above | built (0.3.4); pins, developer search, your own .wgt or .tpk (0.3.10); finds itself under a renamed package id and sends you to Apps2Samsung to update it (0.3.11) |
+| The screens above | built (0.3.4); pins, developer search, your own .wgt or .tpk (0.3.10); finds itself under a renamed package id and sends you to Apps2Samsung to update it (0.3.11); Public or Partner certificate per app (0.3.13) |
 | First real install from the TV | done, 2019 Tizen 5.0 set (0.3.4) |
 | Tizen 3.0 and 4.0 sets (2017, 2018) | untested |
 | Tizen 10 sets (2025) | done, retail set (0.3.9) |
