@@ -37,7 +37,7 @@ colours, big tiles for a couch.
 3. On the TV, set Developer Mode's **Host PC IP** to the TV's own address (TV-Store shows it), or
    to `127.0.0.1`. Either one works; `127.0.0.1` is what a rooted TV is pinned to.
 4. Pick an app in TV-Store and press OK. It installs into the Apps row; no phone or PC needed from
-   here on. Set Host PC IP back to your phone or PC whenever you want to use Apps2Samsung again.
+   here on. To keep using Apps2Samsung from a phone or PC as well, turn on **Connect from Apps2Samsung** under Settings (below) instead of setting Host PC IP back.
 
 ## Apps installed from a phone or PC
 
@@ -138,6 +138,17 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
 - **Verbose logging**: off by default. Adds much more detail to the log: the sdb traffic, HTTP
   requests, the TV's network addresses and how long each install step took. Turn it on for a bug
   report and off again afterwards.
+- **Connect from Apps2Samsung (sdb relay)**: off by default (#52). The TV's `sdbd` lets a
+  connection in only from the address Developer Mode's Host PC IP names, so with Host PC IP at
+  `127.0.0.1` (what TV-Store and a rooted TV want) no phone or PC can reach it. With this on,
+  TV-Store's service holds port 26201 open on the TV and hands every connection to `sdbd` over
+  loopback; `sdbd` then sees `127.0.0.1` and accepts, whatever the client's address. Set Host PC
+  IP to `127.0.0.1` once, restart the TV, and Apps2Samsung 3.2 or newer connects to the TV from
+  any phone or PC by itself (it reads the Host PC IP from the TV and dials the relay instead of
+  26101). The switch says the address. While it is on, any device in your network can install
+  through that port; the service also takes a client allow list (`POST /settings { relay: { allow:
+  [...] } }`), not yet on this screen. This switch lives in the service, not in the page's
+  settings, so `/ping` reports it (`relay: { enabled, listening, port, sessions, allow, error }`).
 
 The header counts what the switches hide ("12 apps · 3 hidden").
 
@@ -217,7 +228,8 @@ Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching 
 | Install through the TV's own `sdbd` | proven on a retail set |
 | Signing on the TV | done, identical output to the Apps2Samsung signer |
 | Arming from Apps2Samsung (phone, PC, CLI) | done |
-| The screens above | built (0.3.4); pins, developer search, your own .wgt or .tpk (0.3.10); finds itself under a renamed package id and sends you to Apps2Samsung to update it (0.3.11); Public or Partner certificate per app (0.3.13) |
+| The screens above | built (0.3.4); pins, developer search, your own .wgt or .tpk (0.3.10); finds itself under a renamed package id and sends you to Apps2Samsung to update it (0.3.11); Public or Partner certificate per app (0.3.13); the sdb relay switch (0.3.14) |
 | First real install from the TV | done, 2019 Tizen 5.0 set (0.3.4) |
 | Tizen 3.0 and 4.0 sets (2017, 2018) | untested |
 | Tizen 10 sets (2025) | done, retail set (0.3.9) |
+| Host PC IP `127.0.0.1`: TV-Store installs over loopback, Apps2Samsung through the relay | built and proven against a fake `sdbd` (0.3.14); not yet tried on a real set |
