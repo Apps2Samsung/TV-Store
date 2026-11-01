@@ -11,7 +11,15 @@ function frame(c,a0,a1,p){p=p||Buf.alloc(0);var h=Buf.alloc(24);h.writeUInt32LE(
 function start(port, opts, onReady) {
     opts = opts || {};
     var received = {};   // remotePath -> Buffer (what the client pushed)
+    var handle = { received: received, drops: 0 };   // drops: connections turned away by the Host-PC-IP gate
     var srv = net.createServer(function (sock) {
+        // Real sdbd accepts a TCP connection only on the address Developer Mode's Host PC IP names;
+        // a connection to any other local address is accepted then dropped before CNXN (#52). With
+        // opts.hostPcIp set, the fake does the same, keyed by the address the client connected to.
+        if (opts.hostPcIp) {
+            var la = String(sock.localAddress || '').replace(/^::ffff:/, '');
+            if (la !== opts.hostPcIp) { handle.drops++; sock.once('data', function () { try { sock.destroy(); } catch (e) {} }); return; }
+        }
         var connected = false, buf = Buf.alloc(0), nextRemote = 1000;
         var chans = {};  // remoteId -> {clientId, service, syncBuf, syncState}
         function send(c,a0,a1,p){ sock.write(frame(c,a0,a1,p)); }
@@ -68,6 +76,6 @@ function start(port, opts, onReady) {
             }
         }
     });
-    srv.listen(port, '127.0.0.1', function () { onReady({ server: srv, received: received }); });
+    srv.listen(port, opts.bind || '127.0.0.1', function () { handle.server = srv; onReady(handle); });
 }
 module.exports = { start: start };

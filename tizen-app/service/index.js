@@ -21,6 +21,7 @@ var CATALOG_KEY = require('./catalog-key.js');
 var manifest = require('./manifest.js');
 var refusals = require('./refusal.js');
 var certs = require('./certs.js');
+var sdbhosts = require('./sdbhosts.js');
 
 var PORT = 8077;
 // sdbd's port; a test points the service at a fake sdbd (test/install.test.js).
@@ -310,10 +311,9 @@ function tizenGate(entry) {
 // (0 vd_appuninstall, the verb the heads use), on its own connection; a refusal is logged and the
 // install goes ahead anyway, so the TV's own answer is what the user sees.
 function removeOld(entry, cb) {
-    var ip = ownIp();
-    if (!entry.replace || !entry.packageId || !ip) return cb();
+    if (!entry.replace || !entry.packageId) return cb();
     log('install: removing the old copy of ' + entry.packageId + ' first (installed with another certificate)');
-    connectSdb([ip, '127.0.0.1'], function (err, c) {
+    connectSdb(sdbHosts(), function (err, c) {
         if (err) { log('install: could not remove the old copy: ' + err.message); return cb(); }
         c.shell('0 vd_appuninstall ' + entry.packageId, function (err, out) {
             c.end();
@@ -323,31 +323,39 @@ function removeOld(entry, cb) {
     });
 }
 
-// sdbd on this TV, at the first address that completes the handshake. The LAN IP is what Developer
-// Mode's Host PC IP lets in; loopback is a fallback for a Host PC IP of 127.0.0.1.
-// When none gets in, the error says what to change on the TV instead of the socket error (#26).
+// sdbd on this TV, at the first address that completes the handshake (#26, #52). Developer Mode's
+// Host PC IP lets a connection in only on the address it names, which is either the TV's own LAN IP
+// or 127.0.0.1 (a rooted TV is pinned there), so both are tried and whichever answers is kept and
+// tried first next time (SDB_WORKED). When none gets in, the error says what to change on the TV
+// instead of the socket error.
+var SDB_WORKED = null;
+function sdbHosts() { return sdbhosts.order(ownIp(), SDB_WORKED); }
 function connectSdb(hosts, cb, i, seen) {
     i = i || 0; seen = seen || [];
     var c = new sdb.SdbClient(hosts[i], SDB_PORT);
     c.trace = VERBOSE ? function (m) { logv('sdb ' + hosts[i] + ': ' + m); } : null;
     c.connect(function (err) {
-        if (!err) { log('install: sdb connected to ' + hosts[i] + ', first frame ' + c.firstFrame); return cb(null, c); }
+        if (!err) { SDB_WORKED = hosts[i]; log('install: sdb connected to ' + hosts[i] + ', first frame ' + c.firstFrame); return cb(null, c); }
         c.end();
         log('install: ' + err.message);
         seen.push({ code: err.code, frame: c.firstFrame });
         if (i + 1 < hosts.length) return connectSdb(hosts, cb, i + 1, seen);
-        cb(sdbAdvice(err, seen, hosts[0]));
+        SDB_WORKED = null;   // the remembered address stopped answering; relearn next time
+        cb(sdbAdvice(err, seen));
     });
 }
 
 // What the user can do about a failed sdb connection. A refused connection means sdbd is not
 // listening: Developer Mode is off. One that sdbd accepts and drops without a word is what a caller
-// other than the Host PC IP gets (the Tizen 10 report in #26, Host PC IP was 127.0.0.1).
-function sdbAdvice(err, seen, ip) {
+// the Host PC IP does not name gets (#26). Both the TV's own IP and 127.0.0.1 are tried (#52), so a
+// drop on every address means Host PC IP points somewhere else (a phone or PC).
+function sdbAdvice(err, seen) {
+    var ip = ownIp();
+    var either = 'this TV\u2019s own IP' + (ip ? ' (' + ip + ')' : '') + ' or 127.0.0.1';
     if (seen.every(function (s) { return s.code === 'ECONNREFUSED'; }))
-        return coded('DEV_MODE_OFF', 'Developer Mode is off on this TV. Turn it on (Apps, then 1 2 3 4 5) with Host PC IP ' + ip + ', restart the TV and try again.');
+        return coded('DEV_MODE_OFF', 'Developer Mode is off on this TV. Turn it on (Apps, then 1 2 3 4 5) with Host PC IP set to ' + either + ', restart the TV and try again.');
     if (seen.some(function (s) { return !s.frame && /^(ECONNRESET|EPIPE|SDB_CLOSED)$/.test(s.code || ''); }))
-        return coded('HOST_PC_IP', 'The TV turned the install away. In Developer Mode (Apps, then 1 2 3 4 5), Host PC IP must be this TV\u2019s own IP, ' + ip + ', not 127.0.0.1 or a phone or PC. Change it, restart the TV and try again.');
+        return coded('HOST_PC_IP', 'The TV turned the install away. In Developer Mode (Apps, then 1 2 3 4 5), Host PC IP must be ' + either + ', not a phone or PC. Change it, restart the TV and try again.');
     return err;
 }
 
@@ -361,8 +369,6 @@ function sdbAdvice(err, seen, ip) {
 function signAndInstall(entry, remoteName, inFile, outFile, cb) {
     var tries = certs.order(loadCerts(), entry.packageId ? certByPackage()[entry.packageId] : null), tried = [], i = 0, mismatch = null;
     if (!tries.length) { var none = coded('NO_CERT', 'No signing certificate available on this TV yet (#844 cert hand-over).'); log('install: ' + none.message); return cb(none); }
-    var ip = ownIp();
-    if (!ip) return cb(new Error('could not determine this TV’s own IP'));
     function finish(err, r) { try { fs.unlinkSync(inFile); } catch (e) {} try { fs.unlinkSync(outFile); } catch (e) {} cb(err, r); }
     removeOld(entry, function () { (function attempt() {
         var cert = tries[i++], started = Date.now();
@@ -371,7 +377,7 @@ function signAndInstall(entry, remoteName, inFile, outFile, cb) {
             if (err) { log('install: ' + err.message); return tried.length > 1 ? finish(err) : cb(err); }
             var size = fs.statSync(outFile).size;
             log('install: signed with ' + certLabel(cert) + ' in ' + Math.round((Date.now() - started) / 1000) + ' s, ' + size + ' bytes');
-            connectSdb([ip, '127.0.0.1'], function (err, c) {
+            connectSdb(sdbHosts(), function (err, c) {
                 if (err) return finish(err);
                 var remote = STAGING + '/' + remoteName, fd;
                 try { fd = fs.openSync(outFile, 'r'); } catch (e) { c.end(); return finish(e); }
