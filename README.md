@@ -34,7 +34,8 @@ colours, big tiles for a couch.
    to your phone or PC as usual.
 2. In Apps2Samsung, open the TV's **Toolbox** and press **Arm TV-Store**. That hands every signing
    certificate on that phone or PC to the TV once. The TV-Store screen turns green by itself.
-3. On the TV, set Developer Mode's **Host PC IP** to the TV's own address (TV-Store shows it).
+3. On the TV, set Developer Mode's **Host PC IP** to the TV's own address (TV-Store shows it), or
+   to `127.0.0.1`. Either one works; `127.0.0.1` is what a rooted TV is pinned to.
 4. Pick an app in TV-Store and press OK. It installs into the Apps row; no phone or PC needed from
    here on. Set Host PC IP back to your phone or PC whenever you want to use Apps2Samsung again.
 
@@ -87,7 +88,9 @@ trusts the content instead: the catalog (`resolved.json.signed`) is signed by th
 catalog workflow and checked against the key built into TV-Store, and a package installs only when
 its hash matches that catalog.
 
-For that, Developer Mode's **Host PC IP** on the TV must be set to the TV's own address.
+For that, Developer Mode's **Host PC IP** on the TV must be set to the TV's own address or to
+`127.0.0.1`. TV-Store tries both and uses whichever the TV lets in, so a rooted TV (pinned at
+`127.0.0.1`) installs too.
 
 The screen talks to the service over HTTP on port 8077. Apps2Samsung writes the TV's own IP into
 TV-Store when it installs it, because Tizen 10 may not let a page reach its service over
@@ -156,6 +159,7 @@ The header counts what the switches hide ("12 apps · 3 hidden").
   `service/` as one file, bundled by `scripts/bundle-service.js` (Tizen 10 runs services in an embedded
   Node 20 and does not start split ones)
 - `tizen-app/service/sdb.js`: the SDB client (connect, push, install)
+- `tizen-app/service/sdbhosts.js`: the order to try sdbd on, the TV's own IP and 127.0.0.1 (#52)
 - `tizen-app/service/signer.js`: the package signer
 - `tizen-app/service/catalog.js` + `catalog-key.js`: the signed catalog check and its public key
 - `tizen-app/service/compat.js`: buffers that work on the TV's Node 4.4.3
@@ -173,8 +177,9 @@ Since 0.3.9 TV-Store runs on 2025+ sets (Tizen 9 and 10). Those sets start a web
 the `Service` class of the `wrt:service` module, so TV-Store starts its service that way there and
 as before on older sets.
 
-Set Host PC IP the same way as on any other TV: the TV's own address (shown in TV-Store), not
-`127.0.0.1`. With anything else the TV turns the install away, and TV-Store says so.
+Set Host PC IP the same way as on any other TV: the TV's own address (shown in TV-Store) or
+`127.0.0.1`. TV-Store tries both; only a Host PC IP pointing at a phone or PC turns the install
+away, and TV-Store says so.
 
 ## Build, test, release
 
@@ -192,6 +197,8 @@ node test/upload.test.js    # send a file to the service, see it wait, token gat
 node test/certs.test.js     # the profiles handed over: merge, order per package, Public or Partner level
 node test/install.test.js   # a certificate mismatch is retried with the next profile; replace
 node test/certlevel.test.js # Public or Partner per install: refused up front, picked by privilege, chosen by hand
+node test/sdbhosts.test.js  # the order of addresses to try sdbd on
+node test/sdb-loopback.test.js  # install works whether Host PC IP is the TV's own IP or 127.0.0.1
 ```
 
 Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching the version in

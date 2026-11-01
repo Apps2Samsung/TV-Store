@@ -649,7 +649,7 @@
                 + '<div class="step"><div class="num">3</div><div><b>Press Arm TV-Store</b><span>This screen turns green by itself. Nothing to type here.</span></div></div></div>'
                 + '<div class="waiting"><span class="spin"></span>Waiting for your phone or PC… you can browse the catalog meanwhile.</div></div>'
                 + '<div class="wside"><div class="eyebrow">Developer Mode</div><h2>Host PC IP: this TV</h2>'
-                + '<p>Once armed, set Host PC IP to the TV’s own address, ' + esc(ip) + ', in Apps › Developer Mode. TV-Store talks to the TV through that door. Arm first: your phone or PC needs it pointing at them until then.</p></div></div>';
+                + '<p>Once armed, set Host PC IP to the TV’s own address, ' + esc(ip) + ', or to 127.0.0.1, in Apps › Developer Mode. TV-Store talks to the TV through that door either way. Arm first: your phone or PC needs it pointing at them until then.</p></div></div>';
             h += section('all', 'Meanwhile, have a look around', apps, false, false);
             pageEl.innerHTML = h; return;
         }
