@@ -21,22 +21,24 @@ function text(xml, tag) {
     return m ? m[1].trim() : '';
 }
 
-// Privileges a Public certificate does not grant (#50). Tizen ignores a privilege the signing
-// certificate does not cover, so a package that asks for one of these installs fine when signed
-// Public and then fails at the call: DRM playback, Samsung sign-in, a VPN, killing other apps.
-// Samsung's own list is longer and changes per platform; this is the part a sideloaded TV app
-// is known to use. A match makes Partner the first choice when the TV holds one, never a block:
-// the catalog (cert_level) is what says an app cannot do without it.
+// Privileges a Partner certificate grants and a Public one does not (#50): Tizen's partner level,
+// which on a TV is a VPN, killing other apps or reading their certificates, the system manager,
+// Samsung partner sign-in and the TV input device admin. An app that asks for one of these installs
+// fine signed Public (Tizen ignores a privilege the certificate does not cover) and then fails at
+// the call. A match only makes Partner the first choice when the TV already holds one, never a
+// block; the catalog (cert_level) is what says an app cannot do without it.
+// The test is what a Partner certificate DOES cover, so two kinds stay out on purpose:
+// - Public-level ones that sound restricted: drmplay and drminfo (Samsung lists AVPlay's setDrm as
+//   Public), externalstorage, datasharing, bluetooth.admin. Every media app and emulator in the
+//   catalog declares the first three and runs Public; flagging them pushed working apps onto Partner.
+// - Platform-level ones (packagemanager.install/admin/clearcache, systemsettings.admin,
+//   keymanager.admin, bluetoothmanager, telephony.admin, vpnservice.admin): neither certificate a
+//   sideloading TV holds covers them, so preferring Partner would only bind the package to the
+//   Partner author (a later Public update is then a certificate mismatch) for nothing.
 var PARTNER_PRIVILEGES = [
-    'http://developer.samsung.com/privilege/drminfo', 'http://developer.samsung.com/privilege/drmplay',
     'http://developer.samsung.com/privilege/sso.partner', 'http://developer.samsung.com/privilege/tvinputdevice.admin',
-    'http://tizen.org/privilege/vpnservice', 'http://tizen.org/privilege/vpnservice.admin',
-    'http://tizen.org/privilege/appmanager.kill', 'http://tizen.org/privilege/appmanager.certificate',
-    'http://tizen.org/privilege/packagemanager.install', 'http://tizen.org/privilege/packagemanager.admin',
-    'http://tizen.org/privilege/packagemanager.clearcache', 'http://tizen.org/privilege/systemsettings.admin',
-    'http://tizen.org/privilege/systemmanager', 'http://tizen.org/privilege/keymanager.admin',
-    'http://tizen.org/privilege/bluetooth.admin', 'http://tizen.org/privilege/bluetoothmanager',
-    'http://tizen.org/privilege/telephony.admin', 'http://tizen.org/privilege/datasharing', 'http://tizen.org/privilege/externalstorage'
+    'http://tizen.org/privilege/vpnservice', 'http://tizen.org/privilege/appmanager.kill',
+    'http://tizen.org/privilege/appmanager.certificate', 'http://tizen.org/privilege/systemmanager'
 ];
 // Every privilege the manifest names: <tizen:privilege name="..."/> in a .wgt, <privilege>...</privilege> in a .tpk.
 function privileges(kind, xml) {
