@@ -1,8 +1,9 @@
 /* Public or Partner per install (#50), against the real service and a fake sdbd. A Public-only
  * TV: asking for Partner is refused up front (NEEDS_PARTNER, nothing pushed, the upload keeps
- * waiting), a package with a partner-level privilege installs Public. Then a Partner profile is
- * handed over as well: a new package with such a privilege is signed Partner by itself, one the
- * TV already took Public keeps Public, Sign with: Partner on it is a certificate mismatch that is
+ * waiting), a package with a partner-level privilege (a VPN) installs Public. Then a Partner profile
+ * is handed over as well: a new package with such a privilege is signed Partner by itself, one that
+ * only asks for DRM playback and external storage (Public-level on a TV) stays Public, one the TV
+ * already took Public keeps Public, Sign with: Partner on it is a certificate mismatch that is
  * not retried with Public (replace fixes it), and Sign with: Public holds. /ping and /cert name
  * the level of each profile. Same harness as install.test.js. */
 'use strict';
@@ -23,8 +24,9 @@ function wgt(pkgId, privs) {
             + (privs || []).map(function (p) { return '<tizen:privilege name="' + p + '"/>'; }).join('') + '</widget>') }]);
 }
 var PLAIN = wgt('A2SProbe01', ['http://tizen.org/privilege/internet']);
-var DRM1 = wgt('A2SProbeD1', ['http://tizen.org/privilege/internet', 'http://tizen.org/privilege/vpnservice']);
-var DRM2 = wgt('A2SProbeD2', ['http://tizen.org/privilege/vpnservice']);
+var VPN1 = wgt('A2SProbeV1', ['http://tizen.org/privilege/internet', 'http://tizen.org/privilege/vpnservice']);
+var VPN2 = wgt('A2SProbeV2', ['http://tizen.org/privilege/vpnservice']);
+var MEDIA = wgt('A2SProbeM1', ['http://tizen.org/privilege/internet', 'http://developer.samsung.com/privilege/drmplay', 'http://developer.samsung.com/privilege/drminfo', 'http://tizen.org/privilege/externalstorage']);
 
 function reply(pkgId, failed) {
     return failed ? 'install ' + pkgId + '.Probe package_path /x was_install_app return WAS_TRUE app_id[' + pkgId + '.Probe] install start installing[7] app_id[' + pkgId + '.Probe] install failed[118, -12], reason: Check certificate error : :Package with the same id and different certificate has been already installed.:<-12>\n'
@@ -93,8 +95,8 @@ function run() {
                 if (calls.length) fail('nothing may reach sdbd: ' + JSON.stringify(calls));
                 call('GET', '/uploads', null, function (e, code, j) {
                     if (!j.pending || j.pending.id !== up.id) fail('the upload must keep waiting after NEEDS_PARTNER: ' + JSON.stringify(j));
-                    // 2. A package with a partner-level privilege: the upload says so; with no Partner profile it installs Public.
-                    installUpload(DRM1, {}, function (j, calls, up) {
+                    // 2. A package with a partner-level privilege (a VPN): the upload says so; with no Partner profile it installs Public.
+                    installUpload(VPN1, {}, function (j, calls, up) {
                         if (up.ids.partner !== true || up.ids.privileges.indexOf('http://tizen.org/privilege/vpnservice') < 0) fail('the upload must carry the privileges: ' + JSON.stringify(up.ids));
                         if (!j.ok || j.result.certificate !== 'PC - Public' || j.result.level !== 'public' || installs(calls) !== 1) fail('Public-only TV installs a partner-privilege package Public: ' + JSON.stringify(j));
                         bothLevels();
@@ -112,13 +114,22 @@ function bothLevels() {
         // 3. A plain package: Public, the head's first choice.
         installUpload(PLAIN, {}, function (j, calls) {
             if (!j.ok || j.result.level !== 'public' || installs(calls) !== 1) fail('plain package stays Public: ' + JSON.stringify(j));
-            // 4. A new package with a partner-level privilege: Partner by itself.
-            installUpload(DRM2, {}, function (j, calls) {
+            // 4. A new package with a partner-level privilege (a VPN): Partner by itself.
+            installUpload(VPN2, {}, function (j, calls) {
                 if (!j.ok || j.result.certificate !== 'PC - Partner' || j.result.level !== 'partner' || installs(calls) !== 1) fail('partner privilege picks Partner: ' + JSON.stringify(j));
                 logs(function (text) {
                     if (!/signing with a Partner certificate: the package asks for partner-level privileges/.test(text)) fail('the log must say why:\n' + text);
+                    // 4b. A package that only asks for DRM playback and external storage stays Public although the TV
+                    //     holds Partner: those are Public-level on a TV, so the sniff must not flag them (#50 follow-up).
+                    installUpload(MEDIA, {}, function (j, calls, up) {
+                        if (up.ids.partner !== false) fail('drmplay/drminfo/externalstorage must not read as partner-level: ' + JSON.stringify(up.ids));
+                        if (!j.ok || j.result.certificate !== 'PC - Public' || j.result.level !== 'public' || installs(calls) !== 1) fail('a DRM-only package stays Public on a two-level TV: ' + JSON.stringify(j));
+                        step5();
+                    });
+                });
+                function step5() {
                     // 5. The package the TV took Public before keeps Public, privilege or not (an update must match the author).
-                    installUpload(DRM1, {}, function (j, calls) {
+                    installUpload(VPN1, {}, function (j, calls) {
                         if (!j.ok || j.result.level !== 'public' || installs(calls) !== 1) fail('a package installed Public before keeps Public: ' + JSON.stringify(j));
                         // 6. Sign with: Partner on a package installed Public: the TV refuses the Partner author, and
                         // Public is not tried instead; the answer says to remove the old copy.
@@ -139,11 +150,11 @@ function bothLevels() {
                                     installUpload(PLAIN, { certLevel: 'public' }, function (j, calls) {
                                         if (!j.ok || j.result.level !== 'public' || installs(calls) !== 1) fail('public wished: ' + JSON.stringify(j));
                                         // 10. A choice the service does not know is Automatic.
-                                        installUpload(DRM2, { certLevel: 'platform' }, function (j, calls) {
+                                        installUpload(VPN2, { certLevel: 'platform' }, function (j, calls) {
                                             if (!j.ok || j.result.level !== 'partner' || installs(calls) !== 1) fail('unknown choice is automatic: ' + JSON.stringify(j));
                                             stop();
                                             try { fs.readdirSync(dir).forEach(function (f) { fs.unlinkSync(path.join(dir, f)); }); fs.rmdirSync(dir); } catch (e) {}
-                                            console.log('PASS: Partner refused up front on a Public-only TV, a partner privilege picks Partner when there is one, a remembered profile holds, Sign with: Partner is a mismatch fixed by replace, Sign with: Public holds, levels on /ping and /cert');
+                                            console.log('PASS: Partner refused up front on a Public-only TV, a partner privilege picks Partner when there is one, DRM-only stays Public, a remembered profile holds, Sign with: Partner is a mismatch fixed by replace, Sign with: Public holds, levels on /ping and /cert');
                                             process.exit(0);
                                         });
                                     });
@@ -151,7 +162,7 @@ function bothLevels() {
                             });
                         });
                     });
-                });
+                }
             });
         });
     });

@@ -54,8 +54,8 @@ are listed under Settings.
 
 ## Public or Partner certificate
 
-Apps2Samsung signs with a Public certificate unless an app needs a Partner one (restricted rights a
-Public certificate cannot cover: a VPN, managing other packages, Samsung partner sign-in; or a hook
+Apps2Samsung signs with a Public certificate unless an app needs a Partner one (partner-level rights
+a Public certificate does not cover: a VPN, Samsung partner sign-in, killing other apps; or a hook
 into a Samsung native package, as in SushyDev's YouTube for Tizen). A TV armed from a
 device that has both profiles holds both, and TV-Store tells them apart by the Samsung CA that
 issued the distributor certificate (the chain the phone or PC hands over), so a TV armed before
@@ -65,10 +65,12 @@ issued the distributor certificate (the chain the phone or PC hands over), so a 
   signed Partner by itself. When the TV holds no Partner certificate its Install button is off and
   the sheet says how to get one: in Apps2Samsung, set the signing certificate to Partner and
   install any app once, so it creates one, then press Arm TV-Store again.
-- Any other package whose manifest asks for a partner-level privilege (a VPN, package management,
-  system settings) is signed Partner when the TV holds one, Public otherwise (those parts of the app
-  then do not work). A file sent in from a browser gets the same, and its sheet says so. DRM playback
-  and external storage are not partner-level on a TV, so apps that only use those stay Public.
+- Any other package whose manifest asks for a partner-level privilege (a VPN, Samsung partner
+  sign-in, killing other apps) is signed Partner when the TV holds one, Public otherwise (those parts
+  of the app then do not work). A file sent in from a browser gets the same, and its sheet says so.
+  DRM playback and external storage are Public-level on a TV (Samsung lists AVPlay's DRM call as
+  Public), so apps that only use those stay Public; should DRM still fail for one, **Sign with**
+  below lets you pick Partner for it.
 - When the TV holds both, the app sheet has **Sign with**: Automatic, Public or Partner, remembered
   per package.
 - A package the TV already has keeps the certificate it was installed with, as above. Switching it
