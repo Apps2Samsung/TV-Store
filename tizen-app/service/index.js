@@ -26,12 +26,21 @@ var sdbhosts = require('./sdbhosts.js');
 
 var PORT = 8077;
 // sdbd's port; a test points the service at a fake sdbd (test/install.test.js).
-var SDB_PORT = parseInt(process.env.A2S_SDB_PORT || '', 10) || 26101;
-// The on-TV sdb relay listens here (TV-Store#52). Default 26201; env override for a test.
-var RELAY_PORT_DEFAULT = 26201;
 function validPort(n) { return typeof n === 'number' && isFinite(n) && n === Math.floor(n) && n >= 1 && n <= 65535; }
 function parsePort(v, dflt) { var n = parseInt(v, 10); return validPort(n) ? n : dflt; }
-var RELAY_PORT = parsePort(process.env.A2S_RELAY_PORT, RELAY_PORT_DEFAULT);
+var SDB_PORT = parsePort(process.env.A2S_SDB_PORT, 26101);
+// The on-TV sdb relay listens here (TV-Store#52). Default 26201; env override for a test.
+var RELAY_PORT_DEFAULT = 26201;
+// Why a port will not do for the relay, or null when it will. A bad port used to be saved and then
+// fail to bind on every boot with nothing but a log line, so Settings refuses it up front instead.
+function relayPortProblem(n) {
+    if (!validPort(n) || n < 1024) return 'the relay port must be a number from 1024 to 65535';
+    if (n === PORT) return 'port ' + n + ' is TV-Store\'s own';
+    if (n === SDB_PORT) return 'port ' + n + ' is sdbd\'s own';
+    return null;
+}
+function parseRelayPort(v, dflt) { var n = parseInt(v, 10); return relayPortProblem(n) ? dflt : n; }
+var RELAY_PORT = parseRelayPort(process.env.A2S_RELAY_PORT, RELAY_PORT_DEFAULT);
 // Signed by the Apps2Samsung catalog workflow; see catalog.js for why the content is checked
 // instead of the connection.
 var CATALOG_URL = 'https://apps2samsung.com/catalog/resolved.json.signed';
@@ -108,7 +117,7 @@ try {
         var rc = JSON.parse(fs.readFileSync(RELAY_FILE, 'utf8'));
         if (rc && typeof rc === 'object') {
             RELAY_CFG.enabled = !!rc.enabled;
-            RELAY_CFG.port = parsePort(rc.port, RELAY_PORT);
+            RELAY_CFG.port = parseRelayPort(rc.port, RELAY_PORT);
             RELAY_CFG.allow = relayMod.normList(rc.allow);
         }
     }
@@ -119,9 +128,9 @@ function saveRelayCfg() {
     try { fs.writeFileSync(RELAY_FILE, JSON.stringify(RELAY_CFG)); }
     catch (e) { log('relay: cannot save settings: ' + e.message); }
 }
-function startRelay() {
+function startRelay(cb) {
     relay.setAllow(RELAY_CFG.allow);
-    relay.start(RELAY_CFG.port, function (err) { if (err) log('relay: not started: ' + err.message); });
+    relay.start(RELAY_CFG.port, function (err) { if (err) log('relay: not started: ' + err.message); if (cb) cb(err); });
 }
 function relayStatus() {
     var s = relay.status();
@@ -129,18 +138,40 @@ function relayStatus() {
     s.configuredPort = RELAY_CFG.port;
     return s;
 }
-// Apply { enabled?, port?, allow? } from Settings: persist, then restart the listener to match.
-function applyRelaySettings(r) {
+// Apply { enabled?, port?, allow? } from Settings (already validated): persist, then make the listener
+// match. The listener is only restarted when enabled or the port changed, since a restart drops every
+// live session (a PC mid-install through the relay); the allow list is read per connection, so it
+// takes effect without one. Saving the same settings again while enabled retries a failed bind.
+// cb(status) runs once the listener is up or has failed, so the answer says which.
+function applyRelaySettings(r, cb) {
+    var was = { enabled: RELAY_CFG.enabled, port: RELAY_CFG.port };
     if (typeof r.enabled === 'boolean') RELAY_CFG.enabled = r.enabled;
-    if (r.port !== undefined) RELAY_CFG.port = parsePort(r.port, RELAY_CFG.port);
+    if (r.port !== undefined) RELAY_CFG.port = r.port;
     if (r.allow !== undefined) RELAY_CFG.allow = relayMod.normList(r.allow);
     saveRelayCfg();
-    relay.stop();
-    if (RELAY_CFG.enabled) startRelay();
-    log('relay: ' + (RELAY_CFG.enabled
-        ? 'enabled on port ' + RELAY_CFG.port + (RELAY_CFG.allow.length ? ', allow ' + RELAY_CFG.allow.join(', ') : ', any LAN client')
-        : 'disabled'));
-    return relayStatus();
+    relay.setAllow(RELAY_CFG.allow);
+    var changed = RELAY_CFG.enabled !== was.enabled || RELAY_CFG.port !== was.port;
+    if (changed) {
+        relay.stop();
+        log('relay: ' + (RELAY_CFG.enabled ? 'enabled on port ' + RELAY_CFG.port : 'disabled'));
+    }
+    if (r.allow !== undefined) log('relay: allow ' + (RELAY_CFG.allow.length ? RELAY_CFG.allow.join(', ') : 'any LAN client'));
+    if (RELAY_CFG.enabled) return startRelay(function () { cb(relayStatus()); });
+    cb(relayStatus());
+}
+// A /settings relay block checked before anything is applied: an error string, or null when it is
+// fine; a port given as a string is turned into the number.
+function relaySettingsProblem(r) {
+    if (!r || typeof r !== 'object' || Array.isArray(r)) return 'relay must be an object { enabled, port, allow }';
+    if (r.enabled !== undefined && typeof r.enabled !== 'boolean') return 'relay.enabled must be true or false';
+    if (r.port !== undefined) {
+        var n = typeof r.port === 'number' ? r.port : parseInt(String(r.port), 10);
+        var why = relayPortProblem(n);
+        if (why) return why;
+        r.port = n;
+    }
+    if (r.allow !== undefined && r.allow !== null && typeof r.allow !== 'string' && !Array.isArray(r.allow)) return 'relay.allow must be a list of IPs or a comma string';
+    return null;
 }
 // Uploads (#30): a .wgt or .tpk that anyone in the network sends to http://<TV IP>:8077/upload
 // waits here, one at a time, until the person at the TV presses Install or Discard on the
@@ -163,7 +194,7 @@ function publicUpload() { return UPLOAD ? { id: UPLOAD.id, name: UPLOAD.name, si
 // PUT /upload?name=<file> with the package as the body, from a browser on the upload page.
 function receiveUpload(req, res) {
     var name = String(url.parse(req.url, true).query.name || '').replace(/^.*[\\\/]/, '').replace(/[^A-Za-z0-9._ -]/g, '_').trim();
-    var from = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+    var from = relayMod.peerIp(req.socket);
     function refuse(code, why) { req.resume(); json(res, code, { ok: false, error: why }); }
     if (!/\.(wgt|tpk)$/i.test(name)) return refuse(400, 'send a .wgt or .tpk file');
     if (!UPLOAD_FILE) return refuse(500, 'the service has no folder it can write to');
@@ -255,7 +286,7 @@ function ownAddresses() {
     return out;
 }
 function fromThisTv(req) {
-    var a = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+    var a = relayMod.peerIp(req.socket);
     return /^127\./.test(a) || ownAddresses().indexOf(a) >= 0;
 }
 
@@ -573,10 +604,11 @@ http.createServer(function (req, res) {
         certCount: haveCerts() ? loadCerts().certificates.length : 0, certNames: certs.names(loadCerts()), certificates: certs.summary(loadCerts()),
         certFile: CERT_FILE, certError: CERT_ERROR, node: process.version, verbose: VERBOSE, relay: relayStatus() });
     if (route === '/settings' && req.method === 'POST') return body(req, function (err, b) {
-        if (err || !b || (typeof b.verbose !== 'boolean' && !b.relay)) return json(res, 400, { ok: false, error: 'need { verbose: true|false } and/or { relay: { enabled, port, allow } }' });
+        if (err || !b || (typeof b.verbose !== 'boolean' && b.relay === undefined)) return json(res, 400, { ok: false, error: 'need { verbose: true|false } and/or { relay: { enabled, port, allow } }' });
+        if (b.relay !== undefined) { var why = relaySettingsProblem(b.relay); if (why) return json(res, 400, { ok: false, error: why }); }
         if (typeof b.verbose === 'boolean') setVerbose(b.verbose);
-        if (b.relay && typeof b.relay === 'object') applyRelaySettings(b.relay);
-        json(res, 200, { ok: true, verbose: VERBOSE, relay: relayStatus() });
+        if (b.relay === undefined) return json(res, 200, { ok: true, verbose: VERBOSE, relay: relayStatus() });
+        applyRelaySettings(b.relay, function (status) { json(res, 200, { ok: true, verbose: VERBOSE, relay: status }); });
     });
     if (route === '/logs') return json(res, 200, { logs: LOGS });
     if (route === '/uploads') return json(res, 200, { pending: publicUpload(), busy: UPLOAD_BUSY });

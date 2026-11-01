@@ -199,6 +199,8 @@ node test/install.test.js   # a certificate mismatch is retried with the next pr
 node test/certlevel.test.js # Public or Partner per install: refused up front, picked by privilege, chosen by hand
 node test/sdbhosts.test.js  # the order of addresses to try sdbd on
 node test/sdb-loopback.test.js  # install works whether Host PC IP is the TV's own IP or 127.0.0.1
+node test/relay.test.js     # the on-TV sdb relay: a session survives the hop, allow list, cap, idle, stop
+node test/relay-settings.test.js  # relay settings over /settings: validation, restart only on change, status
 ```
 
 Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching the version in

@@ -14,7 +14,7 @@ jobs:
           node-version: '20'
       - name: Syntax-check the service and UI
         run: |
-          for f in tizen-app/service/sdb.js tizen-app/service/relay.js tizen-app/service/zip.js tizen-app/service/index.js tizen-app/service/signer.js tizen-app/service/catalog.js tizen-app/service/catalog-key.js tizen-app/service/compat.js tizen-app/service/manifest.js tizen-app/service/refusal.js tizen-app/service/certs.js tizen-app/service/sdbhosts.js tizen-app/js/app.js test/fake-sdbd.js test/run.js test/relay.test.js test/sign.test.js test/config.test.js test/sdb-errors.test.js test/manifest.test.js test/refusal.test.js test/certs.test.js test/install.test.js test/certlevel.test.js test/sdbhosts.test.js test/sdb-loopback.test.js; do
+          for f in tizen-app/service/sdb.js tizen-app/service/relay.js tizen-app/service/zip.js tizen-app/service/index.js tizen-app/service/signer.js tizen-app/service/catalog.js tizen-app/service/catalog-key.js tizen-app/service/compat.js tizen-app/service/manifest.js tizen-app/service/refusal.js tizen-app/service/certs.js tizen-app/service/sdbhosts.js tizen-app/js/app.js test/fake-sdbd.js test/run.js test/relay.test.js test/relay-settings.test.js test/sign.test.js test/config.test.js test/sdb-errors.test.js test/manifest.test.js test/refusal.test.js test/certs.test.js test/install.test.js test/certlevel.test.js test/sdbhosts.test.js test/sdb-loopback.test.js; do
             node --check "$f"
           done
       - name: config.xml ids (package id is 10 alphanumerics)
@@ -23,6 +23,8 @@ jobs:
         run: node test/run.js
       - name: On-TV sdb relay (forwarding, allow list, session teardown)
         run: node test/relay.test.js
+      - name: On-TV sdb relay settings (refused up front, restart only on change, answers once up)
+        run: node test/relay-settings.test.js
       - name: Signer test (valid signed package)
         run: node test/sign.test.js
       - name: Streaming signer test (big package, file to file)
@@ -58,6 +60,7 @@ jobs:
           node test/config.test.js
           node test/run.js
           node test/relay.test.js
+          node test/relay-settings.test.js
           node test/sign.test.js
           node --expose-gc test/stream-sign.test.js
           node test/bundle.test.js
