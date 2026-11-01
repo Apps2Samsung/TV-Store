@@ -6,8 +6,8 @@
  *
  * Each profile also has a privilege level (#50): a Samsung distributor certificate is issued by
  * "VD DEVELOPER Public CA Class" or "VD DEVELOPER Partner CA Class", and an app that uses
- * partner-level rights (drmplay, sso.partner, a vpnservice) only works when it was signed with a
- * Partner one. The level is read from the chain the head sends, so a TV armed before this
+ * partner-level rights (a VPN, Samsung partner sign-in, killing other apps; manifest.js has the
+ * list) only works when it was signed with a Partner one. The level is read from the chain the head sends, so a TV armed before this
  * version knows it too, and an install asks for the level the app needs (certs.order).
  *
  * Stored shape (CERT_NAME in the data folder):
