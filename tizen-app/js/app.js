@@ -58,7 +58,7 @@
     // TV's current IP and loopback too, and keeps whichever answers.
     var BASE = 'http://127.0.0.1:8077';
     var KOFI = 'https://ko-fi.com/patrickst';
-    var VERSION = '0.3.13';
+    var VERSION = '0.3.14';
     var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13, RETURN: 10009, ESC: 27, BACK: 8 };
 
     // What the manifest providers are called; resolved.json carries only their ids.
@@ -188,6 +188,42 @@
     function syncVerbose() {
         if (ready && ready.verbose === settings.verboseLog) return;
         xhr('POST', '/settings', { verbose: settings.verboseLog }, function (err, res) { if (!err && res && res.ok && ready) ready.verbose = res.verbose; });
+    }
+
+    // The sdb relay (#52): lives in the service, not in this page's settings, since it is a port the
+    // service holds open; /ping carries its state and POST /settings { relay } changes it. With
+    // Developer Mode's Host PC IP at 127.0.0.1 the TV's sdbd takes only loopback, which locks every
+    // phone and PC out; the relay hands their connections to sdbd over loopback, so Apps2Samsung
+    // (3.2 or newer) reaches this TV from any address without anyone typing one into Developer Mode.
+    var relayBusy = false;
+    function relayAddress() { var r = ready && ready.relay; return (ready && ready.ownIp ? ready.ownIp : 'this TV') + ':' + (r && (r.port || r.configuredPort) || 26201); }
+    function relayRow() {
+        var r = ready && ready.relay;
+        if (!r) return '';
+        var hint = r.enabled
+            ? (r.listening ? 'On: Apps2Samsung connects through ' + relayAddress() + '. ' : 'On, but not running. ') + 'Any device in your network can install apps through this port while it is on.'
+            : 'Lets Apps2Samsung on a phone or PC reach this TV while Developer Mode\'s Host PC IP is 127.0.0.1, so you never type an address into Developer Mode again.';
+        return '<div class="opt f" tabindex="0" data-k="opt:relay" data-opt="relay"><div class="ot"><div class="ont">Connect from Apps2Samsung (sdb relay)</div><div class="oh">' + esc(hint) + '</div></div>'
+            + '<span class="sw' + (r.enabled ? ' on' : '') + '"><i></i></span></div>';
+    }
+    function relayNotice() {
+        var r = ready && ready.relay;
+        if (!r || !r.enabled) return '';
+        if (r.error) return '<div class="notice bad">' + esc('The relay could not start: ' + r.error + '. Turn it off and on again; if that does not help, restart TV-Store.') + '</div>';
+        if (!r.listening) return '<div class="notice">' + esc('The relay is starting…') + '</div>';
+        return '<div class="notice info">' + esc('Once: on the TV open Apps, type 1 2 3 4 5, set Host PC IP to 127.0.0.1 and restart the TV. From then on Apps2Samsung 3.2 or newer finds ' + relayAddress() + ' by itself'
+            + (r.allow && r.allow.length ? '; allowed clients: ' + r.allow.join(', ') : '') + '. This TV keeps installing from TV-Store either way.') + '</div>';
+    }
+    function toggleRelay() {
+        if (!ready || !ready.relay || relayBusy) return;
+        var want = !ready.relay.enabled;
+        relayBusy = true;
+        xhr('POST', '/settings', { relay: { enabled: want } }, function (err, res) {
+            relayBusy = false;
+            if (!err && res && res.ok) ready.relay = res.relay;
+            else flash('Could not ' + (want ? 'turn on' : 'turn off') + ' the relay: ' + (err ? err.message : (res && res.error) || 'no answer from the service'));
+            renderSheet(); focusKey('opt:relay');
+        });
     }
 
     // A QR code as an <img> (qrcode.js, GIF data URL: old TV engines show that fine), on a white tile.
@@ -940,7 +976,8 @@
         var h = '<div class="shd"><div><div class="nm">Settings</div><div class="mt">Remembered on this TV' + (hidden > 0 ? ' · ' + hidden + (hidden === 1 ? ' app' : ' apps') + ' hidden now' : '') + '</div></div></div>'
             + '<div class="opts">' + opt('showAdult', 'Show adult (18+) apps', 'Apps marked adult-only stay out of the store until this is on.')
             + opt('showNeedsHead', 'Show apps that need a phone or PC', 'Some apps need Apps2Samsung on a phone or PC to install. Turn this off to keep them out of the store.')
-            + opt('verboseLog', 'Verbose logging', 'Writes much more detail to the TV-Store log. Turn it on when a bug report asks for it, and off again afterwards.') + '</div>';
+            + opt('verboseLog', 'Verbose logging', 'Writes much more detail to the TV-Store log. Turn it on when a bug report asks for it, and off again afterwards.')
+            + relayRow() + '</div>' + relayNotice();
         if (confirmingAdult) h += '<div class="notice">These apps are meant for adults only. Turn them on only if you are 18 or older.</div>'
             + '<div class="btns" style="margin-top:16px"><button class="btn primary grow f" data-k="adultyes" data-act="adultyes" data-default>I am 18 or older</button><button class="btn f" data-k="adultno" data-act="adultno">Cancel</button></div>';
         var certList = (ready && ready.certificates ? ready.certificates.map(function (c) { return c.name + (c.level === 'partner' || c.level === 'public' ? ' (' + levelName(c.level) + ')' : ''); }) : (ready && ready.certNames) || []);
@@ -1038,6 +1075,7 @@
     function flash(text) { var h = sheetEl.querySelector('.hint'); if (h) { h.textContent = text; h.style.color = '#FF6B5E'; } }
 
     function toggle(key) {
+        if (key === 'relay') { toggleRelay(); return; }
         if (key === 'showAdult' && !settings.showAdult) { confirmingAdult = true; renderSheet(true); return; }
         setSetting(key, !settings[key]);
     }
