@@ -1,5 +1,7 @@
 /* certs.js keeps every signing profile a head hands over (#44): the payload shapes, merging a
- * second hand-over, the order to try for a package, and reading a 0.3.x one-profile file. */
+ * second hand-over, the order to try for a package, and reading a 0.3.x one-profile file. And
+ * the level of each (#50): Public or Partner from the Samsung CA in the distributor chain, the
+ * order narrowed to the level an install asks for. */
 'use strict';
 var fs = require('fs'), path = require('path');
 var certs = require('../tizen-app/service/certs.js');
@@ -41,10 +43,38 @@ o = certs.order(store, 'gone').map(function (c) { return c.id; });
 if (o.join() !== [idA, idB].join()) fail('order with a forgotten profile');
 if (certs.order(null, idA).length !== 0) fail('order on no store');
 
+// Levels (#50): the fixtures' Public and Partner chains carry the Samsung CA names, the old test
+// chain carries neither and is unknown, which serves as public.
+if (certs.level(pem('public-distributor.crt')) !== 'public' || certs.level(pem('partner-distributor.crt')) !== 'partner') fail('level from the CA name');
+if (certs.level(pem('distributor.crt')) !== 'unknown' || certs.level('junk') !== 'unknown') fail('a chain from elsewhere is unknown');
+var PUB = { name: 'Jelly2Sams - Public', authorKeyPem: pem('author.key'), authorCertPem: pem('author.crt'), distributorKeyPem: pem('public-distributor.key'), distributorCertPem: pem('public-distributor.crt') };
+var PAR = { name: 'Jelly2Sams - Partner', authorKeyPem: pem('partner-author.key'), authorCertPem: pem('partner-author.crt'), distributorKeyPem: pem('partner-distributor.key'), distributorCertPem: pem('partner-distributor.crt') };
+var idPub = certs.fingerprint(PUB.authorCertPem), idPar = certs.fingerprint(PAR.authorCertPem);
+if (idPub === idPar) fail('the two level profiles must have their own author');
+var two = certs.merge(null, certs.normalize({ certificates: [PUB, PAR] }));
+if (two.certificates[0].level !== 'public' || two.certificates[1].level !== 'partner') fail('levels on the entries: ' + JSON.stringify(certs.summary(two)));
+if (JSON.stringify(certs.summary(two)) !== JSON.stringify([{ name: 'Jelly2Sams - Public', level: 'public' }, { name: 'Jelly2Sams - Partner', level: 'partner' }])) fail('summary: ' + JSON.stringify(certs.summary(two)));
+if (!certs.has(two, 'partner') || !certs.has(two, 'public') || certs.has(certs.merge(null, certs.normalize({ certificates: [PUB] })), 'partner')) fail('has(level)');
+// No wish: both, the primary first. A wish: only that level, so a Partner app is never signed
+// Public on the way, and a remembered profile of the other level is left out.
+var ids = function (l) { return l.map(function (c) { return c.id; }).join(); };
+if (ids(certs.order(two, null)) !== [idPub, idPar].join()) fail('no wish: all, primary first');
+if (ids(certs.order(two, null, 'partner')) !== idPar || ids(certs.order(two, idPub, 'partner')) !== idPar) fail('partner wished: only the Partner profile');
+if (ids(certs.order(two, idPar, 'public')) !== idPub) fail('public wished: only the Public profile');
+if (ids(certs.order(two, idPar)) !== [idPar, idPub].join()) fail('remembered Partner first without a wish');
+var one = certs.merge(null, certs.normalize({ certificates: [PUB] }));
+if (certs.order(one, null, 'partner').length !== 0) fail('partner wished on a Public-only TV: nothing to try');
+// An unknown chain (the old test chain) counts as public: taken for public, never for partner.
+var unk = certs.merge(null, certs.normalize(Object.assign({ name: 'Studio' }, A)));
+if (certs.order(unk, null, 'public').length !== 1 || certs.order(unk, null, 'partner').length !== 0) fail('unknown level serves as public');
+// A file written before levels existed gets them when read.
+var reread = certs.fromStored(JSON.parse(JSON.stringify(two).replace(/"level":"[a-z]+",/g, '')));
+if (reread.certificates[1].level !== 'partner') fail('levels are read back onto an older file');
+
 // Files on disk: a 0.3.x one-profile file and this version's.
 var old = certs.fromStored(A);
 if (!old || old.primary !== idA || old.certificates.length !== 1) fail('0.3.x file');
 var fresh = certs.fromStored(JSON.parse(JSON.stringify(store)));
 if (!fresh || fresh.primary !== idA || fresh.certificates.length !== 2) fail('this version\'s file');
 if (certs.fromStored({ junk: 1 }) !== null || certs.fromStored(null) !== null) fail('junk file');
-console.log('PASS: certificate store: payload shapes, merge of a second hand-over, order per package, 0.3.x file');
+console.log('PASS: certificate store: payload shapes, merge of a second hand-over, order per package, Public and Partner levels, 0.3.x file');
