@@ -109,7 +109,11 @@ the install falls back to `sdbd` as before, and the log says so. `A2S_INSTALLER=
 service's environment keeps the `sdbd` way only. `/ping` reports it (`installer: { mode, wascmd: {
 path, present, spawn, available }, last }`), and the log's second line at start says which way
 installs will take. The binding is synchronous, so the service answers nothing while `wascmd` runs;
-the page's polls wait that out. Removing an old copy for a replace still goes over `sdbd`.
+the page's install call waits longer than that. The start-up log also carries what `wascmd` prints
+without arguments (its flags; no document gives them, the uninstall one in particular), so a real
+set's log is where they get read from. Until then, removing an old copy for a replace still goes
+over `sdbd`; when `sdbd` cannot be reached while `wascmd` does the installs, the replace stops with
+`REPLACE_NEEDS_SDB` and says what to do instead of running into the same certificate mismatch.
 
 The screen talks to the service over HTTP on port 8077. Apps2Samsung writes the TV's own IP into
 TV-Store when it installs it, because Tizen 10 may not let a page reach its service over

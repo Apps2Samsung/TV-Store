@@ -62,8 +62,12 @@ if (ids(certs.order(two, null)) !== [idPub, idPar].join()) fail('no wish: all, p
 if (ids(certs.order(two, null, 'partner')) !== idPar || ids(certs.order(two, idPub, 'partner')) !== idPar) fail('partner wished: only the Partner profile');
 if (ids(certs.order(two, idPar, 'public')) !== idPub) fail('public wished: only the Public profile');
 if (ids(certs.order(two, idPar)) !== [idPar, idPub].join()) fail('remembered Partner first without a wish');
+// A preference (the manifest's partner privilege) puts Partner first and keeps Public behind it; a wish filters.
+if (ids(certs.order(two, null, null, 'partner')) !== [idPar, idPub].join()) fail('partner preferred: Partner first, Public still tried');
+if (ids(certs.order(two, idPub, null, 'partner')) !== [idPar, idPub].join()) fail('partner preferred beats the remembered Public');
 var one = certs.merge(null, certs.normalize({ certificates: [PUB] }));
 if (certs.order(one, null, 'partner').length !== 0) fail('partner wished on a Public-only TV: nothing to try');
+if (ids(certs.order(one, null, null, 'partner')) !== idPub) fail('partner preferred on a Public-only TV: the Public profile is still tried');
 // An unknown chain (the old test chain) counts as public: taken for public, never for partner.
 var unk = certs.merge(null, certs.normalize(Object.assign({ name: 'Studio' }, A)));
 if (certs.order(unk, null, 'public').length !== 1 || certs.order(unk, null, 'partner').length !== 0) fail('unknown level serves as public');

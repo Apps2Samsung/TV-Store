@@ -7,7 +7,7 @@ var fs = require('fs'), os = require('os'), path = require('path'), http = requi
 var zip = require('../tizen-app/service/zip.js');
 var Buf = require('../tizen-app/service/compat.js');
 
-function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
+function fail(m) { try { child.kill(); } catch (e) {} console.error('FAIL: ' + m); process.exit(1); }
 var dir = path.join(os.tmpdir(), 'a2s-upload-' + process.pid + '-' + Date.now()); fs.mkdirSync(dir);
 var wgt = zip.write([{ name: 'index.html', data: Buf.from('<html></html>') },
     { name: 'config.xml', data: Buf.from('<widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets" version="1.0.0"><name>Probe</name><tizen:application id="A2SProbe01.Probe" package="A2SProbe01"/></widget>') }]);

@@ -35,39 +35,35 @@ function verify(buf, publicKeyPem, now) {
     if (!at) throw new Error('the signed catalog has no date');
     if ((now || Date.now()) - at > MAX_AGE_MS) throw new Error('the signed catalog is from ' + catalog.generatedAt + ', more than 7 days old: check the TV’s clock, or the Apps2Samsung catalog workflow');
 
-    return { catalog: catalog, payload: payload, index: index(catalog), levels: levels(catalog) };
+    var s = scan(catalog);
+    return { catalog: catalog, payload: payload, index: s.index, levels: s.levels };
 }
 
-// Download URL -> lower-case hex SHA-256, for every package file the catalog lists.
-function index(catalog) {
-    var out = {};
-    (catalog.providers || []).forEach(function (p) {
-        (p.releases || []).forEach(function (r) {
-            (r.assets || []).forEach(function (a) {
-                var m = /^sha256:([0-9a-fA-F]{64})$/.exec(a.digest || '');
-                if (a.browser_download_url) out[a.browser_download_url] = m ? m[1].toLowerCase() : null;
-            });
-        });
-    });
-    return out;
-}
-
-// Download URL -> 'partner' for every file the catalog says needs a Partner certificate (#50):
-// cert_level on a community package (copied onto each of its files in catalog.json, matched to
-// the release asset by file name) or on a provider (every file of it). Nothing for the rest.
-function levels(catalog) {
-    var out = {};
+// One walk over providers -> releases -> assets for both lookups the install needs:
+//   index:  download URL -> lower-case hex SHA-256, for every package file the catalog lists;
+//   levels: download URL -> 'partner' for every file the catalog says needs a Partner certificate
+//           (#50): cert_level on a community package (copied onto each of its files in catalog.json,
+//           matched to the release asset by file name) or on a provider (every file of it).
+function scan(catalog) {
+    var index = {}, levels = {};
     (catalog.providers || []).forEach(function (p) {
         var byFile = {};
         ((p.catalog && p.catalog.apps) || []).forEach(function (e) { if (e.file && String(e.cert_level || '').toLowerCase() === 'partner') byFile[e.file] = true; });
         var all = String(p.cert_level || '').toLowerCase() === 'partner';
         (p.releases || []).forEach(function (r) {
-            (r.assets || []).forEach(function (a) { if (a.browser_download_url && (all || byFile[a.name])) out[a.browser_download_url] = 'partner'; });
+            (r.assets || []).forEach(function (a) {
+                if (!a.browser_download_url) return;
+                var m = /^sha256:([0-9a-fA-F]{64})$/.exec(a.digest || '');
+                index[a.browser_download_url] = m ? m[1].toLowerCase() : null;
+                if (all || byFile[a.name]) levels[a.browser_download_url] = 'partner';
+            });
         });
     });
-    return out;
+    return { index: index, levels: levels };
 }
+function index(catalog) { return scan(catalog).index; }
+function levels(catalog) { return scan(catalog).levels; }
 
 function sha256(buf) { return crypto.createHash('sha256').update(buf).digest('hex'); }
 
-module.exports = { verify: verify, index: index, levels: levels, sha256: sha256, MAX_AGE_MS: MAX_AGE_MS };
+module.exports = { verify: verify, scan: scan, index: index, levels: levels, sha256: sha256, MAX_AGE_MS: MAX_AGE_MS };

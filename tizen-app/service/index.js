@@ -52,7 +52,10 @@ var STAGING = '/home/owner/share/tmp/sdk_tools';   // where sdbd accepts a pushe
 // where wascmd misbehaves); INSTALLER_LAST says which one the last install took, for /ping.
 var INSTALLER = process.env.A2S_INSTALLER === 'sdb' ? 'sdb' : 'auto';
 var INSTALLER_LAST = null;
-function installerStatus() { var w = wascmd.status(); return { mode: INSTALLER, wascmd: w, last: INSTALLER_LAST }; }
+// Read once: whether the binary is there and how this Node starts a process cannot change while the
+// service runs, and the page polls /ping all the time.
+var WASCMD = wascmd.status();
+function installerStatus() { return { mode: INSTALLER, wascmd: WASCMD, last: INSTALLER_LAST }; }
 var LOGS = [];
 var CERT_NAME = '.a2s-tvstore-certs.json';
 // Where the handed-over certificate is kept, best first: the package's private data folder
@@ -411,11 +414,19 @@ function tizenGate(entry) {
 // updates it with the same one (#44). When the page asks for a replace, the old copy goes first
 // (0 vd_appuninstall, the verb the heads use), on its own connection; a refusal is logged and the
 // install goes ahead anyway, so the TV's own answer is what the user sees.
+// With wascmd doing the installs (#57) sdbd may be out of reach (Host PC IP at a phone or PC), and
+// the removal is the one step that still needs it: going ahead would hit the same mismatch and
+// offer the same removal again, so that case stops here with what to do instead. (wascmd's own
+// uninstall flag is not documented; the usage text logged at start is where it will be read from.)
 function removeOld(entry, cb) {
     if (!entry.replace || !entry.packageId) return cb();
     log('install: removing the old copy of ' + entry.packageId + ' first (installed with another certificate)');
     connectSdb(sdbHosts(), function (err, c) {
-        if (err) { log('install: could not remove the old copy: ' + err.message); return cb(); }
+        if (err) {
+            log('install: could not remove the old copy: ' + err.message);
+            if (INSTALLER === 'auto' && WASCMD.available) return cb(coded('REPLACE_NEEDS_SDB', 'TV-Store cannot remove the old copy: that step still goes through the TV’s developer connection, and ' + err.message + ' Or remove the app from the TV’s Apps menu by hand, then install it from here.'));
+            return cb();
+        }
         c.shell('0 vd_appuninstall ' + entry.packageId, function (err, out) {
             c.end();
             log('install: vd_appuninstall reply: ' + (err ? err.message : out.replace(/\s+/g, ' ').slice(0, 200)));
@@ -493,9 +504,9 @@ function signAndInstall(entry, remoteName, inFile, outFile, cb) {
     var lvl = wantedLevel(entry, store, remembered);
     if (lvl.missing) { var miss = missingLevel(lvl.want, store); log('install: ' + lvl.why + ', but the TV holds no ' + levelName(lvl.want) + ' certificate; not installing'); return cb(miss); }
     if (lvl.want || lvl.prefer) log('install: signing with a ' + levelName(lvl.want || lvl.prefer) + ' certificate: ' + lvl.why);
-    var tries = certs.order(store, remembered, lvl.want || lvl.prefer), tried = [], i = 0, mismatch = null;
+    var tries = certs.order(store, remembered, lvl.want, lvl.prefer), tried = [], i = 0, mismatch = null;
     function finish(err, r) { try { fs.unlinkSync(inFile); } catch (e) {} try { fs.unlinkSync(outFile); } catch (e) {} cb(err, r); }
-    removeOld(entry, function () { (function attempt() {
+    removeOld(entry, function (err) { if (err) { log('install: ' + err.message); return cb(err); } (function attempt() {
         var cert = tries[i++], started = Date.now();
         tried.push(cert);
         signer.signFile(inFile, outFile, cert, function (err) {
@@ -530,7 +541,7 @@ function signAndInstall(entry, remoteName, inFile, outFile, cb) {
 // installer's own reply, read by the caller the same way for both.
 function installSigned(entry, remoteName, outFile, size, cb) {
     var id = entry.appId || entry.packageId || '';
-    if (INSTALLER === 'auto' && wascmd.available()) {
+    if (INSTALLER === 'auto' && WASCMD.available) {
         log('install: handing to wascmd on the TV itself (' + wascmd.path + ', no sdbd and no Host PC IP involved)');
         var wasStarted = Date.now();
         return wascmd.run(id, outFile, function (err, out, code) {
@@ -542,7 +553,6 @@ function installSigned(entry, remoteName, outFile, size, cb) {
                 log('install: wascmd reply: ' + said.slice(0, 200));
                 return cb(null, out, 'wascmd');
             }
-            INSTALLER_LAST = 'sdb';
             log('install: wascmd did not install (' + (err ? err.message : 'exit ' + code + (said ? ', said: ' + said.slice(0, 200) : ', said nothing')) + '); falling back to sdbd');
             viaSdb();
         });
@@ -617,6 +627,16 @@ function certByPackage() {
     try { CERT_BY_PKG = JSON.parse(fs.readFileSync(path.join(DATA_DIR, CERT_BY_PKG_NAME), 'utf8')) || {}; } catch (e) { CERT_BY_PKG = {}; }
     return CERT_BY_PKG;
 }
+// Package id -> { name, level } of the profile it was last signed with here, for the page's "Sign
+// with" line: the service signs an app it installed before with that profile first, whatever the
+// manifest asks (#50), so the page should say the same.
+function rememberedLevels() {
+    var map = certByPackage(), store = loadCerts(), out = {};
+    var byId = {};
+    ((store && store.certificates) || []).forEach(function (c) { byId[c.id] = c; });
+    for (var pkg in map) if (map.hasOwnProperty(pkg) && byId[map[pkg]]) out[pkg] = { name: byId[map[pkg]].name, level: byId[map[pkg]].level };
+    return out;
+}
 function rememberCert(packageId, certId) {
     if (!packageId || !certId || !DATA_DIR) return;
     var map = certByPackage(); if (map[packageId] === certId) return;
@@ -653,7 +673,7 @@ http.createServer(function (req, res) {
     if (!fromThisTv(req)) { cors(res, 403, 'text/plain'); return res.end('only this TV may use TV-Store'); }
     if (route === '/ping') return json(res, 200, { ok: true, service: 'tv-store', ownIp: ownIp(), logUrl: 'http://' + ownIp() + ':' + PORT + '/log.txt', signerReady: signer.ready, certReady: haveCerts(),
         certCount: haveCerts() ? loadCerts().certificates.length : 0, certNames: certs.names(loadCerts()), certificates: certs.summary(loadCerts()),
-        certFile: CERT_FILE, certError: CERT_ERROR, node: process.version, verbose: VERBOSE, relay: relayStatus(), installer: installerStatus() });
+        certFile: CERT_FILE, certError: CERT_ERROR, node: process.version, verbose: VERBOSE, relay: relayStatus(), installer: installerStatus(), remembered: rememberedLevels() });
     if (route === '/settings' && req.method === 'POST') return body(req, function (err, b) {
         if (err || !b || (typeof b.verbose !== 'boolean' && b.relay === undefined)) return json(res, 400, { ok: false, error: 'need { verbose: true|false } and/or { relay: { enabled, port, allow } }' });
         if (b.relay !== undefined) { var why = relaySettingsProblem(b.relay); if (why) return json(res, 400, { ok: false, error: why }); }
@@ -688,8 +708,14 @@ http.createServer(function (req, res) {
     cors(res, 404, 'text/plain'); res.end('not found');
 }).listen(PORT, '0.0.0.0', function () {
     log('TV-Store service on port ' + PORT + ', node ' + process.version + ' ' + process.arch + ', this TV ' + ownIp() + ', data ' + DATA_DIR + (VERBOSE ? ', verbose logging on' : ''));
-    var w = wascmd.status();
+    var w = WASCMD;
     log('installer: ' + (INSTALLER === 'sdb' ? 'sdbd only (A2S_INSTALLER=sdb)' : w.available ? 'wascmd first (' + w.path + ' via ' + w.spawn + '), sdbd as the fallback' : 'sdbd (' + (w.present ? 'this Node can start no process' : w.path + ' is not there') + ')'));
+    // What wascmd prints without arguments: its flags, which no document gives (the uninstall one
+    // in particular), so a real set's log is where they get read from.
+    if (INSTALLER === 'auto' && w.available) wascmd.usage(function (err, out) {
+        var said = String(out || '').replace(/\s+/g, ' ').trim();
+        log('installer: wascmd without arguments says: ' + (said ? said.slice(0, 400) : err ? err.message : 'nothing'));
+    });
     logPlatform();
     if (RELAY_CFG.enabled) { log('relay: enabled, starting on port ' + RELAY_CFG.port); startRelay(); }
 });
