@@ -138,6 +138,14 @@ function relayStatus() {
     s.configuredPort = RELAY_CFG.port;
     return s;
 }
+// The relay's state for a phone or PC on the LAN (GET /relay, TV-Store#58): whether it is on and
+// listening, the port, and why the last connection through it failed, so Apps2Samsung can show that
+// instead of "connection reset". Without the allow list; the TV's own page gets everything via /ping.
+function relayPublic() {
+    var s = relayStatus();
+    return { enabled: s.enabled, listening: s.listening, port: s.port, configuredPort: s.configuredPort, sessions: s.sessions,
+             served: s.served, failures: s.failures, lastFailure: s.lastFailure, error: s.error };
+}
 // Apply { enabled?, port?, allow? } from Settings (already validated): persist, then make the listener
 // match. The listener is only restarted when enabled or the port changed, since a restart drops every
 // live session (a PC mid-install through the relay); the allow list is read per connection, so it
@@ -596,6 +604,8 @@ http.createServer(function (req, res) {
     // from the TV-Store screen, below the gate and with the token.
     if (route === '/upload' && req.method === 'GET') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(uploadPage()); }
     if (route === '/upload' && (req.method === 'PUT' || req.method === 'POST')) return receiveUpload(req, res);
+    // The relay's state is for the phone or PC that could not get through it (#58).
+    if (route === '/relay' && req.method === 'GET') return json(res, 200, { ok: true, relay: relayPublic() });
     // The rest only for this TV: the port is open to the LAN because Tizen 10 may not route a page's
     // request to the service over loopback, but nothing else on the network gets to hand over a
     // certificate or start an install.

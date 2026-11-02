@@ -3,7 +3,8 @@
  * object, a port that is not a number, below 1024, TV-Store's own or sdbd's own); enabling answers
  * only once the listener is up, so the reply says listening:true with the port; the settings survive
  * in the data folder; saving the same settings or only the allow list does not restart the listener
- * (a session through the relay stays up); changing the port does; disabling tears it down. */
+ * (a session through the relay stays up); changing the port does; disabling tears it down. GET /relay
+ * (TV-Store#58) answers the LAN with the state and the failure counters, without the allow list. */
 'use strict';
 var fs = require('fs'), os = require('os'), path = require('path'), http = require('http'), net = require('net'), cp = require('child_process');
 var fake = require('./fake-sdbd.js');
@@ -60,7 +61,14 @@ function enable() {
             if (!j.relay.enabled || !j.relay.listening || j.relay.port !== RELAY || j.relay.error) fail('enable must answer with the listener up: ' + JSON.stringify(j.relay));
             var s = saved();
             if (!s.enabled || s.port !== RELAY) fail('settings not saved: ' + JSON.stringify(s));
-            holdSession();
+            // 2b. GET /relay (open to the LAN, #58) says the same without the allow list.
+            call('GET', '/relay', null, function (e, code, j) {
+                if (e || code !== 200 || !j || !j.ok || !j.relay) fail('GET /relay: ' + code + ' ' + JSON.stringify(j));
+                var r = j.relay;
+                if (!r.enabled || !r.listening || r.port !== RELAY || r.served !== 0 || r.failures !== 0 || r.lastFailure !== null) fail('/relay must carry the state and the counters: ' + JSON.stringify(r));
+                if ('allow' in r) fail('/relay must not expose the allow list: ' + JSON.stringify(r));
+                holdSession();
+            });
         });
     });
 }
@@ -109,7 +117,7 @@ function disable() {
             stop();
             console.log('PASS');
             console.log('  bad relay settings refused with 400 before anything is applied');
-            console.log('  enable answers with the listener up and the port');
+            console.log('  enable answers with the listener up and the port; GET /relay says the same to the LAN, without the allow list');
             console.log('  unchanged settings and an allow-list change keep the live session');
             console.log('  a port change restarts the listener; disable tears it down');
             process.exit(0);

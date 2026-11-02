@@ -212,7 +212,29 @@
         if (r.error) return '<div class="notice bad">' + esc('The relay could not start: ' + r.error + '. Turn it off and on again; if that does not help, restart TV-Store.') + '</div>';
         if (!r.listening) return '<div class="notice">' + esc('The relay is starting…') + '</div>';
         return '<div class="notice info">' + esc('Once: on the TV open Apps, type 1 2 3 4 5, set Host PC IP to 127.0.0.1 and restart the TV. From then on Apps2Samsung 3.2 or newer finds ' + relayAddress() + ' by itself'
-            + (r.allow && r.allow.length ? '; allowed clients: ' + r.allow.join(', ') : '') + '. This TV keeps installing from TV-Store either way.') + '</div>';
+            + (r.allow && r.allow.length ? '; allowed clients: ' + r.allow.join(', ') : '') + '. This TV keeps installing from TV-Store either way.') + '</div>'
+            + relayFailureNotice(r);
+    }
+    // The last connection through the relay that failed, with why (#58): the sdb protocol cannot tell
+    // the phone or PC, so it sees "connection reset" and this screen says what happened.
+    function relayFailureNotice(r) {
+        var f = r.lastFailure;
+        if (!f) return '';
+        var when = '';
+        try { var d = new Date(f.at); when = ' at ' + d.getHours() + ':' + (d.getMinutes() < 10 ? '0' : '') + d.getMinutes(); } catch (e) {}
+        return '<div class="notice bad">' + esc('The last connection' + (f.client ? ' from ' + f.client : '') + when + ' failed: ' + f.reason + '.'
+            + (r.served ? ' ' + r.served + ' connection' + (r.served === 1 ? '' : 's') + ' went through since TV-Store started.' : '')) + '</div>';
+    }
+    // While Settings is open with the relay on, keep its state fresh: a failed connection shows up here
+    // within a few seconds, which is when the person at the TV is looking for it.
+    function refreshRelay() {
+        if (!sheet || sheet.mode !== 'settings' || !ready || !ready.relay || !ready.relay.enabled || relayBusy) return;
+        xhr('GET', '/ping', null, function (err, res) {
+            if (err || !res || !res.relay || !sheet || sheet.mode !== 'settings' || relayBusy) return;
+            var before = JSON.stringify(ready.relay);
+            ready.relay = res.relay;
+            if (JSON.stringify(res.relay) !== before) renderSheet();
+        }, null, 2500);
     }
     function toggleRelay() {
         if (!ready || !ready.relay || relayBusy) return;
@@ -1258,6 +1280,7 @@
     setInterval(function () {
         if (loading || problem) return;
         if (!armed()) xhr('GET', '/ping', null, function (err, res) { if (!err) setReady(res); });
+        refreshRelay();
         xhr('GET', '/uploads', null, function (err, res) {
             if (err || !res) return;
             var was = upload; upload = res.pending || null;

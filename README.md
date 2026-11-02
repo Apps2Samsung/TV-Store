@@ -148,7 +148,21 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
   26101). The switch says the address. While it is on, any device in your network can install
   through that port; the service also takes a client allow list (`POST /settings { relay: { allow:
   [...] } }`), not yet on this screen. This switch lives in the service, not in the page's
-  settings, so `/ping` reports it (`relay: { enabled, listening, port, sessions, allow, error }`).
+  settings, so `/ping` reports it (`relay: { enabled, listening, port, sessions, allow, error,
+  served, failures, lastFailure }`).
+
+  The sdb protocol cannot tell a phone or PC why its connection died, so through a relay every
+  failure looks like "connection reset" (#58). The relay therefore works out what happened to each
+  connection and keeps the last failure with a reason in words: `sdbd` not listening
+  (`SDBD_DOWN`: Developer Mode off, or the TV needs a restart), `sdbd` taking the connection and
+  closing it without a byte back (`SDBD_DROPPED`: Host PC IP is not `127.0.0.1`, or the TV was not
+  restarted after setting it), `sdbd` never answering before the client gave up (`SDBD_SILENT`),
+  another socket error (`SDBD_ERROR`), the allow list (`NOT_ALLOWED`) or the session cap (`BUSY`).
+  It is in the log, under the switch on the Settings screen ("The last connection from 192.168.1.138
+  at 10:32 failed: ..."), and any device in the network can read it at
+  `http://<TV IP>:8077/relay` (`{ enabled, listening, port, sessions, served, failures,
+  lastFailure: { at, client, code, reason } }`, no allow list), so Apps2Samsung can show the reason
+  instead of the bare reset.
 
 The header counts what the switches hide ("12 apps · 3 hidden").
 
@@ -214,8 +228,8 @@ node test/install.test.js   # a certificate mismatch is retried with the next pr
 node test/certlevel.test.js # Public or Partner per install: refused up front, picked by privilege, chosen by hand
 node test/sdbhosts.test.js  # the order of addresses to try sdbd on
 node test/sdb-loopback.test.js  # install works whether Host PC IP is the TV's own IP or 127.0.0.1
-node test/relay.test.js     # the on-TV sdb relay: a session survives the hop, allow list, cap, idle, stop
-node test/relay-settings.test.js  # relay settings over /settings: validation, restart only on change, status
+node test/relay.test.js     # the on-TV sdb relay: a session survives the hop, allow list, cap, idle, stop; every failure told apart with a reason
+node test/relay-settings.test.js  # relay settings over /settings: validation, restart only on change, status; GET /relay for the LAN
 ```
 
 Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching the version in
@@ -232,4 +246,4 @@ Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching 
 | First real install from the TV | done, 2019 Tizen 5.0 set (0.3.4) |
 | Tizen 3.0 and 4.0 sets (2017, 2018) | untested |
 | Tizen 10 sets (2025) | done, retail set (0.3.9) |
-| Host PC IP `127.0.0.1`: TV-Store installs over loopback, Apps2Samsung through the relay | built and proven against a fake `sdbd` (0.3.14); not yet tried on a real set |
+| Host PC IP `127.0.0.1`: TV-Store installs over loopback, Apps2Samsung through the relay | built and proven against a fake `sdbd` (0.3.14); the relay says why a connection failed (#58); not yet tried on a real set |
