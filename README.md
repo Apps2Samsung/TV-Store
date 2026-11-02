@@ -242,8 +242,8 @@ Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching 
 | Install through the TV's own `sdbd` | proven on a retail set |
 | Signing on the TV | done, identical output to the Apps2Samsung signer |
 | Arming from Apps2Samsung (phone, PC, CLI) | done |
-| The screens above | built (0.3.4); pins, developer search, your own .wgt or .tpk (0.3.10); finds itself under a renamed package id and sends you to Apps2Samsung to update it (0.3.11); Public or Partner certificate per app (0.3.13); the sdb relay switch (0.3.14) |
+| The screens above | built (0.3.4); pins, developer search, your own .wgt or .tpk (0.3.10); finds itself under a renamed package id and sends you to Apps2Samsung to update it (0.3.11); Public or Partner certificate per app (0.3.13); the sdb relay switch (0.3.14); the relay's failure reasons under it (0.3.15) |
 | First real install from the TV | done, 2019 Tizen 5.0 set (0.3.4) |
 | Tizen 3.0 and 4.0 sets (2017, 2018) | untested |
 | Tizen 10 sets (2025) | done, retail set (0.3.9) |
-| Host PC IP `127.0.0.1`: TV-Store installs over loopback, Apps2Samsung through the relay | built and proven against a fake `sdbd` (0.3.14); the relay says why a connection failed (#58); not yet tried on a real set |
+| Host PC IP `127.0.0.1`: TV-Store installs over loopback, Apps2Samsung through the relay | built and proven against a fake `sdbd` (0.3.14); the relay says why a connection failed and `GET /relay` tells Apps2Samsung (0.3.15, #58); not yet tried on a real set |
