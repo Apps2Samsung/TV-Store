@@ -3,8 +3,11 @@
  * This proves it against a fake sdbd: a real sdb session survives the hop byte for byte, the allow list
  * refuses an off-list client and changes live, stop() tears down live sessions (not just the listener)
  * and leaves nothing bound even when it runs before the bind completed, a slow reader still gets every
- * byte sdbd sent before closing, the session cap and the idle timeout hold. ES5, so it runs on the TV's
- * Node 4.4 as well. */
+ * byte sdbd sent before closing, the session cap and the idle timeout hold. And every way a relayed
+ * connection can fail is told apart and recorded with a reason (TV-Store#58): nothing listening on
+ * sdbd, sdbd dropping the connection without a byte back, sdbd never answering, the allow list, the
+ * cap; while a served session, a probe, an idle close and stop() are not failures. ES5, so it runs on
+ * the TV's Node 4.4 as well. */
 var net = require('net');
 var fake = require('./fake-sdbd.js');
 var sdb = require('../tizen-app/service/sdb.js');
@@ -40,6 +43,8 @@ fake.start(SDB, {
                 c.end();
                 if (err) return done(err);
                 if (out.indexOf('appInstall return : [0]') < 0) return done(new Error('relayed reply wrong: ' + JSON.stringify(out)));
+                var st = relay.status();
+                if (st.served !== 1 || st.failures !== 0 || st.lastFailure) return done(new Error('a served session must count as served, not failed: ' + JSON.stringify(st)));
                 relay.stop();
                 step2();
             });
@@ -56,6 +61,8 @@ fake.start(SDB, {
             c.connect(function (err) {
                 c.end();
                 if (!err) return done(new Error('allow list did not refuse an off-list client'));
+                var f = relay2.status().lastFailure;
+                if (!f || f.code !== 'NOT_ALLOWED' || f.client !== '127.0.0.1' || !f.at) return done(new Error('an allow-list refusal must be recorded as NOT_ALLOWED: ' + JSON.stringify(f)));
                 relay2.setAllow('9.9.9.9, 127.0.0.1');
                 var c2 = new sdb.SdbClient('127.0.0.1', port);
                 c2.connect(function (err) {
@@ -83,6 +90,7 @@ fake.start(SDB, {
                     setTimeout(function () {
                         if (!closed) return done(new Error('stop() left the live session open'));
                         if (relay3.status().listening) return done(new Error('stop() left the listener up'));
+                        if (relay3.status().failures !== 0) return done(new Error('stop() dropping a session is not a failure: ' + JSON.stringify(relay3.status().lastFailure)));
                         step4();
                     }, 100);
                 }, 50);
@@ -151,6 +159,7 @@ fake.start(SDB, {
                     setTimeout(function () {
                         if (!refused) return done(new Error('the session cap let a second client through'));
                         if (relay6.status().sessions !== 1) return done(new Error('sessions after the cap: ' + relay6.status().sessions));
+                        if (!relay6.status().lastFailure || relay6.status().lastFailure.code !== 'BUSY') return done(new Error('a refusal at the cap must be recorded as BUSY: ' + JSON.stringify(relay6.status().lastFailure)));
                         first.destroy(); relay6.stop();
                         step7();
                     }, 100);
@@ -171,9 +180,91 @@ fake.start(SDB, {
             setTimeout(function () {
                 if (!closed) return done(new Error('an idle session was not closed'));
                 if (relay7.status().sessions !== 0) return done(new Error('an idle session was closed but not forgotten'));
+                if (relay7.status().failures !== 0) return done(new Error('an idle close is not a failure: ' + JSON.stringify(relay7.status().lastFailure)));
                 relay7.stop();
-                done(null);
+                step8();
             }, 500);
+        });
+    }
+
+    // 8) Nothing listens where sdbd should be: the client is dropped and the failure reads SDBD_DOWN.
+    //    A port that was just listening and closed is free and refuses connections.
+    function step8() {
+        var gone = net.createServer();
+        gone.listen(0, '127.0.0.1', function () {
+            var deadPort = gone.address().port;
+            gone.close(function () {
+                var relay8 = new relayMod.Relay({ sdbPort: deadPort, log: quiet });
+                relay8.start(0, function (err, port) {
+                    if (err) return done(err);
+                    var c = new sdb.SdbClient('127.0.0.1', port);
+                    c.connect(function (err) {
+                        c.end();
+                        if (!err) return done(new Error('a dead sdbd port must fail the client'));
+                        setTimeout(function () {
+                            var st = relay8.status();
+                            relay8.stop();
+                            if (st.failures !== 1 || !st.lastFailure || st.lastFailure.code !== 'SDBD_DOWN') return done(new Error('nothing listening on sdbd must read SDBD_DOWN: ' + JSON.stringify(st)));
+                            if (st.lastFailure.reason.indexOf('Developer Mode') < 0 || st.lastFailure.reason.indexOf('ECONNREFUSED') < 0) return done(new Error('the SDBD_DOWN reason must say what to do and carry the error: ' + st.lastFailure.reason));
+                            step9();
+                        }, 50);
+                    });
+                });
+            });
+        });
+    }
+
+    // 9) sdbd takes the connection and closes it on the first bytes without answering (what the real
+    //    one does when the peer address is not its Host PC IP): SDBD_DROPPED, with the client's address.
+    function step9() {
+        fake.start(0, { hostPcIp: '10.9.9.9', shell: function () { return 'ok\n'; } }, function (h2) {
+            var relay9 = new relayMod.Relay({ sdbPort: h2.server.address().port, log: quiet });
+            relay9.start(0, function (err, port) {
+                if (err) return done(err);
+                var c = new sdb.SdbClient('127.0.0.1', port);
+                c.connect(function (err) {
+                    c.end();
+                    if (!err) return done(new Error('a dropped connection must fail the client'));
+                    setTimeout(function () {
+                        var st = relay9.status();
+                        relay9.stop(); h2.server.close();
+                        if (h2.drops !== 1) return done(new Error('the fake sdbd should have dropped exactly one connection: ' + h2.drops));
+                        if (st.failures !== 1 || !st.lastFailure || st.lastFailure.code !== 'SDBD_DROPPED' || st.lastFailure.client !== '127.0.0.1') return done(new Error('sdbd closing without a byte back must read SDBD_DROPPED: ' + JSON.stringify(st)));
+                        if (st.lastFailure.reason.indexOf('Host PC IP') < 0) return done(new Error('the SDBD_DROPPED reason must name Host PC IP: ' + st.lastFailure.reason));
+                        if (st.served !== 0) return done(new Error('a dropped session must not count as served'));
+                        step10();
+                    }, 50);
+                });
+            });
+        });
+    }
+
+    // 10) sdbd takes the connection and never answers; the client speaks, waits, gives up: SDBD_SILENT.
+    //     A probe that connects and leaves without a word is neither a failure nor served.
+    function step10() {
+        var mute = net.createServer(function (s) { s.on('error', function () {}); });
+        mute.listen(0, '127.0.0.1', function () {
+            var relay10 = new relayMod.Relay({ sdbPort: mute.address().port, log: quiet });
+            relay10.start(0, function (err, port) {
+                if (err) return done(err);
+                var probe = net.connect(port, '127.0.0.1', function () { setTimeout(function () { probe.destroy(); }, 30); });
+                probe.on('error', function () {});
+                probe.on('close', function () {
+                    setTimeout(function () {
+                        if (relay10.status().failures !== 0 || relay10.status().served !== 0) return done(new Error('a silent probe is neither a failure nor served: ' + JSON.stringify(relay10.status())));
+                        var talker = net.connect(port, '127.0.0.1', function () { talker.write('CNXN....'); setTimeout(function () { talker.destroy(); }, 120); });
+                        talker.on('error', function () {});
+                        talker.on('close', function () {
+                            setTimeout(function () {
+                                var st = relay10.status();
+                                relay10.stop(); mute.close();
+                                if (st.failures !== 1 || !st.lastFailure || st.lastFailure.code !== 'SDBD_SILENT') return done(new Error('a client that spoke and gave up without a byte back must read SDBD_SILENT: ' + JSON.stringify(st)));
+                                done(null);
+                            }, 50);
+                        });
+                    }, 50);
+                });
+            });
         });
     }
 
@@ -189,6 +280,7 @@ fake.start(SDB, {
         console.log('  a slow reader got every byte before the close');
         console.log('  the session cap refused a client over the limit');
         console.log('  an idle session was closed and forgotten');
+        console.log('  served, allow-list, cap, stop() and idle outcomes recorded right; sdbd down, dropping and silent read SDBD_DOWN, SDBD_DROPPED, SDBD_SILENT');
         process.exit(0);
     }
 });

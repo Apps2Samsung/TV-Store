@@ -13,12 +13,28 @@
  * connection too, so there is a cap on live sessions and an idle timeout, or a client that connects
  * and never speaks could hold sdbd's slots until the TV's own install path fails. ES5, so it runs on
  * the TV's Node 4.4 too.
+ *
+ * The sdb protocol has no way to tell the client why its connection died, so a client only ever sees
+ * "connection reset" (TV-Store#58). The relay therefore works out what happened to each session (sdbd
+ * not listening, sdbd took the connection and closed it without a byte back, sdbd never answered, the
+ * allow list, the cap) and keeps the last failure with a reason in words: the log gets it, status()
+ * carries it to the TV's Settings screen and to GET /relay for Apps2Samsung.
  */
 'use strict';
 var net = require('net');
 
 var MAX_SESSIONS = 16;
 var IDLE_MS = 30 * 60 * 1000;   // sdb's transport connection sits silent between commands; be generous
+
+// The failure codes status().lastFailure.code can carry, with what each means for the person reading it.
+var CODES = {
+    SDBD_DOWN: 'nothing listens on the TV\'s sdbd: Developer Mode is off, or the TV needs a restart',
+    SDBD_DROPPED: 'the TV\'s sdbd took the connection and closed it without answering: Developer Mode\'s Host PC IP is not 127.0.0.1, or the TV was not restarted after setting it',
+    SDBD_SILENT: 'the TV\'s sdbd never answered and the client gave up: Developer Mode\'s Host PC IP is not 127.0.0.1, the TV was not restarted after setting it, or sdbd is busy with another connection',
+    SDBD_ERROR: 'the connection to the TV\'s sdbd failed',
+    NOT_ALLOWED: 'the client is not on the relay\'s allow list',
+    BUSY: 'too many sessions are open through the relay already'
+};
 
 // A comma string or an array of IPs -> a clean array; anything else -> [].
 function normList(allow) {
@@ -53,15 +69,39 @@ function Relay(opts) {
     this._listening = false;
     this._port = null;
     this._error = null;
+    this._served = 0;          // sessions in this run that got at least one byte back from sdbd
+    this._failures = 0;        // sessions in this run that failed, see CODES
+    this._lastFailure = null;  // { at, client, code, reason } of the latest one
 }
+
+// One session went wrong: count it, keep it as the last failure, and log it. A session is recorded
+// once at most, whichever of the socket events gets there first.
+Relay.prototype._fail = function (session, code, detail) {
+    if (session && session.outcome) return;
+    if (session) session.outcome = code;
+    var client = session && session.ip ? session.ip : '';
+    var reason = CODES[code] + (detail ? ' (' + detail + ')' : '');
+    this._failures++;
+    this._lastFailure = { at: new Date().toISOString(), client: client, code: code, reason: reason };
+    this.log('relay: ' + (client || 'a client') + ' failed: ' + reason);
+};
+
+Relay.prototype._serve = function (session) {
+    if (session.outcome) return;
+    session.outcome = 'served';
+    this._served++;
+};
 
 Relay.prototype._forget = function (session) {
     var i = this._sessions.indexOf(session);
     if (i >= 0) this._sessions.splice(i, 1);
 };
 
-// Tear down one relayed connection at once and forget it: for an error, a timeout, or stop().
-Relay.prototype._drop = function (session) {
+// Tear down one relayed connection at once and forget it: for an error, a timeout, or stop(). The
+// outcome, when given, says this end was the relay's own doing, so the close events that follow do not
+// read it as sdbd dropping the client.
+Relay.prototype._drop = function (session, outcome) {
+    if (outcome && !session.outcome) session.outcome = outcome;
     try { session.client.destroy(); } catch (e) {}
     try { session.upstream.destroy(); } catch (e) {}
     this._forget(session);
@@ -73,18 +113,23 @@ Relay.prototype._accept = function (client) {
     var self = this;
     var ip = peerIp(client);
     if (self.allow.length && self.allow.indexOf(ip) < 0) {
-        self.log('relay: refused ' + (ip || 'a client') + ' (not in the allow list)');
+        self._fail({ ip: ip }, 'NOT_ALLOWED');
         try { client.destroy(); } catch (e) {}
         return;
     }
     if (self._sessions.length >= self.maxSessions) {
-        self.log('relay: refused ' + (ip || 'a client') + ' (' + self._sessions.length + ' sessions open already)');
+        self._fail({ ip: ip }, 'BUSY', self._sessions.length + ' open');
         try { client.destroy(); } catch (e) {}
         return;
     }
     var upstream = net.connect(self.sdbPort, self.sdbHost);
-    var session = { client: client, upstream: upstream, closed: 0 };
+    // up and down count the bytes each way; connected says the TCP connect to sdbd completed; outcome is
+    // set once, 'served' or a failure code. Together they tell what happened when a side goes away.
+    var session = { client: client, upstream: upstream, closed: 0, ip: ip, up: 0, down: 0, connected: false, outcome: null, since: Date.now() };
     self._sessions.push(session);
+    upstream.on('connect', function () { session.connected = true; });
+    client.on('data', function (d) { session.down += d.length; });
+    upstream.on('data', function (d) { session.up += d.length; if (!session.outcome) self._serve(session); });
     client.pipe(upstream);
     upstream.pipe(client);
     // When one side closes cleanly the other is ended, not destroyed: pipe() may still hold bytes
@@ -94,14 +139,31 @@ Relay.prototype._accept = function (client) {
         if (++session.closed >= 2) return self._forget(session);
         try { other.end(); } catch (e) {}
     }
-    client.on('error', function () { self._drop(session); });
-    upstream.on('error', function (e) { self.log('relay: upstream ' + self.sdbHost + ':' + self.sdbPort + ' error: ' + e.message); self._drop(session); });
-    client.on('close', function () { closed(upstream); });
-    upstream.on('close', function () { closed(client); });
+    function upstreamFailed(e) {
+        var code = e && e.code ? e.code : (e && e.message) || 'error';
+        if (!session.connected) return self._fail(session, code === 'ECONNREFUSED' ? 'SDBD_DOWN' : 'SDBD_ERROR', code + ' connecting to ' + self.sdbHost + ':' + self.sdbPort);
+        if (!session.up) return self._fail(session, 'SDBD_DROPPED', code);
+        self._fail(session, 'SDBD_ERROR', code + ' after ' + session.up + ' bytes from sdbd');
+    }
+    client.on('error', function () { self._drop(session, 'client-error'); });
+    upstream.on('error', function (e) { upstreamFailed(e); self._drop(session); });
+    client.on('close', function () {
+        // The client went first without a byte back although it had spoken (sent CNXN and waited): sdbd
+        // sat on the connection until the client's own timeout. A probe that connects and leaves without
+        // a word (Apps2Samsung checks the port that way) is neither served nor failed.
+        if (!session.closed && !session.up && session.down && session.connected) self._fail(session, 'SDBD_SILENT', Math.round((Date.now() - session.since) / 1000) + ' s');
+        closed(upstream);
+    });
+    upstream.on('close', function () {
+        // sdbd went first without a byte back: it accepted the TCP connection and closed it, which is
+        // what it does when the peer address is not its Host PC IP.
+        if (!session.closed && !session.up && session.connected) self._fail(session, 'SDBD_DROPPED', 'closed after ' + Math.round(Date.now() - session.since) + ' ms');
+        closed(client);
+    });
     // Every byte either way passes the client socket, so one timer sees the session's whole activity.
     if (self.idleMs > 0) client.setTimeout(self.idleMs, function () {
         self.log('relay: closed ' + (ip || 'a client') + ' after ' + Math.round(self.idleMs / 60000) + ' min idle');
-        self._drop(session);
+        self._drop(session, 'idle');
     });
 };
 
@@ -142,7 +204,7 @@ Relay.prototype.start = function (port, cb) {
 // open, so listening:false would not mean every session is gone (the gap TV-Store#52 calls out).
 Relay.prototype.stop = function () {
     var live = this._sessions.slice();
-    for (var i = 0; i < live.length; i++) this._drop(live[i]);
+    for (var i = 0; i < live.length; i++) this._drop(live[i], 'stopped');
     this._sessions = [];
     var server = this._server, wasListening = this._listening;
     this._server = null;
@@ -155,7 +217,8 @@ Relay.prototype.stop = function () {
 };
 
 Relay.prototype.status = function () {
-    return { listening: this._listening, port: this._port, sessions: this._sessions.length, allow: this.allow.slice(), error: this._error };
+    return { listening: this._listening, port: this._port, sessions: this._sessions.length, allow: this.allow.slice(), error: this._error,
+             served: this._served, failures: this._failures, lastFailure: this._lastFailure };
 };
 
-module.exports = { Relay: Relay, normList: normList, peerIp: peerIp };
+module.exports = { Relay: Relay, normList: normList, peerIp: peerIp, CODES: CODES };
