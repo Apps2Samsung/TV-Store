@@ -63,7 +63,8 @@ function run(id, file, cb) {
         return s.execFile(WASCMD, args, { timeout: TIMEOUT_MS, maxBuffer: MAX_OUTPUT, env: process.env }, function (err, stdout, stderr) {
             var out = String(stdout || '') + String(stderr || '');
             if (err && err.killed) { var t = new Error('wascmd did not finish in ' + Math.round(TIMEOUT_MS / 60000) + ' min'); t.code = 'TIMEOUT'; return cb(t, out); }
-            if (err && !out && (err.code === 'ENOENT' || err.code === 'EACCES' || typeof err.code === 'string')) { var e = new Error('cannot run ' + WASCMD + ': ' + err.code); e.code = err.code; return cb(e); }
+            // A string code (ENOENT, EACCES) is the spawn failing; a number is wascmd's own exit code.
+            if (err && !out && typeof err.code === 'string') { var e = new Error('cannot run ' + WASCMD + ': ' + err.code); e.code = err.code; return cb(e); }
             cb(null, out, err ? err.code : 0);
         });
     }
@@ -84,12 +85,12 @@ function run(id, file, cb) {
 }
 
 // What wascmd said: 'refused' (the installer's own "install failed[...]", to be read as with
-// vd_appinstall), 'ok' ("install completed"), or 'unusable' (anything else: it never got to install,
-// so sdbd is the way after all).
+// vd_appinstall), 'ok' ("install completed" on a 2019 set, "appInstall return : [0]" on an older
+// one), or 'unusable' (anything else: it never got to install, so sdbd is the way after all).
 function interpret(out) {
     var t = String(out || '');
     if (/install failed\[/i.test(t)) return 'refused';
-    if (/install completed/i.test(t)) return 'ok';
+    if (/install completed|appInstall return\s*:\s*\[0\]/i.test(t)) return 'ok';
     return 'unusable';
 }
 

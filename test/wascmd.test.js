@@ -10,8 +10,19 @@ var fs = require('fs'), os = require('os'), path = require('path'), http = requi
 var zip = require('../tizen-app/service/zip.js');
 var Buf = require('../tizen-app/service/compat.js');
 var fake = require('./fake-sdbd.js');
+var wascmdMod = require('../tizen-app/service/wascmd.js');
 
 function fail(m) { stop(); console.error('FAIL: ' + m); process.exit(1); }
+
+// interpret(): both success wordings the sets use, the installer's refusal, and everything else unusable.
+(function () {
+    var i = wascmdMod.interpret;
+    if (i('install X package_path /x was_install_app return WAS_TRUE installing[100] app_id[X] install completed\n') !== 'ok') fail('interpret: "install completed" is ok');
+    if (i('spend time for wascmd is [12]ms\nappInstall return : [0]\n') !== 'ok') fail('interpret: "appInstall return : [0]" is ok');
+    if (i('install X was_install_app return WAS_TRUE app_id[X] install failed[118, -12], reason: x') !== 'refused') fail('interpret: "install failed[" is refused');
+    if (i('install X install failed[118012]') !== 'refused') fail('interpret: a six-digit code is refused');
+    if (i('appInstall return : [-1]') !== 'unusable' || i('wascmd cannot working in released image') !== 'unusable' || i('') !== 'unusable' || i(null) !== 'unusable') fail('interpret: anything else is unusable');
+})();
 var SDB = 26189, F = path.join(__dirname, 'fixtures');
 function pem(f) { return fs.readFileSync(path.join(F, f), 'utf8'); }
 var CERT = { name: 'PC - Public', authorKeyPem: pem('author.key'), authorCertPem: pem('author.crt'), distributorKeyPem: pem('distributor.key'), distributorCertPem: pem('distributor.crt') };
