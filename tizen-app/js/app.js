@@ -1067,8 +1067,8 @@
                     me.line = l.replace(/^\S+\s+install:\s*/, '');
                     var m = /(?:downloaded|uploaded) (\d+) bytes/.exec(l);
                     if (m) { me.bytes = parseInt(m[1], 10); me.step = Math.max(me.step, 1); }
-                    if (/removing the old copy|pushing to/.test(l)) me.step = Math.max(me.step, 2);
-                    if (/vd_appinstall reply/.test(l)) me.step = Math.max(me.step, 3);
+                    if (/removing the old copy|pushing to|handing to wascmd/.test(l)) me.step = Math.max(me.step, 2);
+                    if (/(vd_appinstall|wascmd) reply/.test(l)) me.step = Math.max(me.step, 3);
                 });
                 if (sheet && sheet.mode === 'job' && job === me && me.running) renderSheet();
             }

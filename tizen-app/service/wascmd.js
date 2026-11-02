@@ -1,0 +1,96 @@
+/* Installing through the TV's own wascmd, started by the service itself (TV-Store#57).
+ *
+ * sdbd's `0 vd_appinstall` is a wrapper around /usr/bin/wascmd ("spend time for wascmd is [12]ms" in
+ * its reply). TizenBrewInstaller runs that binary straight from its Node service, with no sdbd in
+ * between, so no Developer Mode Host PC IP has to name anyone. Tizen 3 leaves child_process in the
+ * service's Node; Tizen 4 and later strip the module but keep the binding child_process is built on
+ * (process.binding('spawn_sync')), which is what this reaches for next. The arguments go as an
+ * array, never through a shell. The binding is synchronous: the service answers nothing while
+ * wascmd runs, which the page rides out (its polls wait, its install call has a long timeout).
+ *
+ * Nothing here decides whether the install worked: interpret() reads wascmd's own words, and the
+ * install path in index.js falls back to sdbd when wascmd did not get to say them (not found, not
+ * allowed under the service's label, "cannot working in released image", nothing printed). ES5, for
+ * the TV's Node 4.4.3.
+ */
+'use strict';
+var fs = require('fs');
+
+var WASCMD = process.env.A2S_WASCMD || '/usr/bin/wascmd';   // a test points this at a fake
+var TIMEOUT_MS = 5 * 60 * 1000;
+var MAX_OUTPUT = 1024 * 1024;
+
+// How this Node can start a process: child_process where the runtime has it, else the binding it
+// is built on, else nothing. A2S_SPAWN=spawn_sync makes a test take the binding path on a Node that
+// also has the module.
+function spawner() {
+    var forced = process.env.A2S_SPAWN || '';
+    if (forced !== 'spawn_sync') {
+        try { var cp = require('child_process'); if (cp && typeof cp.execFile === 'function') return { kind: 'child_process', execFile: cp.execFile }; } catch (e) {}
+    }
+    try { var b = process.binding('spawn_sync'); if (b && typeof b.spawn === 'function') return { kind: 'spawn_sync', spawn: b.spawn }; } catch (e2) {}
+    return null;
+}
+
+function present() { try { return fs.statSync(WASCMD).isFile(); } catch (e) { return false; } }
+
+// { path, present, spawn, available }: what /ping reports, and whether an install may try this first.
+function status() {
+    var s = spawner();
+    var p = present();
+    return { path: WASCMD, present: p, spawn: s ? s.kind : null, available: !!(s && p) };
+}
+function available() { return status().available; }
+
+// The libuv errno a failed spawn returns, as its name (ENOENT, EACCES) when this Node will say.
+function errnoName(n) {
+    try { var uv = process.binding('uv'); if (uv && typeof uv.errname === 'function') return uv.errname(n); } catch (e) {}
+    return 'errno ' + n;
+}
+function envPairs() {
+    var out = [];
+    for (var k in process.env) if (Object.prototype.hasOwnProperty.call(process.env, k)) out.push(k + '=' + process.env[k]);
+    return out;
+}
+
+// Runs wascmd -i <id> -p <file>. cb(err, out, exitCode): err only when wascmd could not be started or
+// did not finish (not found, not allowed, timed out); out is everything it printed, for interpret().
+function run(id, file, cb) {
+    var s = spawner();
+    if (!s) { var none = new Error('this Node can start no process'); none.code = 'NO_SPAWN'; return cb(none); }
+    var args = ['-i', String(id), '-p', String(file)];
+    if (s.kind === 'child_process') {
+        return s.execFile(WASCMD, args, { timeout: TIMEOUT_MS, maxBuffer: MAX_OUTPUT, env: process.env }, function (err, stdout, stderr) {
+            var out = String(stdout || '') + String(stderr || '');
+            if (err && err.killed) { var t = new Error('wascmd did not finish in ' + Math.round(TIMEOUT_MS / 60000) + ' min'); t.code = 'TIMEOUT'; return cb(t, out); }
+            if (err && !out && (err.code === 'ENOENT' || err.code === 'EACCES' || typeof err.code === 'string')) { var e = new Error('cannot run ' + WASCMD + ': ' + err.code); e.code = err.code; return cb(e); }
+            cb(null, out, err ? err.code : 0);
+        });
+    }
+    var r;
+    try {
+        r = s.spawn({
+            file: WASCMD, args: ['wascmd'].concat(args), envPairs: envPairs(),
+            stdio: [{ type: 'pipe', readable: true, writable: false }, { type: 'pipe', readable: false, writable: true }, { type: 'pipe', readable: false, writable: true }],
+            maxBuffer: MAX_OUTPUT, timeout: TIMEOUT_MS, killSignal: 15
+        });
+    } catch (ex) { return cb(ex); }
+    if (!r) return cb(new Error('spawn_sync returned nothing'));
+    if (r.error) { var name = errnoName(r.error); var se = new Error('cannot run ' + WASCMD + ': ' + name); se.code = name; return cb(se); }
+    var text = '';
+    if (r.output) for (var i = 1; i < r.output.length; i++) if (r.output[i]) text += r.output[i].toString();
+    if (r.signal) { var to = new Error('wascmd was stopped (' + r.signal + ') after ' + Math.round(TIMEOUT_MS / 60000) + ' min'); to.code = 'TIMEOUT'; return cb(to, text); }
+    cb(null, text, r.status);
+}
+
+// What wascmd said: 'refused' (the installer's own "install failed[...]", to be read as with
+// vd_appinstall), 'ok' ("install completed"), or 'unusable' (anything else: it never got to install,
+// so sdbd is the way after all).
+function interpret(out) {
+    var t = String(out || '');
+    if (/install failed\[/i.test(t)) return 'refused';
+    if (/install completed/i.test(t)) return 'ok';
+    return 'unusable';
+}
+
+module.exports = { status: status, available: available, run: run, interpret: interpret, path: WASCMD };

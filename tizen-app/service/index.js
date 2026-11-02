@@ -23,6 +23,7 @@ var manifest = require('./manifest.js');
 var refusals = require('./refusal.js');
 var certs = require('./certs.js');
 var sdbhosts = require('./sdbhosts.js');
+var wascmd = require('./wascmd.js');
 
 var PORT = 8077;
 // sdbd's port; a test points the service at a fake sdbd (test/install.test.js).
@@ -45,6 +46,13 @@ var RELAY_PORT = parseRelayPort(process.env.A2S_RELAY_PORT, RELAY_PORT_DEFAULT);
 // instead of the connection.
 var CATALOG_URL = 'https://apps2samsung.com/catalog/resolved.json.signed';
 var STAGING = '/home/owner/share/tmp/sdk_tools';   // where sdbd accepts a pushed .wgt
+// How a signed package reaches the TV's installer (#57): wascmd run by the service itself when this
+// Node can start it and the binary is there (no Host PC IP involved), else pushed to sdbd and
+// installed with vd_appinstall as before. A2S_INSTALLER=sdb keeps the sdbd path (a test, or a TV
+// where wascmd misbehaves); INSTALLER_LAST says which one the last install took, for /ping.
+var INSTALLER = process.env.A2S_INSTALLER === 'sdb' ? 'sdb' : 'auto';
+var INSTALLER_LAST = null;
+function installerStatus() { var w = wascmd.status(); return { mode: INSTALLER, wascmd: w, last: INSTALLER_LAST }; }
 var LOGS = [];
 var CERT_NAME = '.a2s-tvstore-certs.json';
 // Where the handed-over certificate is kept, best first: the package's private data folder
@@ -494,24 +502,10 @@ function signAndInstall(entry, remoteName, inFile, outFile, cb) {
             if (err) { log('install: ' + err.message); return tried.length > 1 ? finish(err) : cb(err); }
             var size = fs.statSync(outFile).size;
             log('install: signed with ' + certLabel(cert) + ' in ' + Math.round((Date.now() - started) / 1000) + ' s, ' + size + ' bytes');
-            connectSdb(sdbHosts(), function (err, c) {
-                if (err) return finish(err);
-                var remote = STAGING + '/' + remoteName, fd;
-                try { fd = fs.openSync(outFile, 'r'); } catch (e) { c.end(); return finish(e); }
-                log('install: pushing to ' + remote);
-                var pushStarted = Date.now();
-                c.push(remote, { size: size, read: function (off, len) { return zip.readAt(fd, off, len); } }, function (err) {
-                    try { fs.closeSync(fd); } catch (e) {}
-                    if (err) { c.end(); return finish(err); }
-                    logv('timing: push took ' + (Date.now() - pushStarted) + ' ms');
-                    var installStarted = Date.now();
-                    c.shell('0 vd_appinstall ' + (entry.appId || entry.packageId || '') + ' ' + remote, function (err, out) {
-                        c.end();
+            installSigned(entry, remoteName, outFile, size, function (err, out, via) {
                         if (err) return finish(err);
-                        logv('timing: vd_appinstall took ' + (Date.now() - installStarted) + ' ms');
-                        log('install: vd_appinstall reply: ' + out.replace(/\s+/g, ' ').slice(0, 200));
-                        // sdbd answers the shell call either way; the installer's own words say whether it
-                        // worked ("install failed[118, -12], reason: ..." on a refused package).
+                        // The installer's own words say whether it worked, whichever way the package
+                        // reached it ("install failed[118, -12], reason: ..." on a refused package).
                         var failed = /install failed\[([^\]]*)\](?:,\s*reason:\s*([^\n]*))?/i.exec(out);
                         if (failed) {
                             var r = refusals.refusal(failed[1], failed[2], entry);
@@ -524,12 +518,59 @@ function signAndInstall(entry, remoteName, inFile, outFile, cb) {
                             return finish(coded(r.code, r.message));
                         }
                         rememberCert(entry.packageId, cert.id);
-                        finish(null, { reply: out, certificate: cert.name, level: cert.level });
-                    });
-                });
+                        finish(null, { reply: out, certificate: cert.name, level: cert.level, via: via });
             });
         });
     })(); });
+}
+
+// A signed package to the TV's installer (#57): wascmd first when this TV lets the service run it,
+// else (or when wascmd never got to install: not found, refused under the service's label, "cannot
+// working in released image", said nothing) over sdbd as before. cb(err, out, via) with out the
+// installer's own reply, read by the caller the same way for both.
+function installSigned(entry, remoteName, outFile, size, cb) {
+    var id = entry.appId || entry.packageId || '';
+    if (INSTALLER === 'auto' && wascmd.available()) {
+        log('install: handing to wascmd on the TV itself (' + wascmd.path + ', no sdbd and no Host PC IP involved)');
+        var wasStarted = Date.now();
+        return wascmd.run(id, outFile, function (err, out, code) {
+            logv('timing: wascmd took ' + (Date.now() - wasStarted) + ' ms');
+            var said = String(out || '').replace(/\s+/g, ' ').trim();
+            var verdict = err ? 'error' : wascmd.interpret(out);
+            if (verdict === 'ok' || verdict === 'refused') {
+                INSTALLER_LAST = 'wascmd';
+                log('install: wascmd reply: ' + said.slice(0, 200));
+                return cb(null, out, 'wascmd');
+            }
+            INSTALLER_LAST = 'sdb';
+            log('install: wascmd did not install (' + (err ? err.message : 'exit ' + code + (said ? ', said: ' + said.slice(0, 200) : ', said nothing')) + '); falling back to sdbd');
+            viaSdb();
+        });
+    }
+    viaSdb();
+    function viaSdb() {
+        connectSdb(sdbHosts(), function (err, c) {
+            if (err) return cb(err);
+            var remote = STAGING + '/' + remoteName, fd;
+            try { fd = fs.openSync(outFile, 'r'); } catch (e) { c.end(); return cb(e); }
+            log('install: pushing to ' + remote);
+            var pushStarted = Date.now();
+            c.push(remote, { size: size, read: function (off, len) { return zip.readAt(fd, off, len); } }, function (err) {
+                try { fs.closeSync(fd); } catch (e) {}
+                if (err) { c.end(); return cb(err); }
+                logv('timing: push took ' + (Date.now() - pushStarted) + ' ms');
+                var installStarted = Date.now();
+                c.shell('0 vd_appinstall ' + id + ' ' + remote, function (err, out) {
+                    c.end();
+                    if (err) return cb(err);
+                    INSTALLER_LAST = 'sdb';
+                    logv('timing: vd_appinstall took ' + (Date.now() - installStarted) + ' ms');
+                    log('install: vd_appinstall reply: ' + out.replace(/\s+/g, ' ').slice(0, 200));
+                    cb(null, out, 'sdb');
+                });
+            });
+        });
+    }
 }
 
 // The signed catalog, fetched and verified, cached for 10 minutes (the workflow publishes every
@@ -612,7 +653,7 @@ http.createServer(function (req, res) {
     if (!fromThisTv(req)) { cors(res, 403, 'text/plain'); return res.end('only this TV may use TV-Store'); }
     if (route === '/ping') return json(res, 200, { ok: true, service: 'tv-store', ownIp: ownIp(), logUrl: 'http://' + ownIp() + ':' + PORT + '/log.txt', signerReady: signer.ready, certReady: haveCerts(),
         certCount: haveCerts() ? loadCerts().certificates.length : 0, certNames: certs.names(loadCerts()), certificates: certs.summary(loadCerts()),
-        certFile: CERT_FILE, certError: CERT_ERROR, node: process.version, verbose: VERBOSE, relay: relayStatus() });
+        certFile: CERT_FILE, certError: CERT_ERROR, node: process.version, verbose: VERBOSE, relay: relayStatus(), installer: installerStatus() });
     if (route === '/settings' && req.method === 'POST') return body(req, function (err, b) {
         if (err || !b || (typeof b.verbose !== 'boolean' && b.relay === undefined)) return json(res, 400, { ok: false, error: 'need { verbose: true|false } and/or { relay: { enabled, port, allow } }' });
         if (b.relay !== undefined) { var why = relaySettingsProblem(b.relay); if (why) return json(res, 400, { ok: false, error: why }); }
@@ -645,7 +686,13 @@ http.createServer(function (req, res) {
         (b.upload ? installUpload : install)(b, function (err, r) { if (err) { log('install: failed' + (err.code ? ' [' + err.code + ']' : '') + ': ' + err.message); return json(res, 200, { ok: false, error: err.message, code: err.code || null }); } json(res, 200, { ok: true, result: r }); });
     });
     cors(res, 404, 'text/plain'); res.end('not found');
-}).listen(PORT, '0.0.0.0', function () { log('TV-Store service on port ' + PORT + ', node ' + process.version + ' ' + process.arch + ', this TV ' + ownIp() + ', data ' + DATA_DIR + (VERBOSE ? ', verbose logging on' : '')); logPlatform(); if (RELAY_CFG.enabled) { log('relay: enabled, starting on port ' + RELAY_CFG.port); startRelay(); } });
+}).listen(PORT, '0.0.0.0', function () {
+    log('TV-Store service on port ' + PORT + ', node ' + process.version + ' ' + process.arch + ', this TV ' + ownIp() + ', data ' + DATA_DIR + (VERBOSE ? ', verbose logging on' : ''));
+    var w = wascmd.status();
+    log('installer: ' + (INSTALLER === 'sdb' ? 'sdbd only (A2S_INSTALLER=sdb)' : w.available ? 'wascmd first (' + w.path + ' via ' + w.spawn + '), sdbd as the fallback' : 'sdbd (' + (w.present ? 'this Node can start no process' : w.path + ' is not there') + ')'));
+    logPlatform();
+    if (RELAY_CFG.enabled) { log('relay: enabled, starting on port ' + RELAY_CFG.port); startRelay(); }
+});
 
 module.exports.onStart = function () { log('service onStart'); };
 module.exports.onRequest = function () { log('service onRequest'); };

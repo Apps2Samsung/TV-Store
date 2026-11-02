@@ -85,16 +85,31 @@ acts as the TV's own PC:
 
 1. downloads the package from the catalog and checks it against the SHA-256 the catalog gives it,
 2. signs it on the TV with your certificate (the same signatures Apps2Samsung makes),
-3. pushes it to the TV's own `sdbd` and installs it.
+3. hands it to the TV's installer: through `wascmd` on the TV itself when the service may run it
+   (#57, below), else pushed to the TV's own `sdbd` and installed from there.
 
 The TVs cannot check today's HTTPS certificates (their certificate store is too old), so TV-Store
 trusts the content instead: the catalog (`resolved.json.signed`) is signed by the Apps2Samsung
 catalog workflow and checked against the key built into TV-Store, and a package installs only when
 its hash matches that catalog.
 
-For that, Developer Mode's **Host PC IP** on the TV must be set to the TV's own address or to
-`127.0.0.1`. TV-Store tries both and uses whichever the TV lets in, so a rooted TV (pinned at
-`127.0.0.1`) installs too.
+For the `sdbd` way, Developer Mode's **Host PC IP** on the TV must be set to the TV's own address
+or to `127.0.0.1`. TV-Store tries both and uses whichever the TV lets in, so a rooted TV (pinned
+at `127.0.0.1`) installs too.
+
+**`wascmd` from the service (#57).** `sdbd`'s `vd_appinstall` is itself a wrapper around
+`/usr/bin/wascmd`, and TizenBrewInstaller runs that binary straight from its Node service, so the
+Host PC IP never comes into it. Since 0.3.16 TV-Store's service does the same first: when
+`/usr/bin/wascmd` is there and this Node can start a process (`child_process` on Tizen 3; the
+binding it is built on, `process.binding('spawn_sync')`, on Tizen 4 and later, where the module is
+stripped), the signed package goes to `wascmd -i <id> -p <file>` (arguments as a list, no shell)
+and its reply is read exactly like `vd_appinstall`'s. When `wascmd` did not get to install (not
+there, not allowed under the service's label, "cannot working in released image", nothing printed)
+the install falls back to `sdbd` as before, and the log says so. `A2S_INSTALLER=sdb` in the
+service's environment keeps the `sdbd` way only. `/ping` reports it (`installer: { mode, wascmd: {
+path, present, spawn, available }, last }`), and the log's second line at start says which way
+installs will take. The binding is synchronous, so the service answers nothing while `wascmd` runs;
+the page's polls wait that out. Removing an old copy for a replace still goes over `sdbd`.
 
 The screen talks to the service over HTTP on port 8077. Apps2Samsung writes the TV's own IP into
 TV-Store when it installs it, because Tizen 10 may not let a page reach its service over
@@ -189,6 +204,7 @@ The header counts what the switches hide ("12 apps · 3 hidden").
   Node 20 and does not start split ones)
 - `tizen-app/service/sdb.js`: the SDB client (connect, push, install)
 - `tizen-app/service/sdbhosts.js`: the order to try sdbd on, the TV's own IP and 127.0.0.1 (#52)
+- `tizen-app/service/wascmd.js`: the TV's own installer run by the service, without sdbd (#57)
 - `tizen-app/service/signer.js`: the package signer
 - `tizen-app/service/catalog.js` + `catalog-key.js`: the signed catalog check and its public key
 - `tizen-app/service/compat.js`: buffers that work on the TV's Node 4.4.3
@@ -228,6 +244,7 @@ node test/install.test.js   # a certificate mismatch is retried with the next pr
 node test/certlevel.test.js # Public or Partner per install: refused up front, picked by privilege, chosen by hand
 node test/sdbhosts.test.js  # the order of addresses to try sdbd on
 node test/sdb-loopback.test.js  # install works whether Host PC IP is the TV's own IP or 127.0.0.1
+node test/wascmd.test.js    # install through wascmd from the service (fake wascmd), its refusals, the sdbd fallback, over spawn_sync too
 node test/relay.test.js     # the on-TV sdb relay: a session survives the hop, allow list, cap, idle, stop; every failure told apart with a reason
 node test/relay-settings.test.js  # relay settings over /settings: validation, restart only on change, status; GET /relay for the LAN
 ```
@@ -240,6 +257,7 @@ Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching 
 | Piece | State |
 |---|---|
 | Install through the TV's own `sdbd` | proven on a retail set |
+| Install through `wascmd` from the service, no Host PC IP (#57) | built against a fake `wascmd`, falls back to `sdbd`; not yet tried on a real set: whether a retail set lets the service run it, and with Developer Mode off, is the open question |
 | Signing on the TV | done, identical output to the Apps2Samsung signer |
 | Arming from Apps2Samsung (phone, PC, CLI) | done |
 | The screens above | built (0.3.4); pins, developer search, your own .wgt or .tpk (0.3.10); finds itself under a renamed package id and sends you to Apps2Samsung to update it (0.3.11); Public or Partner certificate per app (0.3.13); the sdb relay switch (0.3.14); the relay's failure reasons under it (0.3.15) |
