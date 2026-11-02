@@ -195,7 +195,7 @@
     // Developer Mode's Host PC IP at 127.0.0.1 the TV's sdbd takes only loopback, which locks every
     // phone and PC out; the relay hands their connections to sdbd over loopback, so Apps2Samsung
     // (3.2 or newer) reaches this TV from any address without anyone typing one into Developer Mode.
-    var relayBusy = false;
+    var relayBusy = false, relayError = null;   // relayError: why the last switch flip failed, shown under the row
     function relayAddress() { var r = ready && ready.relay; return (ready && ready.ownIp ? ready.ownIp : 'this TV') + ':' + (r && (r.port || r.configuredPort) || 26201); }
     function relayRow() {
         var r = ready && ready.relay;
@@ -208,10 +208,14 @@
     }
     function relayNotice() {
         var r = ready && ready.relay;
-        if (!r || !r.enabled) return '';
-        if (r.error) return '<div class="notice bad">' + esc('The relay could not start: ' + r.error + '. Turn it off and on again; if that does not help, restart TV-Store.') + '</div>';
-        if (!r.listening) return '<div class="notice">' + esc('The relay is starting…') + '</div>';
-        return '<div class="notice info">' + esc('Once: on the TV open Apps, type 1 2 3 4 5, set Host PC IP to 127.0.0.1 and restart the TV. From then on Apps2Samsung 3.2 or newer finds ' + relayAddress() + ' by itself'
+        if (!r) return '';
+        // A flip that the service refused or that got no answer: said here, since this sheet has no
+        // hint line for flash() and a re-render would wipe one anyway.
+        var flip = relayError ? '<div class="notice bad">' + esc('Could not ' + relayError.want + ' the relay: ' + relayError.why) + '</div>' : '';
+        if (!r.enabled) return flip;
+        if (r.error) return flip + '<div class="notice bad">' + esc('The relay could not start: ' + r.error + '. Turn it off and on again; if that does not help, restart TV-Store.') + '</div>';
+        if (!r.listening) return flip + '<div class="notice">' + esc('The relay is starting…') + '</div>';
+        return flip + '<div class="notice info">' + esc('Once: on the TV open Apps, type 1 2 3 4 5, set Host PC IP to 127.0.0.1 and restart the TV. From then on Apps2Samsung 3.2 or newer finds ' + relayAddress() + ' by itself'
             + (r.allow && r.allow.length ? '; allowed clients: ' + r.allow.join(', ') : '') + '. This TV keeps installing from TV-Store either way.') + '</div>'
             + relayFailureNotice(r);
     }
@@ -242,8 +246,8 @@
         relayBusy = true;
         xhr('POST', '/settings', { relay: { enabled: want } }, function (err, res) {
             relayBusy = false;
-            if (!err && res && res.ok) ready.relay = res.relay;
-            else flash('Could not ' + (want ? 'turn on' : 'turn off') + ' the relay: ' + (err ? err.message : (res && res.error) || 'no answer from the service'));
+            if (!err && res && res.ok) { ready.relay = res.relay; relayError = null; }
+            else relayError = { want: want ? 'turn on' : 'turn off', why: err ? err.message : (res && res.error) || 'no answer from the service' };
             renderSheet(); focusKey('opt:relay');
         });
     }
@@ -1039,6 +1043,8 @@
         var req = v.upload ? { upload: v.upload, token: uploadToken, tizen: tvTizen, installed: onTv, replace: replace } : { url: v.url, file: v.file, appId: v.appId, packageId: v.packageId, name: x.name, tizen: tvTizen, installed: onTv, replace: replace };
         // Sign with (#50): the choice made on the TV; the service takes the catalog's and the manifest's word otherwise.
         if (certChoiceOf(v)) req.certLevel = certChoiceOf(v);
+        // Download, sign and install in one call; a slow set with a big package needs more than the
+        // usual 3 min, and while wascmd runs (#57) the service answers nothing at all for up to 5 min.
         xhr('POST', '/install', req, function (err, res) {
             clearInterval(timer);
             pollLog(me, since, function () {
@@ -1054,7 +1060,7 @@
                     if (queue.length) setTimeout(function () { var nx = queue.shift(); startInstall(nx, state(nx).variant); }, 2500);
                 });
             });
-        });
+        }, null, 15 * 60 * 1000);
     }
 
     // The service's log tells how far an install is (index.js writes one line per stage).

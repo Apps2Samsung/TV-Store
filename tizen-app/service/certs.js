@@ -88,13 +88,18 @@ function fromStored(obj) {
 // and a package installed Public that now wants Partner is a certificate mismatch on the TV (the
 // Partner profile has its own author), which the page answers with "remove the old copy first".
 // [] when none serves, which the caller turns into NEEDS_PARTNER.
-function order(store, preferredId, want) {
+// want ('public' | 'partner') keeps only the profiles that serve that level: the level is firm.
+// prefer moves the profiles that serve it to the front and keeps the rest behind them: the first
+// choice, with every other profile still tried after it (#50; a manifest's partner privilege is a
+// preference, not a demand, so a copy installed Public from a phone still updates).
+function order(store, preferredId, want, prefer) {
     var list = (store && store.certificates) || [], out = [];
     if (want) list = list.filter(function (c) { return serves(c, want); });
     function push(id) { list.forEach(function (c) { if (c.id === id && out.indexOf(c) < 0) out.push(c); }); }
     if (preferredId) push(preferredId);
     if (store && store.primary) push(store.primary);
     list.forEach(function (c) { if (out.indexOf(c) < 0) out.push(c); });
+    if (prefer) out = out.filter(function (c) { return serves(c, prefer); }).concat(out.filter(function (c) { return !serves(c, prefer); }));
     return out;
 }
 // Whether the TV holds a profile that serves `want`.

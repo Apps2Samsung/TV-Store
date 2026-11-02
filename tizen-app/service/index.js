@@ -52,7 +52,10 @@ var STAGING = '/home/owner/share/tmp/sdk_tools';   // where sdbd accepts a pushe
 // where wascmd misbehaves); INSTALLER_LAST says which one the last install took, for /ping.
 var INSTALLER = process.env.A2S_INSTALLER === 'sdb' ? 'sdb' : 'auto';
 var INSTALLER_LAST = null;
-function installerStatus() { var w = wascmd.status(); return { mode: INSTALLER, wascmd: w, last: INSTALLER_LAST }; }
+// Read once: whether the binary is there and how this Node starts a process cannot change while the
+// service runs, and the page polls /ping all the time.
+var WASCMD = wascmd.status();
+function installerStatus() { return { mode: INSTALLER, wascmd: WASCMD, last: INSTALLER_LAST }; }
 var LOGS = [];
 var CERT_NAME = '.a2s-tvstore-certs.json';
 // Where the handed-over certificate is kept, best first: the package's private data folder
@@ -493,7 +496,7 @@ function signAndInstall(entry, remoteName, inFile, outFile, cb) {
     var lvl = wantedLevel(entry, store, remembered);
     if (lvl.missing) { var miss = missingLevel(lvl.want, store); log('install: ' + lvl.why + ', but the TV holds no ' + levelName(lvl.want) + ' certificate; not installing'); return cb(miss); }
     if (lvl.want || lvl.prefer) log('install: signing with a ' + levelName(lvl.want || lvl.prefer) + ' certificate: ' + lvl.why);
-    var tries = certs.order(store, remembered, lvl.want || lvl.prefer), tried = [], i = 0, mismatch = null;
+    var tries = certs.order(store, remembered, lvl.want, lvl.prefer), tried = [], i = 0, mismatch = null;
     function finish(err, r) { try { fs.unlinkSync(inFile); } catch (e) {} try { fs.unlinkSync(outFile); } catch (e) {} cb(err, r); }
     removeOld(entry, function () { (function attempt() {
         var cert = tries[i++], started = Date.now();
@@ -530,7 +533,7 @@ function signAndInstall(entry, remoteName, inFile, outFile, cb) {
 // installer's own reply, read by the caller the same way for both.
 function installSigned(entry, remoteName, outFile, size, cb) {
     var id = entry.appId || entry.packageId || '';
-    if (INSTALLER === 'auto' && wascmd.available()) {
+    if (INSTALLER === 'auto' && WASCMD.available) {
         log('install: handing to wascmd on the TV itself (' + wascmd.path + ', no sdbd and no Host PC IP involved)');
         var wasStarted = Date.now();
         return wascmd.run(id, outFile, function (err, out, code) {
@@ -542,7 +545,6 @@ function installSigned(entry, remoteName, outFile, size, cb) {
                 log('install: wascmd reply: ' + said.slice(0, 200));
                 return cb(null, out, 'wascmd');
             }
-            INSTALLER_LAST = 'sdb';
             log('install: wascmd did not install (' + (err ? err.message : 'exit ' + code + (said ? ', said: ' + said.slice(0, 200) : ', said nothing')) + '); falling back to sdbd');
             viaSdb();
         });
@@ -688,7 +690,7 @@ http.createServer(function (req, res) {
     cors(res, 404, 'text/plain'); res.end('not found');
 }).listen(PORT, '0.0.0.0', function () {
     log('TV-Store service on port ' + PORT + ', node ' + process.version + ' ' + process.arch + ', this TV ' + ownIp() + ', data ' + DATA_DIR + (VERBOSE ? ', verbose logging on' : ''));
-    var w = wascmd.status();
+    var w = WASCMD;
     log('installer: ' + (INSTALLER === 'sdb' ? 'sdbd only (A2S_INSTALLER=sdb)' : w.available ? 'wascmd first (' + w.path + ' via ' + w.spawn + '), sdbd as the fallback' : 'sdbd (' + (w.present ? 'this Node can start no process' : w.path + ' is not there') + ')'));
     logPlatform();
     if (RELAY_CFG.enabled) { log('relay: enabled, starting on port ' + RELAY_CFG.port); startRelay(); }

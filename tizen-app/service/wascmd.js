@@ -6,7 +6,8 @@
  * service's Node; Tizen 4 and later strip the module but keep the binding child_process is built on
  * (process.binding('spawn_sync')), which is what this reaches for next. The arguments go as an
  * array, never through a shell. The binding is synchronous: the service answers nothing while
- * wascmd runs, which the page rides out (its polls wait, its install call has a long timeout).
+ * wascmd runs (up to TIMEOUT_MS), so the page's install call waits longer than that and its polls
+ * simply fail and retry meanwhile.
  *
  * Nothing here decides whether the install worked: interpret() reads wascmd's own words, and the
  * install path in index.js falls back to sdbd when wascmd did not get to say them (not found, not
