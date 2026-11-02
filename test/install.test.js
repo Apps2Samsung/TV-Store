@@ -10,7 +10,7 @@ var zip = require('../tizen-app/service/zip.js');
 var Buf = require('../tizen-app/service/compat.js');
 var fake = require('./fake-sdbd.js');
 
-function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
+function fail(m) { stop(); console.error('FAIL: ' + m); process.exit(1); }
 var SDB = 26193, F = path.join(__dirname, 'fixtures');
 function pem(f) { return fs.readFileSync(path.join(F, f), 'utf8'); }
 var PC = { name: 'PC - Public', authorKeyPem: pem('author.key'), authorCertPem: pem('author.crt'), distributorKeyPem: pem('distributor.key'), distributorCertPem: pem('distributor.crt') };
@@ -87,6 +87,10 @@ function run() {
                     replies = [OK];
                     installUpload({}, function (j, calls) {
                         if (!j.ok || j.result.certificate !== 'Phone - Public' || calls.filter(function (c) { return c.indexOf('vd_appinstall') >= 0; }).length !== 1) fail('the remembered profile must go first: ' + JSON.stringify(j) + ' ' + JSON.stringify(calls));
+                        // /ping tells the page which profile each package took, so its "Sign with" line can say so.
+                        call('GET', '/ping', null, function (e, code, p) {
+                        // (The Phone fixture reuses the distributor chain as author, so its level reads unknown here.)
+                        if (!p.remembered || !p.remembered.A2SProbe01 || p.remembered.A2SProbe01.name !== 'Phone - Public' || typeof p.remembered.A2SProbe01.level !== 'string') fail('/ping must list the remembered profile per package: ' + JSON.stringify(p.remembered));
                         // 3. Every profile refused: CERT_MISMATCH naming them, nothing removed.
                         replies = [MISMATCH, MISMATCH];
                         installUpload({}, function (j, calls) {
@@ -117,10 +121,11 @@ function run() {
                                 if (un < 0 || ins < 0 || un > ins) fail('replace must uninstall before installing: ' + JSON.stringify(calls));
                                 stop();
                                 try { fs.readdirSync(dir).forEach(function (f) { fs.unlinkSync(path.join(dir, f)); }); fs.rmdirSync(dir); } catch (e) {}
-                                console.log('PASS: a refused signature is retried with the next profile, the one taken is remembered, all refused is CERT_MISMATCH, replace uninstalls first');
+                                console.log('PASS: a refused signature is retried with the next profile, the one taken is remembered (and on /ping), all refused is CERT_MISMATCH, replace uninstalls first');
                                 process.exit(0);
                             });
                             }
+                        });
                         });
                     });
                 });

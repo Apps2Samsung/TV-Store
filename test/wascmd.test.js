@@ -33,6 +33,7 @@ var wgt = zip.write([{ name: 'index.html', data: Buf.from('<html></html>') },
 // The fake wascmd: records "args: ..." and whether the package file was there, answers per the mode file.
 var FAKE = path.join(dir, 'wascmd'), FAKE_LOG = path.join(dir, 'wascmd.log'), MODE = path.join(dir, 'wascmd.mode');
 fs.writeFileSync(FAKE, '#!/bin/sh\n'
+    + 'if [ $# -eq 0 ]; then echo "usage: wascmd -i <appid> -p <path> | -u <appid>"; exit 1; fi\n'
     + 'echo "args: $*" >> "$A2S_FAKE_WASCMD_LOG"\n'
     + 'if [ -f "$4" ]; then echo "file: exists" >> "$A2S_FAKE_WASCMD_LOG"; else echo "file: missing" >> "$A2S_FAKE_WASCMD_LOG"; fi\n'
     + 'mode=$(cat "$A2S_FAKE_WASCMD_MODE" 2>/dev/null || echo ok)\n'
@@ -79,11 +80,13 @@ function call(method, p, data, cb) {
     req.end();
 }
 function token() { return fs.readFileSync(path.join(dir, '.a2s-upload-token'), 'utf8').trim(); }
-function installProbe(cb) {
+function installProbe(cb, flags) {
     var before = shells.length, logBefore = fakeLog();
     call('PUT', '/upload?name=Probe.wgt', wgt, function (e, code, j) {
         if (e || code !== 200 || !j || !j.ok) fail('upload: ' + code + ' ' + JSON.stringify(j));
-        call('POST', '/install', JSON.stringify({ upload: j.upload.id, token: token(), installed: true }), function (e, code, j) {
+        var body = { upload: j.upload.id, token: token(), installed: true };
+        Object.keys(flags || {}).forEach(function (k) { body[k] = flags[k]; });
+        call('POST', '/install', JSON.stringify(body), function (e, code, j) {
             if (e || code !== 200 || !j) fail('install call: ' + code + ' ' + JSON.stringify(j));
             cb(j, shells.slice(before), fakeLog().slice(logBefore.length));
         });
@@ -100,6 +103,10 @@ fake.start(SDB, { shell: function (cmd) { shells.push(cmd); return cmd.indexOf('
         if (!inst || inst.mode !== 'auto' || !inst.wascmd || !inst.wascmd.available || inst.wascmd.path !== FAKE || inst.wascmd.spawn !== 'child_process' || inst.last !== null) fail('/ping installer: ' + JSON.stringify(inst));
         call('POST', '/cert', JSON.stringify({ certificates: [CERT] }), function (e, code, j) {
             if (e || code !== 200 || !j.ok) fail('hand-over: ' + code + ' ' + JSON.stringify(j));
+            // 0b. The log carries what wascmd prints without arguments (its flags, for a real set's log).
+            logs(function (text) {
+            if (!/installer: wascmd first \(.* via child_process\), sdbd as the fallback/.test(text)) fail('the start-up log must say wascmd first:\n' + text);
+            if (!/installer: wascmd without arguments says: usage: wascmd -i <appid> -p <path> \| -u <appid>/.test(text)) fail('the start-up log must carry the usage text:\n' + text);
             // 1. wascmd installs: -i <app id> -p <the signed file, present at that moment>, sdbd untouched.
             mode('ok');
             installProbe(function (j, calls, wl) {
@@ -133,6 +140,7 @@ fake.start(SDB, { shell: function (cmd) { shells.push(cmd); return cmd.indexOf('
                     });
                 });
             });
+            });
         });
     });
 });
@@ -162,10 +170,29 @@ function sdbOnly() {
         mode('ok');
         installProbe(function (j, calls, wl) {
             if (!j.ok || j.result.via !== 'sdb' || sdbInstalls(calls) !== 1 || wl) fail('A2S_INSTALLER=sdb must not run wascmd: ' + JSON.stringify(j) + ' ' + JSON.stringify(wl));
-            stop();
-            try { fs.readdirSync(dir).forEach(function (f) { fs.unlinkSync(path.join(dir, f)); }); fs.rmdirSync(dir); } catch (e) {}
-            console.log('PASS: wascmd installs with -i <id> -p <signed file> and no sdbd, its refusal reads as CERT_MISMATCH, "released image" or silence falls back to sdbd, the same over spawn_sync, A2S_INSTALLER=sdb keeps it out');
-            process.exit(0);
+            replaceWithoutSdb();
+        });
+    });
+}
+
+// 7. wascmd there, sdbd out of reach (Host PC IP at a phone): a plain install still goes through wascmd,
+//    but a replace stops with REPLACE_NEEDS_SDB instead of hitting the same mismatch again.
+function replaceWithoutSdb() {
+    try { handle.server.close(); } catch (e) {}
+    handle = null;
+    restart({}, function (ping) {
+        if (!ping.installer.wascmd.available) fail('wascmd must still be available: ' + JSON.stringify(ping.installer));
+        mode('ok');
+        installProbe(function (j) {
+            if (!j.ok || j.result.via !== 'wascmd') fail('without sdbd a plain install still goes through wascmd: ' + JSON.stringify(j));
+            installProbe(function (j, calls, wl) {
+                if (j.ok || j.code !== 'REPLACE_NEEDS_SDB' || !/cannot remove the old copy/.test(j.error) || !/Apps menu/.test(j.error)) fail('a replace without sdbd must stop with REPLACE_NEEDS_SDB: ' + JSON.stringify(j));
+                if (wl) fail('a refused replace must not run wascmd: ' + JSON.stringify(wl));
+                stop();
+                try { fs.readdirSync(dir).forEach(function (f) { fs.unlinkSync(path.join(dir, f)); }); fs.rmdirSync(dir); } catch (e) {}
+                console.log('PASS: wascmd installs with -i <id> -p <signed file> and no sdbd, its usage is logged at start, its refusal reads as CERT_MISMATCH, "released image" or silence falls back to sdbd, the same over spawn_sync, A2S_INSTALLER=sdb keeps it out, a replace without sdbd stops with REPLACE_NEEDS_SDB');
+                process.exit(0);
+            }, { replace: true });
         });
     });
 }

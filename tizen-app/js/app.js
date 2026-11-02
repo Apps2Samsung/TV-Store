@@ -116,6 +116,10 @@
         var held = levelsHeld(), choice = auto ? '' : certChoiceOf(v);
         if (choice) return { level: choice, by: 'chosen', missing: !held[choice] };
         if (v.certLevel === 'partner') return { level: 'partner', by: 'catalog', missing: !held.partner };
+        // An app TV-Store signed before is signed with that profile first, whatever the manifest asks
+        // (the service's wantedLevel(); /ping lists them as remembered).
+        var rem = ready && ready.remembered && v.packageId && ready.remembered[v.packageId];
+        if (rem) { var rl = rem.level === 'partner' ? 'partner' : 'public'; if (held[rl]) return { level: rl, by: 'remembered', name: rem.name, missing: false }; }   // an unknown chain serves as Public, as in certs.js
         if (v.manifestPartner && held.partner) return { level: 'partner', by: 'manifest', missing: false };
         return { level: held.public ? 'public' : 'partner', by: 'auto', missing: false };
     }
@@ -901,7 +905,9 @@
         if (!(held.public && held.partner)) return '';
         var choice = certChoiceOf(v) || 'auto';
         var auto = plan.by === 'chosen' ? signPlan(v, true) : plan;
-        var why = auto.by === 'catalog' ? 'Automatic: Partner, the catalog says this app needs it' : auto.by === 'manifest' ? 'Automatic: Partner, the package asks for partner-level rights' : 'Automatic: Public';
+        var why = auto.by === 'catalog' ? 'Automatic: Partner, the catalog says this app needs it'
+            : auto.by === 'remembered' ? 'Automatic: ' + levelName(auto.level) + ', the certificate this app was installed with (' + auto.name + ')'
+            : auto.by === 'manifest' ? 'Automatic: Partner, the package asks for partner-level rights' : 'Automatic: Public';
         return '<div class="vhead"><span class="t">Sign with</span><span class="h">' + esc(why) + '</span></div><div class="chips" style="margin-bottom:0">'
             + [['auto', 'Automatic'], ['public', 'Public'], ['partner', 'Partner']].map(function (o) {
                 return '<div class="chip f' + (o[0] === choice ? ' on' : '') + '" tabindex="0" data-k="cert:' + o[0] + '" data-cert="' + o[0] + '">' + o[1] + '</div>';
@@ -1053,6 +1059,8 @@
                 me.ok = true; me.step = 4; me.certificate = (res.result && res.result.certificate) || ''; me.level = (res.result && res.result.level) || '';
                 if (v.packageId) { installed[v.packageId] = v.version; claims = null; rememberVariant(v); }
                 if (v.appId) appIds[v.appId] = true;
+                // The service now remembers the profile this package took; the next sheet should say so.
+                xhr('GET', '/ping', null, function (e, p) { if (!e && p && p.ok) ready = p; }, null, 5000);
                 readInstalled(function (map) {
                     if (map && Object.keys(map).length) setInstalled(map);
                     renderPage();

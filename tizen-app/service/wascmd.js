@@ -56,14 +56,19 @@ function envPairs() {
 
 // Runs wascmd -i <id> -p <file>. cb(err, out, exitCode): err only when wascmd could not be started or
 // did not finish (not found, not allowed, timed out); out is everything it printed, for interpret().
-function run(id, file, cb) {
+function run(id, file, cb) { exec(['-i', String(id), '-p', String(file)], TIMEOUT_MS, cb); }
+
+// wascmd without arguments: its usage text, for the log. The uninstall flag is not documented
+// anywhere, so the first real set's log is where it will be read from. cb(err, out).
+function usage(cb) { exec([], 10 * 1000, function (err, out) { cb(err, out); }); }
+
+function exec(args, timeoutMs, cb) {
     var s = spawner();
     if (!s) { var none = new Error('this Node can start no process'); none.code = 'NO_SPAWN'; return cb(none); }
-    var args = ['-i', String(id), '-p', String(file)];
     if (s.kind === 'child_process') {
-        return s.execFile(WASCMD, args, { timeout: TIMEOUT_MS, maxBuffer: MAX_OUTPUT, env: process.env }, function (err, stdout, stderr) {
+        return s.execFile(WASCMD, args, { timeout: timeoutMs, maxBuffer: MAX_OUTPUT, env: process.env }, function (err, stdout, stderr) {
             var out = String(stdout || '') + String(stderr || '');
-            if (err && err.killed) { var t = new Error('wascmd did not finish in ' + Math.round(TIMEOUT_MS / 60000) + ' min'); t.code = 'TIMEOUT'; return cb(t, out); }
+            if (err && err.killed) { var t = new Error('wascmd did not finish in ' + Math.round(timeoutMs / 1000) + ' s'); t.code = 'TIMEOUT'; return cb(t, out); }
             // A string code (ENOENT, EACCES) is the spawn failing; a number is wascmd's own exit code.
             if (err && !out && typeof err.code === 'string') { var e = new Error('cannot run ' + WASCMD + ': ' + err.code); e.code = err.code; return cb(e); }
             cb(null, out, err ? err.code : 0);
@@ -74,14 +79,14 @@ function run(id, file, cb) {
         r = s.spawn({
             file: WASCMD, args: ['wascmd'].concat(args), envPairs: envPairs(),
             stdio: [{ type: 'pipe', readable: true, writable: false }, { type: 'pipe', readable: false, writable: true }, { type: 'pipe', readable: false, writable: true }],
-            maxBuffer: MAX_OUTPUT, timeout: TIMEOUT_MS, killSignal: 15
+            maxBuffer: MAX_OUTPUT, timeout: timeoutMs, killSignal: 15
         });
     } catch (ex) { return cb(ex); }
     if (!r) return cb(new Error('spawn_sync returned nothing'));
     if (r.error) { var name = errnoName(r.error); var se = new Error('cannot run ' + WASCMD + ': ' + name); se.code = name; return cb(se); }
     var text = '';
     if (r.output) for (var i = 1; i < r.output.length; i++) if (r.output[i]) text += r.output[i].toString();
-    if (r.signal) { var to = new Error('wascmd was stopped (' + r.signal + ') after ' + Math.round(TIMEOUT_MS / 60000) + ' min'); to.code = 'TIMEOUT'; return cb(to, text); }
+    if (r.signal) { var to = new Error('wascmd was stopped (' + r.signal + ') after ' + Math.round(timeoutMs / 1000) + ' s'); to.code = 'TIMEOUT'; return cb(to, text); }
     cb(null, text, r.status);
 }
 
@@ -95,4 +100,4 @@ function interpret(out) {
     return 'unusable';
 }
 
-module.exports = { status: status, available: available, run: run, interpret: interpret, path: WASCMD };
+module.exports = { status: status, available: available, run: run, usage: usage, interpret: interpret, path: WASCMD };

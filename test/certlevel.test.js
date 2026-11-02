@@ -12,7 +12,7 @@ var zip = require('../tizen-app/service/zip.js');
 var Buf = require('../tizen-app/service/compat.js');
 var fake = require('./fake-sdbd.js');
 
-function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
+function fail(m) { stop(); console.error('FAIL: ' + m); process.exit(1); }
 var SDB = 26194, F = path.join(__dirname, 'fixtures');
 function pem(f) { return fs.readFileSync(path.join(F, f), 'utf8'); }
 var PUB = { name: 'PC - Public', authorKeyPem: pem('author.key'), authorCertPem: pem('author.crt'), distributorKeyPem: pem('public-distributor.key'), distributorCertPem: pem('public-distributor.crt') };
