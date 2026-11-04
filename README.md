@@ -105,15 +105,32 @@ binding it is built on, `process.binding('spawn_sync')`, on Tizen 4 and later, w
 stripped), the signed package goes to `wascmd -i <id> -p <file>` (arguments as a list, no shell)
 and its reply is read exactly like `vd_appinstall`'s. When `wascmd` did not get to install (not
 there, not allowed under the service's label, "cannot working in released image", nothing printed)
-the install falls back to `sdbd` as before, and the log says so. `A2S_INSTALLER=sdb` in the
-service's environment keeps the `sdbd` way only. `/ping` reports it (`installer: { mode, wascmd: {
-path, present, spawn, available }, last }`), and the log's second line at start says which way
-installs will take. The binding is synchronous, so the service answers nothing while `wascmd` runs;
-the page's install call waits longer than that. The start-up log also carries what `wascmd` prints
-without arguments (its flags; no document gives them, the uninstall one in particular), so a real
-set's log is where they get read from. Until then, removing an old copy for a replace still goes
-over `sdbd`; when `sdbd` cannot be reached while `wascmd` does the installs, the replace stops with
-`REPLACE_NEEDS_SDB` and says what to do instead of running into the same certificate mismatch.
+the install falls back to `sdbd` as before, and the log says so. The binding is synchronous, so
+the service answers nothing while `wascmd` runs; the page's install call waits longer than that.
+Right before the first install the log also gets what `wascmd` prints without arguments (its
+flags; no document gives them, the uninstall one in particular), so a real set's log is where they
+get read from. Until then, removing an old copy for a replace still goes over `sdbd`; when `sdbd`
+cannot be reached while `wascmd` does the installs, the replace stops with `REPLACE_NEEDS_SDB` and
+says what to do instead of running into the same certificate mismatch.
+
+**What starting `wascmd` can cost (#67, #68).** On two Tizen 9 sets (2023 models on the 2025
+firmware) 0.3.16 and 0.3.17 did not come up at all: the service ran `wascmd` without arguments at
+start-up for its usage text, and that fork took the shared `wrt-service` process down on most
+starts, before the service listened ("Launched, but nothing answers on port 8077"); on the starts
+it survived, the TV refused the run with `EACCES`. So the service starts nothing before the first
+install, and guards that in three ways. It asks the kernel first, without a fork, whether it may
+run the binary at all (`access(2)` with `X_OK`, which the file's mode and the TV's Smack labels
+both answer; the log says `this service may not run it: EACCES` and installs take `sdbd`). It
+keeps a marker file (`.a2s-wascmd-running` in the data folder) from before the first process
+starts until `wascmd` answered, so a service that finds it at the next start knows the last run
+died inside that call, says so, keeps to `sdbd` and remembers that in `.a2s-installer.json`; a
+spawn that fails outright (`EACCES`, `ENOENT`) is remembered the same way. And Settings has the
+switch **Install through sdbd only**: on, every install goes through `sdbd` as before 0.3.16;
+turning it off again also forgets what the service learned, so `wascmd` gets one more try.
+`A2S_INSTALLER=sdb` in the service's environment does the same for a test. `/ping` reports it
+(`installer: { mode, env, wascmd: { path, present, executable, denied, spawn, available }, off,
+last }`), `POST /settings { installer: { mode: 'auto' | 'sdb' } }` flips it, and the log's second
+line at start says which way installs will take.
 
 The screen talks to the service over HTTP on port 8077. Apps2Samsung writes the TV's own IP into
 TV-Store when it installs it, because Tizen 10 may not let a page reach its service over
@@ -248,7 +265,7 @@ node test/install.test.js   # a certificate mismatch is retried with the next pr
 node test/certlevel.test.js # Public or Partner per install: refused up front, picked by privilege, chosen by hand
 node test/sdbhosts.test.js  # the order of addresses to try sdbd on
 node test/sdb-loopback.test.js  # install works whether Host PC IP is the TV's own IP or 127.0.0.1
-node test/wascmd.test.js    # install through wascmd from the service (fake wascmd), its refusals, the sdbd fallback, over spawn_sync too
+node test/wascmd.test.js    # install through wascmd from the service (fake wascmd), its refusals, the sdbd fallback, over spawn_sync too; nothing started before the first install, the Settings switch, a run that died, EACCES without a fork (#67, #68)
 node test/relay.test.js     # the on-TV sdb relay: a session survives the hop, allow list, cap, idle, stop; every failure told apart with a reason
 node test/relay-settings.test.js  # relay settings over /settings: validation, restart only on change, status; GET /relay for the LAN
 ```
@@ -261,7 +278,7 @@ Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching 
 | Piece | State |
 |---|---|
 | Install through the TV's own `sdbd` | proven on a retail set |
-| Install through `wascmd` from the service, no Host PC IP (#57) | built against a fake `wascmd`, falls back to `sdbd` (0.3.16); its usage text in the log and a replace that stops with a reason when `sdbd` is out of reach (0.3.17); not yet tried on a real set: whether a retail set lets the service run it, and with Developer Mode off, is the open question |
+| Install through `wascmd` from the service, no Host PC IP (#57) | built against a fake `wascmd`, falls back to `sdbd` (0.3.16); its usage text in the log and a replace that stops with a reason when `sdbd` is out of reach (0.3.17); two Tizen 9 sets refuse the run with `EACCES` and the start-up probe took their service down (#67, #68), so nothing starts before the first install, the kernel is asked first, a run that died is remembered and Settings has an sdbd-only switch; whether any retail set lets the service run it is still open |
 | Signing on the TV | done, identical output to the Apps2Samsung signer |
 | Arming from Apps2Samsung (phone, PC, CLI) | done |
 | The screens above | built (0.3.4); pins, developer search, your own .wgt or .tpk (0.3.10); finds itself under a renamed package id and sends you to Apps2Samsung to update it (0.3.11); Public or Partner certificate per app (0.3.13); the sdb relay switch (0.3.14); the relay's failure reasons under it (0.3.15) |

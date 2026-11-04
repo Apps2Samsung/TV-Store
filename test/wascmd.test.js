@@ -4,7 +4,12 @@
  * touches sdbd; its "install failed[...]" is read like vd_appinstall's (CERT_MISMATCH); when it did not
  * get to install ("cannot working in released image", or nothing said) the install falls back to sdbd
  * and says so in the log. The same over process.binding('spawn_sync'), the path a Tizen 4+ Node without
- * child_process takes. A2S_INSTALLER=sdb keeps wascmd out. /ping reports the installer. */
+ * child_process takes. A2S_INSTALLER=sdb keeps wascmd out. /ping reports the installer.
+ * After #67 and #68 (a Tizen 9 set's service died in the start-up probe): nothing is started before
+ * the first install, the usage text is logged then; the switch in Settings (POST /settings
+ * { installer: { mode } }) keeps wascmd out and survives a restart; a marker left by a run that died
+ * inside wascmd, or a spawn that failed outright, keeps the service to sdbd until Settings says auto
+ * again; a binary this service may not run is seen without a fork. */
 'use strict';
 var fs = require('fs'), os = require('os'), path = require('path'), http = require('http'), cp = require('child_process');
 var zip = require('../tizen-app/service/zip.js');
@@ -49,7 +54,7 @@ function fakeLog() { try { return fs.readFileSync(FAKE_LOG, 'utf8'); } catch (e)
 
 var shells = [];
 var child = null, err = '', handle = null;
-var WD = setTimeout(function () { fail('watchdog (60 s)' + (err ? '\n' + err : '')); }, 60000);
+var WD = setTimeout(function () { fail('watchdog (120 s)' + (err ? '\n' + err : '')); }, 120000);
 function stop() { clearTimeout(WD); if (child) child.kill(); if (handle && handle.server) try { handle.server.close(); } catch (e) {} }
 
 function startService(extraEnv, cb) {
@@ -94,27 +99,39 @@ function installProbe(cb, flags) {
 }
 function sdbInstalls(calls) { return calls.filter(function (c) { return c.indexOf('vd_appinstall') >= 0; }).length; }
 function logs(cb) { call('GET', '/logs', null, function (e, code, j) { cb((j && j.logs || []).join('\n')); }); }
+var MARK = path.join(dir, '.a2s-wascmd-running');
+function savedInstaller() { try { return JSON.parse(fs.readFileSync(path.join(dir, '.a2s-installer.json'), 'utf8')); } catch (e) { return null; } }
+function settings(body, cb) { call('POST', '/settings', JSON.stringify(body), cb); }
 
-fake.start(SDB, { shell: function (cmd) { shells.push(cmd); return cmd.indexOf('vd_appinstall') >= 0 ? 'install A2SProbe01.Probe package_path /x was_install_app return WAS_TRUE installing[100] app_id[A2SProbe01.Probe] install completed\n' : 'ok\n'; } }, function (h) {
+var handlers = { shell: function (cmd) { shells.push(cmd); return cmd.indexOf('vd_appinstall') >= 0 ? 'install A2SProbe01.Probe package_path /x was_install_app return WAS_TRUE installing[100] app_id[A2SProbe01.Probe] install completed\n' : 'ok\n'; } };
+fake.start(SDB, handlers, function (h) {
     handle = h;
     startService({}, function (ping) {
-        // 0. /ping says wascmd is there and will be tried first.
+        // 0. /ping says wascmd is there, runnable, and will be tried first.
         var inst = ping.installer;
-        if (!inst || inst.mode !== 'auto' || !inst.wascmd || !inst.wascmd.available || inst.wascmd.path !== FAKE || inst.wascmd.spawn !== 'child_process' || inst.last !== null) fail('/ping installer: ' + JSON.stringify(inst));
+        if (!inst || inst.mode !== 'auto' || inst.env || inst.off !== null || !inst.wascmd || !inst.wascmd.available || !inst.wascmd.executable || inst.wascmd.denied !== null || inst.wascmd.path !== FAKE || inst.wascmd.spawn !== 'child_process' || inst.last !== null) fail('/ping installer: ' + JSON.stringify(inst));
         call('POST', '/cert', JSON.stringify({ certificates: [CERT] }), function (e, code, j) {
             if (e || code !== 200 || !j.ok) fail('hand-over: ' + code + ' ' + JSON.stringify(j));
-            // 0b. The log carries what wascmd prints without arguments (its flags, for a real set's log).
+            // 0b. The start-up log says wascmd first, and that nothing was started for it (#67, #68): the
+            //     usage text is not there yet, and no fake wascmd ran.
             logs(function (text) {
-            if (!/installer: wascmd first \(.* via child_process\), sdbd as the fallback/.test(text)) fail('the start-up log must say wascmd first:\n' + text);
-            if (!/installer: wascmd without arguments says: usage: wascmd -i <appid> -p <path> \| -u <appid>/.test(text)) fail('the start-up log must carry the usage text:\n' + text);
+            if (!/installer: wascmd first \(.* via child_process\), sdbd as the fallback; nothing is started before the first install/.test(text)) fail('the start-up log must say wascmd first and nothing started:\n' + text);
+            if (/wascmd without arguments says/.test(text)) fail('nothing may be started at start-up:\n' + text);
+            if (fakeLog()) fail('the fake wascmd must not have run at start-up: ' + JSON.stringify(fakeLog()));
             // 1. wascmd installs: -i <app id> -p <the signed file, present at that moment>, sdbd untouched.
+            //    The usage text is logged right before it, once; the marker is gone once wascmd answered.
             mode('ok');
             installProbe(function (j, calls, wl) {
                 if (!j.ok || !j.result || j.result.via !== 'wascmd') fail('wascmd install must go through with via wascmd: ' + JSON.stringify(j));
                 if (!/^args: -i A2SProbe01\.Probe -p \S+\.signed\.wgt$/m.test(wl) || wl.indexOf('file: exists') < 0) fail('wascmd must get -i <id> -p <signed file> that exists: ' + JSON.stringify(wl));
                 if (sdbInstalls(calls)) fail('sdbd must not be used when wascmd installed: ' + JSON.stringify(calls));
+                if (fs.existsSync(MARK)) fail('the marker must be taken down once wascmd answered');
                 call('GET', '/ping', null, function (e, code, p) {
                     if (!p.installer || p.installer.last !== 'wascmd') fail('/ping must say the last install took wascmd: ' + JSON.stringify(p.installer));
+                    logs(function (text) {
+                    var m = text.match(/installer: wascmd without arguments says: usage: wascmd -i <appid> -p <path> \| -u <appid>/g);
+                    if (!m || m.length !== 1) fail('the usage text must be logged once, before the first install:\n' + text);
+                    if (text.indexOf('wascmd without arguments says') > text.indexOf('install: wascmd reply')) fail('the usage text must come before the first install:\n' + text);
                     // 2. wascmd's own refusal is read like vd_appinstall's: the certificate mismatch, no sdbd.
                     mode('refused');
                     installProbe(function (j, calls) {
@@ -137,6 +154,7 @@ fake.start(SDB, { shell: function (cmd) { shells.push(cmd); return cmd.indexOf('
                                 });
                             });
                         });
+                    });
                     });
                 });
             });
@@ -188,11 +206,131 @@ function replaceWithoutSdb() {
             installProbe(function (j, calls, wl) {
                 if (j.ok || j.code !== 'REPLACE_NEEDS_SDB' || !/cannot remove the old copy/.test(j.error) || !/Apps menu/.test(j.error)) fail('a replace without sdbd must stop with REPLACE_NEEDS_SDB: ' + JSON.stringify(j));
                 if (wl) fail('a refused replace must not run wascmd: ' + JSON.stringify(wl));
+                settingsSwitch();
+            }, { replace: true });
+        });
+    });
+}
+
+// 8. The switch in Settings (#67, #68): { installer: { mode: 'sdb' } } keeps wascmd out, is saved in the
+//    data folder and survives a restart; 'auto' brings wascmd back; bad blocks are refused with 400.
+function settingsSwitch() {
+    fake.start(SDB, handlers, function (h) {
+        handle = h;
+        var bad = [{ installer: 'sdb' }, { installer: { mode: 'x' } }, { installer: [] }, { installer: {} }];
+        (function next(i) {
+            if (i >= bad.length) return on();
+            settings(bad[i], function (e, code, j) {
+                if (e || code !== 400 || !j || j.ok) fail('settings ' + JSON.stringify(bad[i]) + ' must be refused with 400: ' + code + ' ' + JSON.stringify(j));
+                next(i + 1);
+            });
+        })(0);
+        function on() {
+            settings({ installer: { mode: 'sdb' } }, function (e, code, j) {
+                if (e || code !== 200 || !j || !j.ok || !j.installer || j.installer.mode !== 'sdb') fail('switch to sdb: ' + code + ' ' + JSON.stringify(j));
+                if (!savedInstaller() || savedInstaller().mode !== 'sdb') fail('the switch must be saved: ' + JSON.stringify(savedInstaller()));
+                mode('ok');
+                installProbe(function (j, calls, wl) {
+                    if (!j.ok || j.result.via !== 'sdb' || sdbInstalls(calls) !== 1 || wl) fail('with the switch on wascmd must not run: ' + JSON.stringify(j) + ' ' + JSON.stringify(wl));
+                    restart({}, function (ping) {
+                        if (ping.installer.mode !== 'sdb') fail('the switch must survive a restart: ' + JSON.stringify(ping.installer));
+                        logs(function (text) {
+                            if (!/installer: sdbd only \(the switch in Settings\)/.test(text)) fail('the start-up log must say the switch is on:\n' + text);
+                            settings({ installer: { mode: 'auto' } }, function (e, code, j) {
+                                if (e || code !== 200 || !j.ok || j.installer.mode !== 'auto' || j.installer.off !== null) fail('back to auto: ' + JSON.stringify(j));
+                                installProbe(function (j, calls, wl) {
+                                    if (!j.ok || j.result.via !== 'wascmd' || !wl) fail('back at auto the install goes to wascmd again: ' + JSON.stringify(j) + ' ' + JSON.stringify(wl));
+                                    marker();
+                                });
+                            });
+                        });
+                    });
+                });
+            });
+        }
+    });
+}
+
+// 9. The marker (#67, #68): a service that finds .a2s-wascmd-running at start knows the last run died
+//    inside wascmd (the Tizen 9 start-up crash), says so, keeps to sdbd without a fork and remembers that
+//    across restarts; Settings 'auto' forgets it.
+function marker() {
+    fs.writeFileSync(MARK, '2026-11-04T05:33:11.843Z');
+    restart({}, function (ping) {
+        var i = ping.installer;
+        if (i.mode !== 'auto' || !i.off || !/ended while wascmd was running \(started 2026-11-04T05:33:11.843Z\)/.test(i.off.why) || !i.off.at) fail('/ping must say why wascmd is off: ' + JSON.stringify(i));
+        if (fs.existsSync(MARK)) fail('the marker must be taken down once remembered');
+        if (!savedInstaller() || !savedInstaller().off || savedInstaller().off.why !== i.off.why) fail('off must be saved: ' + JSON.stringify(savedInstaller()));
+        logs(function (text) {
+            if (!/installer: the last run of this service ended while wascmd was running \(started 2026-11-04T05:33:11.843Z\); sdbd only from now on/.test(text)) fail('the log must say the last run died in wascmd:\n' + text);
+            if (!/installer: sdbd only \(the last run of this service ended while wascmd was running/.test(text)) fail('the installer line must say sdbd only:\n' + text);
+            mode('ok');
+            installProbe(function (j, calls, wl) {
+                if (!j.ok || j.result.via !== 'sdb' || sdbInstalls(calls) !== 1 || wl) fail('after a death in wascmd the install must go to sdbd: ' + JSON.stringify(j) + ' ' + JSON.stringify(wl));
+                restart({}, function (ping) {
+                    if (!ping.installer.off) fail('off must survive a restart: ' + JSON.stringify(ping.installer));
+                    settings({ installer: { mode: 'auto' } }, function (e, code, j) {
+                        if (e || code !== 200 || !j.ok || j.installer.off !== null) fail('auto must forget it: ' + JSON.stringify(j));
+                        installProbe(function (j, calls, wl) {
+                            if (!j.ok || j.result.via !== 'wascmd' || !wl) fail('after auto the install goes to wascmd again: ' + JSON.stringify(j) + ' ' + JSON.stringify(wl));
+                            if (fs.existsSync(MARK)) fail('the marker must be gone after wascmd answered');
+                            spawnFailure();
+                        });
+                    });
+                });
+            });
+        });
+    });
+}
+
+// 10. A spawn that fails outright (the binary gone: ENOENT) falls back to sdbd and is remembered, so the
+//     next install and the next start skip wascmd without a fork; Settings 'auto' lets it try again.
+function spawnFailure() {
+    var GONE = FAKE + '.gone';
+    fs.renameSync(FAKE, GONE);
+    mode('ok');
+    installProbe(function (j, calls, wl) {
+        fs.renameSync(GONE, FAKE);
+        if (!j.ok || j.result.via !== 'sdb' || sdbInstalls(calls) !== 1 || wl) fail('a spawn failure must fall back to sdbd: ' + JSON.stringify(j) + ' ' + JSON.stringify(wl));
+        logs(function (text) {
+            if (!/wascmd did not install \(cannot run \S+: ENOENT\); falling back to sdbd/.test(text)) fail('the fallback must be in the log:\n' + text);
+            if (!/installer: cannot run \S+: ENOENT; sdbd only from now on/.test(text)) fail('the spawn failure must be remembered in the log:\n' + text);
+            call('GET', '/ping', null, function (e, code, p) {
+                if (!p.installer.off || !/ENOENT/.test(p.installer.off.why)) fail('/ping must say off with ENOENT: ' + JSON.stringify(p.installer));
+                installProbe(function (j, calls, wl) {
+                    if (!j.ok || j.result.via !== 'sdb' || wl) fail('once remembered, wascmd is not tried again even though it is back: ' + JSON.stringify(j) + ' ' + JSON.stringify(wl));
+                    restart({}, function (ping) {
+                        if (!ping.installer.off || !/ENOENT/.test(ping.installer.off.why)) fail('the spawn failure must survive a restart: ' + JSON.stringify(ping.installer));
+                        settings({ installer: { mode: 'auto' } }, function (e, code, j) {
+                            if (e || code !== 200 || !j.ok || j.installer.off !== null) fail('auto must forget the spawn failure: ' + JSON.stringify(j));
+                            notExecutable();
+                        });
+                    });
+                });
+            });
+        });
+    });
+}
+
+// 11. A binary this service may not run (mode 644, so access(2) says EACCES, as the Tizen 9 set's Smack
+//     label does) is seen without a fork: /ping and the start-up log say so, installs go to sdbd, and the
+//     fake is never started.
+function notExecutable() {
+    fs.chmodSync(FAKE, 420 /* 0644 */);
+    restart({}, function (ping) {
+        var w = ping.installer.wascmd;
+        if (!w || w.available || w.executable || w.denied !== 'EACCES' || !w.present) fail('/ping must say the binary may not be run: ' + JSON.stringify(ping.installer));
+        logs(function (text) {
+            if (!/installer: sdbd \(\S+ is there, but this service may not run it: EACCES\)/.test(text)) fail('the start-up log must say EACCES without a fork:\n' + text);
+            mode('ok');
+            installProbe(function (j, calls, wl) {
+                if (!j.ok || j.result.via !== 'sdb' || sdbInstalls(calls) !== 1 || wl) fail('EACCES must mean sdbd without trying: ' + JSON.stringify(j) + ' ' + JSON.stringify(wl));
+                fs.chmodSync(FAKE, 493);
                 stop();
                 try { fs.readdirSync(dir).forEach(function (f) { fs.unlinkSync(path.join(dir, f)); }); fs.rmdirSync(dir); } catch (e) {}
-                console.log('PASS: wascmd installs with -i <id> -p <signed file> and no sdbd, its usage is logged at start, its refusal reads as CERT_MISMATCH, "released image" or silence falls back to sdbd, the same over spawn_sync, A2S_INSTALLER=sdb keeps it out, a replace without sdbd stops with REPLACE_NEEDS_SDB');
+                console.log('PASS: wascmd installs with -i <id> -p <signed file> and no sdbd, nothing is started before the first install and its usage is logged then, its refusal reads as CERT_MISMATCH, "released image" or silence falls back to sdbd, the same over spawn_sync, A2S_INSTALLER=sdb keeps it out, a replace without sdbd stops with REPLACE_NEEDS_SDB, the Settings switch keeps it out and survives a restart, a run that died inside wascmd or a spawn failure keeps the service to sdbd until Settings says auto, a binary it may not run is seen without a fork');
                 process.exit(0);
-            }, { replace: true });
+            });
         });
     });
 }

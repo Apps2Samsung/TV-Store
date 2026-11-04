@@ -46,16 +46,7 @@ var RELAY_PORT = parseRelayPort(process.env.A2S_RELAY_PORT, RELAY_PORT_DEFAULT);
 // instead of the connection.
 var CATALOG_URL = 'https://apps2samsung.com/catalog/resolved.json.signed';
 var STAGING = '/home/owner/share/tmp/sdk_tools';   // where sdbd accepts a pushed .wgt
-// How a signed package reaches the TV's installer (#57): wascmd run by the service itself when this
-// Node can start it and the binary is there (no Host PC IP involved), else pushed to sdbd and
-// installed with vd_appinstall as before. A2S_INSTALLER=sdb keeps the sdbd path (a test, or a TV
-// where wascmd misbehaves); INSTALLER_LAST says which one the last install took, for /ping.
-var INSTALLER = process.env.A2S_INSTALLER === 'sdb' ? 'sdb' : 'auto';
-var INSTALLER_LAST = null;
-// Read once: whether the binary is there and how this Node starts a process cannot change while the
-// service runs, and the page polls /ping all the time.
-var WASCMD = wascmd.status();
-function installerStatus() { return { mode: INSTALLER, wascmd: WASCMD, last: INSTALLER_LAST }; }
+// How a signed package reaches the TV's installer (#57): see the installer block below the log.
 var LOGS = [];
 var CERT_NAME = '.a2s-tvstore-certs.json';
 // Where the handed-over certificate is kept, best first: the package's private data folder
@@ -115,6 +106,98 @@ function logPlatform() {
     logv('platform: ' + os.type() + ' ' + os.release() + ' ' + process.arch + ', node ' + process.version + ', pid ' + process.pid + ', uptime ' + Math.round(os.uptime()) + ' s');
     logv('platform: network ' + nets.join('; '));
     logv('platform: package ' + PKG + ', data ' + DATA_DIR + ', cert ' + (CERT_FILE || 'none yet') + ', cert folders ' + CERT_DIRS.join(', '));
+}
+
+// How a signed package reaches the TV's installer (#57): wascmd run by the service itself when this
+// Node can start it, the binary is there and this service may run it (no Host PC IP involved), else
+// pushed to sdbd and installed with vd_appinstall as before. Two Tizen 9 sets (#67, #68) showed what
+// merely starting wascmd can cost: 0.3.16 ran it without arguments at start-up for its usage text,
+// the fork took the service's host process down on most starts, before the service was up, and the
+// TV said EACCES on the starts it survived. So nothing is started at start-up any more; the kernel
+// is asked first, without a fork, whether this service may run the binary at all (wascmd.status());
+// a marker file stands in the data folder while wascmd runs, so a service that finds it at start
+// knows the last run died inside that call and keeps to sdbd from then on; and a spawn that fails
+// outright (EACCES, ENOENT) is remembered the same way. The mode is a Settings switch kept in the
+// data folder ('auto' or 'sdb'), or A2S_INSTALLER=sdb in the environment (a test); setting 'auto'
+// from Settings forgets what was learned. INSTALLER_LAST says which way the last install took.
+var INSTALLER_FILE = DATA_DIR ? path.join(DATA_DIR, '.a2s-installer.json') : null;
+var WASCMD_MARK = DATA_DIR ? path.join(DATA_DIR, '.a2s-wascmd-running') : null;
+var INSTALLER_CFG = { mode: 'auto', off: null };   // off: { why, at } once wascmd is not to be tried again on this TV
+try {
+    if (INSTALLER_FILE) {
+        var ic = JSON.parse(fs.readFileSync(INSTALLER_FILE, 'utf8'));
+        if (ic && typeof ic === 'object') {
+            if (ic.mode === 'sdb') INSTALLER_CFG.mode = 'sdb';
+            if (ic.off && typeof ic.off === 'object' && ic.off.why) INSTALLER_CFG.off = { why: String(ic.off.why), at: ic.off.at || null };
+        }
+    }
+} catch (e) {}
+var INSTALLER_ENV = process.env.A2S_INSTALLER === 'sdb';
+var INSTALLER_LAST = null;
+// Read once: whether the binary is there, whether this service may run it and how this Node starts
+// a process cannot change while the service runs, and the page polls /ping all the time.
+var WASCMD = wascmd.status();
+// The marker left behind by a run that died inside wascmd, as the time that run started it.
+var WASCMD_DIED = null;
+try { if (WASCMD_MARK && fs.existsSync(WASCMD_MARK)) WASCMD_DIED = fs.readFileSync(WASCMD_MARK, 'utf8').trim() || 'unknown time'; } catch (e) {}
+function saveInstallerCfg() {
+    if (!INSTALLER_FILE) return;
+    try { fs.writeFileSync(INSTALLER_FILE, JSON.stringify(INSTALLER_CFG)); }
+    catch (e) { log('installer: cannot save settings: ' + e.message); }
+}
+function installerMode() { return INSTALLER_ENV ? 'sdb' : INSTALLER_CFG.mode; }
+// Whether an install goes to wascmd first: the switch at auto, the binary runnable, nothing learned against it.
+function wascmdWanted() { return installerMode() === 'auto' && WASCMD.available && !INSTALLER_CFG.off; }
+function installerStatus() { return { mode: installerMode(), env: INSTALLER_ENV, wascmd: WASCMD, off: INSTALLER_CFG.off, last: INSTALLER_LAST }; }
+// The marker around a run of wascmd: on before anything is started, off once it answered. A process
+// that dies in between leaves the file, and the next start reads it as that.
+function markWascmd(on) {
+    if (!WASCMD_MARK) return;
+    try { if (on) fs.writeFileSync(WASCMD_MARK, new Date().toISOString()); else fs.unlinkSync(WASCMD_MARK); } catch (e) {}
+}
+// wascmd is not to be tried again on this TV, with why: said in the log, kept for later starts.
+function wascmdOff(why) {
+    if (INSTALLER_CFG.off) return;
+    INSTALLER_CFG.off = { why: why, at: new Date().toISOString() };
+    saveInstallerCfg();
+    markWascmd(false);
+    log('installer: ' + why + '; sdbd only from now on (the switch in Settings turns the TV\'s own installer back on)');
+}
+// The log's line about the installer, at start and when Settings changes it.
+function installerLine() {
+    var w = WASCMD;
+    if (INSTALLER_ENV) return 'sdbd only (A2S_INSTALLER=sdb)';
+    if (INSTALLER_CFG.mode === 'sdb') return 'sdbd only (the switch in Settings)';
+    if (INSTALLER_CFG.off) return 'sdbd only (' + INSTALLER_CFG.off.why + ', since ' + INSTALLER_CFG.off.at + ')';
+    if (w.available) return 'wascmd first (' + w.path + ' via ' + w.spawn + '), sdbd as the fallback; nothing is started before the first install';
+    if (!w.present) return 'sdbd (' + w.path + ' is not there)';
+    if (w.denied) return 'sdbd (' + w.path + ' is there, but this service may not run it: ' + w.denied + ')';
+    return 'sdbd (this Node can start no process)';
+}
+// A /settings installer block checked before anything is applied: an error string, or null.
+function installerSettingsProblem(i) {
+    if (!i || typeof i !== 'object' || Array.isArray(i)) return 'installer must be an object { mode }';
+    if (i.mode !== 'auto' && i.mode !== 'sdb') return 'installer.mode must be auto or sdb';
+    return null;
+}
+// Apply { mode } from Settings (already validated): persist; 'auto' also forgets what was learned.
+function applyInstallerSettings(i) {
+    INSTALLER_CFG.mode = i.mode;
+    if (i.mode === 'auto') { INSTALLER_CFG.off = null; markWascmd(false); }
+    saveInstallerCfg();
+    log('installer: ' + (i.mode === 'sdb' ? 'sdbd only from now on (the switch in Settings)' : 'back to automatic (the switch in Settings): ' + installerLine()));
+}
+// What wascmd prints without arguments: its flags, which no document gives (the uninstall one in
+// particular), so a real set's log is where they get read from. Once, before the first install.
+var WASCMD_USAGE_LOGGED = false;
+function wascmdUsageOnce(cb) {
+    if (WASCMD_USAGE_LOGGED) return cb();
+    WASCMD_USAGE_LOGGED = true;
+    wascmd.usage(function (err, out) {
+        var said = String(out || '').replace(/\s+/g, ' ').trim();
+        log('installer: wascmd without arguments says: ' + (said ? said.slice(0, 400) : err ? err.message : 'nothing'));
+        cb();
+    });
 }
 
 // The on-TV sdb relay (TV-Store#52): a TCP proxy from a LAN port to the TV's own sdbd over loopback,
@@ -417,14 +500,15 @@ function tizenGate(entry) {
 // With wascmd doing the installs (#57) sdbd may be out of reach (Host PC IP at a phone or PC), and
 // the removal is the one step that still needs it: going ahead would hit the same mismatch and
 // offer the same removal again, so that case stops here with what to do instead. (wascmd's own
-// uninstall flag is not documented; the usage text logged at start is where it will be read from.)
+// uninstall flag is not documented; the usage text logged before the first install is where it
+// will be read from.)
 function removeOld(entry, cb) {
     if (!entry.replace || !entry.packageId) return cb();
     log('install: removing the old copy of ' + entry.packageId + ' first (installed with another certificate)');
     connectSdb(sdbHosts(), function (err, c) {
         if (err) {
             log('install: could not remove the old copy: ' + err.message);
-            if (INSTALLER === 'auto' && WASCMD.available) return cb(coded('REPLACE_NEEDS_SDB', 'TV-Store cannot remove the old copy: that step still goes through the TV’s developer connection, and ' + err.message + ' Or remove the app from the TV’s Apps menu by hand, then install it from here.'));
+            if (wascmdWanted()) return cb(coded('REPLACE_NEEDS_SDB', 'TV-Store cannot remove the old copy: that step still goes through the TV’s developer connection, and ' + err.message + ' Or remove the app from the TV’s Apps menu by hand, then install it from here.'));
             return cb();
         }
         c.shell('0 vd_appuninstall ' + entry.packageId, function (err, out) {
@@ -538,13 +622,17 @@ function signAndInstall(entry, remoteName, inFile, outFile, cb) {
 // A signed package to the TV's installer (#57): wascmd first when this TV lets the service run it,
 // else (or when wascmd never got to install: not found, refused under the service's label, "cannot
 // working in released image", said nothing) over sdbd as before. cb(err, out, via) with out the
-// installer's own reply, read by the caller the same way for both.
+// installer's own reply, read by the caller the same way for both. The marker is on from before
+// the first process starts (the usage probe, once) until wascmd answered (#67, #68); a spawn that
+// fails outright is remembered, so the next install and the next start skip wascmd without a fork.
 function installSigned(entry, remoteName, outFile, size, cb) {
     var id = entry.appId || entry.packageId || '';
-    if (INSTALLER === 'auto' && WASCMD.available) {
+    if (wascmdWanted()) {
         log('install: handing to wascmd on the TV itself (' + wascmd.path + ', no sdbd and no Host PC IP involved)');
         var wasStarted = Date.now();
-        return wascmd.run(id, outFile, function (err, out, code) {
+        markWascmd(true);
+        return wascmdUsageOnce(function () { wascmd.run(id, outFile, function (err, out, code) {
+            markWascmd(false);
             logv('timing: wascmd took ' + (Date.now() - wasStarted) + ' ms');
             var said = String(out || '').replace(/\s+/g, ' ').trim();
             var verdict = err ? 'error' : wascmd.interpret(out);
@@ -554,8 +642,9 @@ function installSigned(entry, remoteName, outFile, size, cb) {
                 return cb(null, out, 'wascmd');
             }
             log('install: wascmd did not install (' + (err ? err.message : 'exit ' + code + (said ? ', said: ' + said.slice(0, 200) : ', said nothing')) + '); falling back to sdbd');
+            if (err && err.code && err.code !== 'TIMEOUT') wascmdOff(err.message);
             viaSdb();
-        });
+        }); });
     }
     viaSdb();
     function viaSdb() {
@@ -675,11 +764,13 @@ http.createServer(function (req, res) {
         certCount: haveCerts() ? loadCerts().certificates.length : 0, certNames: certs.names(loadCerts()), certificates: certs.summary(loadCerts()),
         certFile: CERT_FILE, certError: CERT_ERROR, node: process.version, verbose: VERBOSE, relay: relayStatus(), installer: installerStatus(), remembered: rememberedLevels() });
     if (route === '/settings' && req.method === 'POST') return body(req, function (err, b) {
-        if (err || !b || (typeof b.verbose !== 'boolean' && b.relay === undefined)) return json(res, 400, { ok: false, error: 'need { verbose: true|false } and/or { relay: { enabled, port, allow } }' });
+        if (err || !b || (typeof b.verbose !== 'boolean' && b.relay === undefined && b.installer === undefined)) return json(res, 400, { ok: false, error: 'need { verbose: true|false }, { relay: { enabled, port, allow } } and/or { installer: { mode } }' });
         if (b.relay !== undefined) { var why = relaySettingsProblem(b.relay); if (why) return json(res, 400, { ok: false, error: why }); }
+        if (b.installer !== undefined) { var iwhy = installerSettingsProblem(b.installer); if (iwhy) return json(res, 400, { ok: false, error: iwhy }); }
         if (typeof b.verbose === 'boolean') setVerbose(b.verbose);
-        if (b.relay === undefined) return json(res, 200, { ok: true, verbose: VERBOSE, relay: relayStatus() });
-        applyRelaySettings(b.relay, function (status) { json(res, 200, { ok: true, verbose: VERBOSE, relay: status }); });
+        if (b.installer !== undefined) applyInstallerSettings(b.installer);
+        if (b.relay === undefined) return json(res, 200, { ok: true, verbose: VERBOSE, relay: relayStatus(), installer: installerStatus() });
+        applyRelaySettings(b.relay, function (status) { json(res, 200, { ok: true, verbose: VERBOSE, relay: status, installer: installerStatus() }); });
     });
     if (route === '/logs') return json(res, 200, { logs: LOGS });
     if (route === '/uploads') return json(res, 200, { pending: publicUpload(), busy: UPLOAD_BUSY });
@@ -708,14 +799,11 @@ http.createServer(function (req, res) {
     cors(res, 404, 'text/plain'); res.end('not found');
 }).listen(PORT, '0.0.0.0', function () {
     log('TV-Store service on port ' + PORT + ', node ' + process.version + ' ' + process.arch + ', this TV ' + ownIp() + ', data ' + DATA_DIR + (VERBOSE ? ', verbose logging on' : ''));
-    var w = WASCMD;
-    log('installer: ' + (INSTALLER === 'sdb' ? 'sdbd only (A2S_INSTALLER=sdb)' : w.available ? 'wascmd first (' + w.path + ' via ' + w.spawn + '), sdbd as the fallback' : 'sdbd (' + (w.present ? 'this Node can start no process' : w.path + ' is not there') + ')'));
-    // What wascmd prints without arguments: its flags, which no document gives (the uninstall one
-    // in particular), so a real set's log is where they get read from.
-    if (INSTALLER === 'auto' && w.available) wascmd.usage(function (err, out) {
-        var said = String(out || '').replace(/\s+/g, ' ').trim();
-        log('installer: wascmd without arguments says: ' + (said ? said.slice(0, 400) : err ? err.message : 'nothing'));
-    });
+    // A marker from the last run: it ended inside a wascmd call (the Tizen 9 start-up crash of
+    // #67 and #68, or TV-Store closed mid-install), so this TV keeps to sdbd until Settings says
+    // otherwise. Nothing is started here: a probe at start-up is what took the service down.
+    if (WASCMD_DIED && installerMode() === 'auto' && !INSTALLER_CFG.off) wascmdOff('the last run of this service ended while wascmd was running (started ' + WASCMD_DIED + ')');
+    log('installer: ' + installerLine());
     logPlatform();
     if (RELAY_CFG.enabled) { log('relay: enabled, starting on port ' + RELAY_CFG.port); startRelay(); }
 });
