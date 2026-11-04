@@ -35,11 +35,21 @@ function spawner() {
 
 function present() { try { return fs.statSync(WASCMD).isFile(); } catch (e) { return false; } }
 
-// { path, present, spawn, available }: what /ping reports, and whether an install may try this first.
+// Whether this service may run the binary, asked of the kernel without starting anything: access(2)
+// with X_OK, which the file's mode and the TV's Smack labels both answer. Two Tizen 9 sets (#67,
+// #68) said EACCES to the fork that would have found that out, and the fork itself took the
+// service's host process down on most starts, before the service was up. null when it may run, else
+// the errno name (EACCES).
+var X_OK = (fs.constants && fs.constants.X_OK) || fs.X_OK || 1;
+function denied() { try { fs.accessSync(WASCMD, X_OK); return null; } catch (e) { return e.code || 'EACCES'; } }
+
+// { path, present, executable, denied, spawn, available }: what /ping reports, and whether an
+// install may try this first (available: there, runnable by this service, and a way to start it).
 function status() {
     var s = spawner();
     var p = present();
-    return { path: WASCMD, present: p, spawn: s ? s.kind : null, available: !!(s && p) };
+    var why = p ? denied() : null;
+    return { path: WASCMD, present: p, executable: p && !why, denied: why, spawn: s ? s.kind : null, available: !!(s && p && !why) };
 }
 function available() { return status().available; }
 
@@ -59,7 +69,8 @@ function envPairs() {
 function run(id, file, cb) { exec(['-i', String(id), '-p', String(file)], TIMEOUT_MS, cb); }
 
 // wascmd without arguments: its usage text, for the log. The uninstall flag is not documented
-// anywhere, so the first real set's log is where it will be read from. cb(err, out).
+// anywhere, so the first real set's log is where it will be read from. Run once, right before the
+// first install, never at start-up (#67, #68). cb(err, out).
 function usage(cb) { exec([], 10 * 1000, function (err, out) { cb(err, out); }); }
 
 function exec(args, timeoutMs, cb) {

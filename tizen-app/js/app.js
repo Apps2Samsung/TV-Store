@@ -256,6 +256,35 @@
         });
     }
 
+    // The installer switch (#67, #68): whether a signed package may go to the TV's own installer
+    // (wascmd, run by the service) or only through sdbd, as before 0.3.16. Lives in the service like
+    // the relay: /ping carries it (installer.mode, and installer.off when the service learned on its
+    // own to keep to sdbd), POST /settings { installer: { mode } } flips it.
+    var installerBusy = false, installerError = null;
+    function installerRow() {
+        var i = ready && ready.installer;
+        if (!i) return '';
+        var on = i.mode === 'sdb', w = i.wascmd || {};
+        var hint = on ? 'On: every install goes through the TV\'s developer connection (sdbd), the way TV-Store did before 0.3.16.'
+            : i.off ? 'Off, but TV-Store keeps to sdbd on this TV anyway: ' + i.off.why + '. Turn this on and off again to let it try the TV\'s own installer once more.'
+            : w.available ? 'Off: TV-Store hands an install to the TV\'s own installer first and uses sdbd when that does not work. Turn this on when the service keeps stopping or installs fail on this TV.'
+            : 'Off, and this TV lets TV-Store install through sdbd only anyway' + (w.denied ? ' (it may not run ' + w.path + ': ' + w.denied + ')' : '') + '.';
+        return '<div class="opt f" tabindex="0" data-k="opt:installer" data-opt="installer"><div class="ot"><div class="ont">Install through sdbd only</div><div class="oh">' + esc(hint) + '</div></div>'
+            + '<span class="sw' + (on ? ' on' : '') + '"><i></i></span></div>';
+    }
+    function installerNotice() { return installerError ? '<div class="notice bad">' + esc('Could not change the installer setting: ' + installerError) + '</div>' : ''; }
+    function toggleInstaller() {
+        if (!ready || !ready.installer || installerBusy) return;
+        var want = ready.installer.mode === 'sdb' ? 'auto' : 'sdb';
+        installerBusy = true;
+        xhr('POST', '/settings', { installer: { mode: want } }, function (err, res) {
+            installerBusy = false;
+            if (!err && res && res.ok && res.installer) { ready.installer = res.installer; installerError = null; }
+            else installerError = err ? err.message : (res && res.error) || 'no answer from the service';
+            renderSheet(); focusKey('opt:installer');
+        });
+    }
+
     // A QR code as an <img> (qrcode.js, GIF data URL: old TV engines show that fine), on a white tile.
     function qr(text, px) {
         try {
@@ -1009,7 +1038,7 @@
             + '<div class="opts">' + opt('showAdult', 'Show adult (18+) apps', 'Apps marked adult-only stay out of the store until this is on.')
             + opt('showNeedsHead', 'Show apps that need a phone or PC', 'Some apps need Apps2Samsung on a phone or PC to install. Turn this off to keep them out of the store.')
             + opt('verboseLog', 'Verbose logging', 'Writes much more detail to the TV-Store log. Turn it on when a bug report asks for it, and off again afterwards.')
-            + relayRow() + '</div>' + relayNotice();
+            + relayRow() + installerRow() + '</div>' + relayNotice() + installerNotice();
         if (confirmingAdult) h += '<div class="notice">These apps are meant for adults only. Turn them on only if you are 18 or older.</div>'
             + '<div class="btns" style="margin-top:16px"><button class="btn primary grow f" data-k="adultyes" data-act="adultyes" data-default>I am 18 or older</button><button class="btn f" data-k="adultno" data-act="adultno">Cancel</button></div>';
         var certList = (ready && ready.certificates ? ready.certificates.map(function (c) { return c.name + (c.level === 'partner' || c.level === 'public' ? ' (' + levelName(c.level) + ')' : ''); }) : (ready && ready.certNames) || []);
@@ -1112,6 +1141,7 @@
 
     function toggle(key) {
         if (key === 'relay') { toggleRelay(); return; }
+        if (key === 'installer') { toggleInstaller(); return; }
         if (key === 'showAdult' && !settings.showAdult) { confirmingAdult = true; renderSheet(true); return; }
         setSetting(key, !settings[key]);
     }
