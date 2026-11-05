@@ -290,7 +290,7 @@ Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching 
 | Install through `wascmd` from the service, no Host PC IP (#57) | built against a fake `wascmd`, falls back to `sdbd` (0.3.16); its usage text in the log and a replace that stops with a reason when `sdbd` is out of reach (0.3.17); two Tizen 9 sets refuse the run with `EACCES` and the start-up probe took their service down (#67, #68), so nothing starts before the first install, the kernel is asked first, a run that died is remembered and Settings has an sdbd-only switch (0.3.18); whether any retail set lets the service run it is still open |
 | Signing on the TV | done, identical output to the Apps2Samsung signer |
 | Arming from Apps2Samsung (phone, PC, CLI) | done |
-| The screens above | built (0.3.4); pins, developer search, your own .wgt or .tpk (0.3.10); finds itself under a renamed package id and sends you to Apps2Samsung to update it (0.3.11); Public or Partner certificate per app (0.3.13); the sdb relay switch (0.3.14); the relay's failure reasons under it (0.3.15) |
+| The screens above | built (0.3.4); pins, developer search, your own .wgt or .tpk (0.3.10); finds itself under a renamed package id and sends you to Apps2Samsung to update it (0.3.11); Public or Partner certificate per app (0.3.13); the sdb relay switch (0.3.14); the relay's failure reasons under it (0.3.15); app icons from the signed catalog, hash-checked and cached by the service, once the Apps2Samsung snapshot publishes them (0.3.19, #66) |
 | First real install from the TV | done, 2019 Tizen 5.0 set (0.3.4) |
 | Tizen 3.0 and 4.0 sets (2017, 2018) | untested |
 | Tizen 10 sets (2025) | done, retail set (0.3.9) |
