@@ -85,8 +85,8 @@ acts as the TV's own PC:
 
 1. downloads the package from the catalog and checks it against the SHA-256 the catalog gives it,
 2. signs it on the TV with your certificate (the same signatures Apps2Samsung makes),
-3. hands it to the TV's installer: through `wascmd` on the TV itself when the service may run it
-   (#57, below), else pushed to the TV's own `sdbd` and installed from there.
+3. pushes it to the TV's own `sdbd` and has that install it (or, with the Settings switch **Try
+   the TV's own installer** on, hands it to `wascmd` on the TV itself first, #57 below).
 
 The TVs cannot check today's HTTPS certificates (their certificate store is too old), so TV-Store
 trusts the content instead: the catalog (`resolved.json.signed`) is signed by the Apps2Samsung
@@ -104,9 +104,12 @@ For the `sdbd` way, Developer Mode's **Host PC IP** on the TV must be set to the
 or to `127.0.0.1`. TV-Store tries both and uses whichever the TV lets in, so a rooted TV (pinned
 at `127.0.0.1`) installs too.
 
-**`wascmd` from the service (#57).** `sdbd`'s `vd_appinstall` is itself a wrapper around
+**`wascmd` from the service (#57), off by default since 0.3.20.** `sdbd`'s `vd_appinstall` is itself a wrapper around
 `/usr/bin/wascmd`, and TizenBrewInstaller runs that binary straight from its Node service, so the
-Host PC IP never comes into it. Since 0.3.16 TV-Store's service does the same first: when
+Host PC IP never comes into it. From 0.3.16 to 0.3.19 TV-Store's service did the same first; since
+0.3.20 only when the Settings switch **Try the TV's own installer (wascmd)** is on, because every
+retail set tried so far has either refused the run or died starting it (next two paragraphs). With
+the switch on: when
 `/usr/bin/wascmd` is there and this Node can start a process (`child_process` on Tizen 3; the
 binding it is built on, `process.binding('spawn_sync')`, on Tizen 4 and later, where the module is
 stripped), the signed package goes to `wascmd -i <id> -p <file>` (arguments as a list, no shell)
@@ -131,13 +134,18 @@ both answer; the log says `this service may not run it: EACCES` and installs tak
 keeps a marker file (`.a2s-wascmd-running` in the data folder) from before the first process
 starts until `wascmd` answered, so a service that finds it at the next start knows the last run
 died inside that call, says so, keeps to `sdbd` and remembers that in `.a2s-installer.json`; a
-spawn that fails outright (`EACCES`, `ENOENT`) is remembered the same way. And Settings has the
-switch **Install through sdbd only**: on, every install goes through `sdbd` as before 0.3.16;
-turning it off again also forgets what the service learned, so `wascmd` gets one more try.
-`A2S_INSTALLER=sdb` in the service's environment does the same for a test. `/ping` reports it
+spawn that fails outright (`EACCES`, `ENOENT`) is remembered the same way. And since 0.3.20 the
+whole path is opt-in: the Settings switch **Try the TV's own installer (wascmd)** is off by default,
+so every install goes through `sdbd` as before 0.3.16; turning it on hands installs to `wascmd`
+first, and turning it off and on again forgets what the service learned, so `wascmd` gets one more
+try. The choice is kept in `.a2s-installer.json` as `mode: 'auto'` with `optIn: true` (a file from
+0.3.18 or 0.3.19 saying `auto` meant the default then and is not read as a choice).
+`A2S_INSTALLER=sdb` or `auto` in the service's environment overrides it for a test. `/ping` reports it
 (`installer: { mode, env, wascmd: { path, present, executable, denied, spawn, available }, off,
 last }`), `POST /settings { installer: { mode: 'auto' | 'sdb' } }` flips it, and the log's second
 line at start says which way installs will take.
+
+**A Tizen 5.0 set (2019) says the same, one step further in (#57).** There `child_process` is present, `access(2)` allows the run, and the service hands the signed package to `wascmd`; that fork takes the service down before anything is installed, so no reply and no usage text ever reach the log. The next start finds the marker and keeps to `sdbd`. With that, every retail set tried (Tizen 5 and 9) has either refused `wascmd` or died starting it, which is why the switch above is off by default: `sdbd` over the TV's own address or `127.0.0.1` is the path that installs.
 
 The screen talks to the service over HTTP on port 8077. Apps2Samsung writes the TV's own IP into
 TV-Store when it installs it, because Tizen 10 may not let a page reach its service over
@@ -181,6 +189,9 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
 - **Verbose logging**: off by default. Adds much more detail to the log: the sdb traffic, HTTP
   requests, the TV's network addresses and how long each install step took. Turn it on for a bug
   report and off again afterwards.
+- **Try the TV's own installer (wascmd)**: off by default (#57). On, an install is handed to
+  `/usr/bin/wascmd` by the service itself before `sdbd` is tried; on every retail set so far that
+  has taken the service down, so it is there for anyone who wants to report what their TV does.
 - **Connect from Apps2Samsung (sdb relay)**: off by default (#52). The TV's `sdbd` lets a
   connection in only from the address Developer Mode's Host PC IP names, so with Host PC IP at
   `127.0.0.1` (what TV-Store and a rooted TV want) no phone or PC can reach it. With this on,
@@ -206,6 +217,12 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
   `http://<TV IP>:8077/relay` (`{ enabled, listening, port, sessions, served, failures,
   lastFailure: { at, client, code, reason } }`, no allow list), so Apps2Samsung can show the reason
   instead of the bare reset.
+
+  The TV's `sdbd` takes one client at a time (seen on a 2019 Tizen 5.0 set, #73): while a phone or
+  PC holds a session through the relay, an install started on the TV is dropped by `sdbd` the same
+  silent way a wrong Host PC IP is. The service knows the relay's sessions, so that install stops
+  with `SDB_BUSY` ("a phone or PC is connected to this TV through the relay") instead of blaming
+  Host PC IP; close Apps2Samsung there, or wait, and install again.
 
 The header counts what the switches hide ("12 apps · 3 hidden").
 
@@ -273,7 +290,7 @@ node test/certs.test.js     # the profiles handed over: merge, order per package
 node test/install.test.js   # a certificate mismatch is retried with the next profile; replace
 node test/certlevel.test.js # Public or Partner per install: refused up front, picked by privilege, chosen by hand
 node test/sdbhosts.test.js  # the order of addresses to try sdbd on
-node test/sdb-loopback.test.js  # install works whether Host PC IP is the TV's own IP or 127.0.0.1
+node test/sdb-loopback.test.js  # install works whether Host PC IP is the TV's own IP or 127.0.0.1; SDB_BUSY while a PC holds the relay (#73)
 node test/wascmd.test.js    # install through wascmd from the service (fake wascmd), its refusals, the sdbd fallback, over spawn_sync too; nothing started before the first install, the Settings switch, a run that died, EACCES without a fork (#67, #68)
 node test/relay.test.js     # the on-TV sdb relay: a session survives the hop, allow list, cap, idle, stop; every failure told apart with a reason
 node test/relay-settings.test.js  # relay settings over /settings: validation, restart only on change, status; GET /relay for the LAN
@@ -287,11 +304,11 @@ Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching 
 | Piece | State |
 |---|---|
 | Install through the TV's own `sdbd` | proven on a retail set |
-| Install through `wascmd` from the service, no Host PC IP (#57) | built against a fake `wascmd`, falls back to `sdbd` (0.3.16); its usage text in the log and a replace that stops with a reason when `sdbd` is out of reach (0.3.17); two Tizen 9 sets refuse the run with `EACCES` and the start-up probe took their service down (#67, #68), so nothing starts before the first install, the kernel is asked first, a run that died is remembered and Settings has an sdbd-only switch (0.3.18); whether any retail set lets the service run it is still open |
+| Install through `wascmd` from the service, no Host PC IP (#57) | built against a fake `wascmd`, falls back to `sdbd` (0.3.16); its usage text in the log and a replace that stops with a reason when `sdbd` is out of reach (0.3.17); two Tizen 9 sets refuse the run with `EACCES` and the start-up probe took their service down (#67, #68), so nothing starts before the first install, the kernel is asked first, a run that died is remembered and Settings has a switch (0.3.18); a Tizen 5.0 set lets the service start it and the fork still takes the service down before anything is installed (0.3.19). Refused or fatal on every retail set tried, so off by default and opt-in through Settings (0.3.20); `sdbd` is the path that installs |
 | Signing on the TV | done, identical output to the Apps2Samsung signer |
 | Arming from Apps2Samsung (phone, PC, CLI) | done |
-| The screens above | built (0.3.4); pins, developer search, your own .wgt or .tpk (0.3.10); finds itself under a renamed package id and sends you to Apps2Samsung to update it (0.3.11); Public or Partner certificate per app (0.3.13); the sdb relay switch (0.3.14); the relay's failure reasons under it (0.3.15); app icons from the signed catalog, hash-checked and cached by the service, once the Apps2Samsung snapshot publishes them (0.3.19, #66) |
+| The screens above | built (0.3.4); pins, developer search, your own .wgt or .tpk (0.3.10); finds itself under a renamed package id and sends you to Apps2Samsung to update it (0.3.11); Public or Partner certificate per app (0.3.13); the sdb relay switch (0.3.14); the relay's failure reasons under it (0.3.15); app icons from the signed catalog, hash-checked and cached by the service, once the Apps2Samsung snapshot publishes them (0.3.19, #66); Settings scrolls with the focus now that it is taller than the screen (0.3.20, #74) |
 | First real install from the TV | done, 2019 Tizen 5.0 set (0.3.4) |
 | Tizen 3.0 and 4.0 sets (2017, 2018) | untested |
 | Tizen 10 sets (2025) | done, retail set (0.3.9) |
-| Host PC IP `127.0.0.1`: TV-Store installs over loopback, Apps2Samsung through the relay | built and proven against a fake `sdbd` (0.3.14); the relay says why a connection failed and `GET /relay` tells Apps2Samsung (0.3.15, #58); not yet tried on a real set |
+| Host PC IP `127.0.0.1`: TV-Store installs over loopback, Apps2Samsung through the relay | built and proven against a fake `sdbd` (0.3.14); the relay says why a connection failed and `GET /relay` tells Apps2Samsung (0.3.15, #58); proven on a 2019 Tizen 5.0 set: a catalog install over `127.0.0.1:26101` and `sdb` from a PC through port 26201 (0.3.19). That set's `sdbd` takes one client at a time, so an install while a PC holds a relay session stops with `SDB_BUSY` instead of blaming Host PC IP (0.3.20, #73) |

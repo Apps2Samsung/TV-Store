@@ -3,10 +3,11 @@
  * address Host PC IP names and drops the rest before CNXN. A rooted TV is pinned at 127.0.0.1, where
  * the LAN attempt is dropped and loopback must carry the install; the address that worked is then
  * reused, so the second install does not retry the dead one. Host PC IP at a phone or PC (neither
- * the TV's IP nor loopback) is turned away with HOST_PC_IP. The service runs as a child with its data
+ * the TV's IP nor loopback) is turned away with HOST_PC_IP, and a PC holding sdbd through the relay with
+ * SDB_BUSY (#73). The service runs as a child with its data
  * folder in a temp dir and sdbd pointed at the fake through A2S_SDB_PORT. */
 'use strict';
-var fs = require('fs'), os = require('os'), path = require('path'), http = require('http'), cp = require('child_process');
+var fs = require('fs'), os = require('os'), path = require('path'), http = require('http'), net = require('net'), cp = require('child_process');
 var zip = require('../tizen-app/service/zip.js');
 var Buf = require('../tizen-app/service/compat.js');
 var fake = require('./fake-sdbd.js');
@@ -25,7 +26,7 @@ function stop() { clearTimeout(WD); if (child) child.kill(); if (handle && handl
 
 // The fake gates on 127.0.0.1: a connection to the runner's LAN IP (what the service tries first) is
 // dropped, loopback is accepted. Bound to every interface so the LAN attempt actually reaches it.
-fake.start(SDB, { bind: '0.0.0.0', hostPcIp: '127.0.0.1', shell: function (cmd) {
+fake.start(SDB, { bind: '0.0.0.0', hostPcIp: '127.0.0.1', single: true, shell: function (cmd) {
     if (cmd.indexOf('vd_appinstall') >= 0) return 'install A2SProbe01.Probe package_path /x was_install_app return WAS_TRUE installing[100] app_id[A2SProbe01.Probe] install completed\n';
     return 'ok\n';
 } }, function (h) {
@@ -72,8 +73,37 @@ function run() {
             installProbe(function (j) {
                 if (!j.ok) fail('second install: ' + JSON.stringify(j));
                 if (handle.drops !== afterFirst) fail('the remembered loopback address must be tried first (no new drop): ' + afterFirst + ' -> ' + handle.drops);
-                phoneOrPc();
+                busy();
             });
+        });
+    });
+}
+
+// 3. sdbd takes one client at a time (#73): while a PC holds a session through the relay, sdbd drops the
+//    service's own connection the same silent way a wrong Host PC IP does. The service sees the relay's
+//    open session and says SDB_BUSY, not HOST_PC_IP; once the PC is gone the install goes through again.
+var RELAY = 26197;
+function busy() {
+    call('POST', '/settings', JSON.stringify({ relay: { enabled: true, port: RELAY } }), function (e, code, j) {
+        if (e || code !== 200 || !j || !j.ok || !j.relay || !j.relay.listening) fail('relay on: ' + code + ' ' + JSON.stringify(j));
+        var pc = net.connect(RELAY, '127.0.0.1');
+        pc.on('error', function (e) { fail('the PC\'s relay session died: ' + e.message); });
+        pc.on('connect', function () {
+            // The relay dials sdbd as the PC connects; give it a moment to be the live client there.
+            setTimeout(function () {
+                if (handle.live !== 1) fail('the relayed session must be the live client at the fake: live=' + handle.live);
+                installProbe(function (j) {
+                    if (j.ok || j.code !== 'SDB_BUSY' || !/through the relay \(1 session\)/.test(j.error) || /Host PC IP/.test(j.error)) fail('an install while a PC holds the relay must be SDB_BUSY naming the session, not HOST_PC_IP: ' + JSON.stringify(j));
+                    if (!handle.busyDrops) fail('the fake must have dropped the service as a second client');
+                    pc.removeAllListeners('error'); pc.destroy();
+                    setTimeout(function () {
+                        installProbe(function (j) {
+                            if (!j.ok) fail('with the PC gone the install must go through again: ' + JSON.stringify(j));
+                            phoneOrPc();
+                        });
+                    }, 300);
+                });
+            }, 300);
         });
     });
 }
@@ -102,7 +132,7 @@ function startSecond() {
                     if (j.ok || j.code !== 'HOST_PC_IP' || j.error.indexOf('127.0.0.1') < 0) fail('Host PC IP at a phone or PC must give HOST_PC_IP naming 127.0.0.1: ' + JSON.stringify(j));
                     stop();
                     try { fs.readdirSync(dir).forEach(function (f) { fs.unlinkSync(path.join(dir, f)); }); fs.rmdirSync(dir); } catch (e) {}
-                    console.log('PASS: install works over loopback when Host PC IP is 127.0.0.1, the working address is remembered, and a Host PC IP of a phone or PC gives HOST_PC_IP');
+                    console.log('PASS: install works over loopback when Host PC IP is 127.0.0.1, the working address is remembered, a PC holding the relay gives SDB_BUSY (#73), and a Host PC IP of a phone or PC gives HOST_PC_IP');
                     process.exit(0);
                 });
             });
