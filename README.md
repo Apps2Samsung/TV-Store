@@ -93,6 +93,13 @@ trusts the content instead: the catalog (`resolved.json.signed`) is signed by th
 catalog workflow and checked against the key built into TV-Store, and a package installs only when
 its hash matches that catalog.
 
+App icons (#66) take the same road. The catalog names an icon per package file with its SHA-256
+(`icon`, `icon_digest`, published by the Apps2Samsung catalog snapshot next to `resolved.json`),
+the service fetches it, keeps it only when its bytes hash to that, caches it in its data folder and
+serves it to the screen at `GET /icon/<sha256>`. The webview never fetches from apps2samsung.com
+itself. An app without an icon in the catalog, or whose icon does not check out, keeps its letter
+tile.
+
 For the `sdbd` way, Developer Mode's **Host PC IP** on the TV must be set to the TV's own address
 or to `127.0.0.1`. TV-Store tries both and uses whichever the TV lets in, so a rooted TV (pinned
 at `127.0.0.1`) installs too.
@@ -228,6 +235,7 @@ The header counts what the switches hide ("12 apps · 3 hidden").
 - `tizen-app/service/wascmd.js`: the TV's own installer run by the service, without sdbd (#57)
 - `tizen-app/service/signer.js`: the package signer
 - `tizen-app/service/catalog.js` + `catalog-key.js`: the signed catalog check and its public key
+- `tizen-app/service/icons.js`: app icons, fetched like a package, kept only with the catalog's hash, cached, served at `/icon/<sha256>` (#66)
 - `tizen-app/service/compat.js`: buffers that work on the TV's Node 4.4.3
 - `tizen-app/service/manifest.js`: the ids, the required Tizen version and the privileges a package carries in its own manifest
 - `tizen-app/service/refusal.js`: what the TV's `install failed[...]` codes mean and what TV-Store offers for each
@@ -257,7 +265,8 @@ node test/run.js            # connect + push + install against a fake sdbd
 node test/sign.test.js      # the signer, with a certificate chain
 node --expose-gc test/stream-sign.test.js  # the file-to-file signer on a 24 MB package
 node test/bundle.test.js    # the bundled service starts however the platform loads it
-node test/catalog.test.js   # the signed catalog: signature, age, hashes
+node test/catalog.test.js   # the signed catalog: signature, age, hashes, icons
+node test/icons.test.js     # app icons: served only with the catalog's hash, cached and hashed again, one download per hash, pruned
 node test/manifest.test.js  # the ids and privileges of a .wgt / .tpk from its manifest
 node test/upload.test.js    # send a file to the service, see it wait, token gate, discard
 node test/certs.test.js     # the profiles handed over: merge, order per package, Public or Partner level

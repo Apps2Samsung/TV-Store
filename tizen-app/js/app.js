@@ -441,9 +441,15 @@
     }
 
     // ---- the catalog ------------------------------------------------------------------------------
-    function variant(label, file, url, version, appId, packageId, tizen, certLevel) {
+    function variant(label, file, url, version, appId, packageId, tizen, certLevel, icon) {
         return { label: label || file.replace(/\.(wgt|tpk)$/i, ''), file: file, url: url, version: version || '', appId: appId || '', packageId: packageId || '', tizen: tizen || '',
-                 certLevel: String(certLevel || '').toLowerCase() === 'partner' ? 'partner' : '' };
+                 certLevel: String(certLevel || '').toLowerCase() === 'partner' ? 'partner' : '', icon: icon || '' };
+    }
+    // The icon a package file names in the catalog (#66), as the lower-case hex SHA-256 the service
+    // serves it under (GET /icon/<hash>): only with its hash, the service shows nothing else.
+    function iconOf(a) {
+        var m = /^sha256:([0-9a-fA-F]{64})$/.exec((a && a.icon_digest) || '');
+        return m && a.icon ? m[1].toLowerCase() : '';
     }
     // Whether this TV can run a build that asks for Tizen v.tizen ("6.0"): yes when either side is
     // unknown; the service checks the package itself and the TV has the last word (#47).
@@ -463,7 +469,7 @@
         function app(key, name, category, description, author) {
             if (!byKey[key]) {
                 byKey[key] = { key: key, name: name, category: CATEGORY_NAMES[category] ? category : 'other', description: description || '', author: author || '',
-                               variants: [], needsHead: null, adult: false, root: false, partner: false };
+                               variants: [], needsHead: null, adult: false, root: false, partner: false, icon: '' };
                 out.push(byKey[key]);
             }
             return byKey[key];
@@ -478,9 +484,10 @@
                 // The community bundle: the catalog is the truth, the release gives the download.
                 p.catalog.apps.forEach(function (e) {
                     var a = byFile[e.file]; if (!a) return;
-                    var v = variant(e.variant, e.file, a.browser_download_url, e.version || a.package_version, e.app_id || a.app_id, e.package_id || a.package_id, e.required_version || a.required_version, e.cert_level || p.cert_level);
+                    var v = variant(e.variant, e.file, a.browser_download_url, e.version || a.package_version, e.app_id || a.app_id, e.package_id || a.package_id, e.required_version || a.required_version, e.cert_level || p.cert_level, iconOf(a));
                     var x = app('c:' + (e.group || e.name), e.group || e.name, e.category, e.description, ownerOf(e.repo));
                     x.variants.push(v);
+                    if (v.icon && !x.icon) x.icon = v.icon;
                     if (v.certLevel === 'partner') x.partner = true;
                     if (e.adult) x.adult = true;
                     var root = (e.flags || []).indexOf('root') >= 0;
@@ -496,9 +503,10 @@
             var info = PROVIDERS[p.id] || { name: p.id, category: 'other', description: '' };
             var x = app('p:' + p.id, info.name, info.category, info.description, ownerOf(p.url));
             assets.forEach(function (a) {
-                var v = variant(null, a.name, a.browser_download_url, a.package_version, a.app_id, a.package_id, a.required_version, p.cert_level);
+                var v = variant(null, a.name, a.browser_download_url, a.package_version, a.app_id, a.package_id, a.required_version, p.cert_level, iconOf(a));
                 if (!a.digest) v.needsHead = NO_HASH;
                 x.variants.push(v);
+                if (v.icon && !x.icon) x.icon = v.icon;
                 if (v.certLevel === 'partner') x.partner = true;
             });
         });
@@ -632,11 +640,17 @@
     function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
     function catName(id) { return (window.__categories && window.__categories[id]) || CATEGORY_NAMES[id] || id; }
     var TILES = ['media', 'iptv', 'streaming', 'games', 'casting', 'tools', 'other'];
-    function tile(x, size) {
+    // The app's tile: its icon from the service when the catalog names one (#66), the first letter
+    // on the category colour until it is there, or for good when the service has none to show.
+    // The letter stays underneath: the icon only covers it once it has loaded, and a failed load
+    // takes the image out again.
+    function tile(x, size, icon) {
         var m = String(x.name || '').match(/[A-Za-z0-9]/), cls = 't-other';
         if (TILES.indexOf(x.category) >= 0 && x.category !== 'other') cls = 't-' + x.category;
         else if (x.name) { var h = 0; for (var i = 0; i < x.name.length; i++) h = (Math.imul(h, 31) + x.name.charCodeAt(i)) >>> 0; cls = 't-' + TILES[h % TILES.length]; }
-        return '<div class="tile s' + size + ' ' + cls + '">' + esc(m ? m[0].toUpperCase() : '?') + '</div>';
+        icon = icon || x.icon;
+        var img = icon ? '<img class="ic" alt="" src="' + esc(BASE + '/icon/' + icon) + '" onload="this.parentNode.className+=\' has\'" onerror="if(this.parentNode)this.parentNode.removeChild(this)">' : '';
+        return '<div class="tile s' + size + ' ' + cls + '">' + img + '<span class="lt">' + esc(m ? m[0].toUpperCase() : '?') + '</span></div>';
     }
     function badge(cls, text) { return '<span class="badge ' + cls + '">' + esc(text) + '</span>'; }
     function subline(x) { return x.variants.length > 1 ? x.variants.length + ' variants' : (x.variants[0].version ? 'v' + x.variants[0].version : x.variants[0].file); }
@@ -713,7 +727,7 @@
     function pinCard(x, i) {
         var v = x.variants[i];
         return '<div class="card f' + (v.needsHead || !fits(v) ? ' dim' : '') + '" tabindex="0" data-k="card:pinned:' + esc(x.key) + ':' + i + '" data-app="' + esc(x.key) + '" data-vi="' + i + '">'
-            + tile(x, 68) + '<div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(x.variants.length > 1 ? v.label : (v.version ? 'v' + v.version : v.file)) + '</div><div class="badges">' + pinBadges(x, i) + '</div></div>';
+            + tile(x, 68, v.icon) + '<div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(x.variants.length > 1 ? v.label : (v.version ? 'v' + v.version : v.file)) + '</div><div class="badges">' + pinBadges(x, i) + '</div></div>';
     }
 
     function section(id, title, list, grid, more) {
@@ -824,7 +838,7 @@
     function tvPanel(x) {
         if (!x) return '';
         var st = state(x), v = x.variants[st.variant];
-        var h = '<div class="panel" id="tvpanel"><div class="phead">' + tile(x, 96) + '<div style="min-width:0"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(catName(x.category) + (v.appId ? ' · ' + v.appId : '')) + '</div></div></div>'
+        var h = '<div class="panel" id="tvpanel"><div class="phead">' + tile(x, 96, v.icon) + '<div style="min-width:0"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(catName(x.category) + (v.appId ? ' · ' + v.appId : '')) + '</div></div></div>'
             + '<div class="table kv" style="margin-top:0"><div class="trow"><span class="k">Installed</span><span class="v">v' + esc(st.version) + '</span></div>'
             + '<div class="trow"><span class="k">In the catalog</span><span class="v"' + (st.update ? ' style="color:#F0A020"' : '') + '>v' + esc(st.latest || v.version) + '</span></div>'
             + (x.variants.length > 1 ? '<div class="trow"><span class="k">Variant</span><span class="v">' + esc(st.known ? v.label + (st.byPin ? ' · pinned' : '') : 'Not known: the builds share one package') + '</span></div>' : '') + '</div>'
@@ -879,7 +893,7 @@
     function appHtml() {
         var x = sheet.app, st = state(x), v = x.variants[sheet.v];
         // The developer's name is a link: OK shows every app by them (#29, Apps2Samsung #906).
-        var h = '<div class="shd">' + tile(x, 88) + '<div style="min-width:0"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(catName(x.category))
+        var h = '<div class="shd">' + tile(x, 88, v.icon) + '<div style="min-width:0"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(catName(x.category))
             + (x.author ? ' · <span class="by f" tabindex="0" data-k="author" data-act="author" title="All apps by ' + esc(x.author) + '">by ' + esc(x.author) + ' ›</span>' : '') + '</div></div></div>';
         if (x.description) h += '<div class="sdesc">' + esc(x.description) + '</div>';
         var b = '';
@@ -986,7 +1000,7 @@
     function jobHtml() {
         var x = job.app, v = job.v, upd = job.update;
         var done = job.step, pct = Math.min(100, Math.round((done / 4) * 100 + (job.running && done < 3 ? 8 : 0)));
-        var h = '<div class="shd">' + tile(x, 88) + '<div style="min-width:0"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(v.label + (v.version ? ' · v' + v.version : '')) + '</div></div></div>';
+        var h = '<div class="shd">' + tile(x, 88, v.icon) + '<div style="min-width:0"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(v.label + (v.version ? ' · v' + v.version : '')) + '</div></div></div>';
         h += '<div class="prog"><div class="top"><b>' + (job.error ? (upd ? 'Update failed' : 'Install failed') : (upd ? 'Updating…' : 'Installing…')) + '</b><span>' + (job.error ? '' : 'step ' + Math.min(done + 1, 4) + ' of 4') + '</span></div>'
             + '<div class="bar' + (job.error ? ' bad' : '') + '"><i style="width:' + (job.error ? 100 : pct) + '%"></i></div></div>';
         h += '<div class="table">' + STEPS.map(function (s, i) {

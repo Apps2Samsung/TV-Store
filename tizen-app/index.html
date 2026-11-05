@@ -62,7 +62,10 @@
   .selok svg{margin-top:8px}
 
   /* tiles: the letter on the category colour (Core's AppTiles) */
-  .tile{display:flex;align-items:center;justify-content:center;color:#FFF;font-weight:700;flex:none}
+  .tile{display:flex;align-items:center;justify-content:center;color:#FFF;font-weight:700;flex:none;position:relative;overflow:hidden}
+  /* The app's icon from the service (#66) over the letter; shown once it has loaded. */
+  .tile .ic{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover;opacity:0}
+  .tile.has{background:#1C2735}.tile.has .ic{opacity:1}.tile.has .lt{visibility:hidden}
   .tile.s68{width:68px;height:68px;border-radius:17px;font-size:32px}
   .tile.s88{width:88px;height:88px;border-radius:22px;font-size:42px}
   .tile.s110{width:110px;height:110px;border-radius:26px;font-size:52px}
