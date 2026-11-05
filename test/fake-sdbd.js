@@ -13,7 +13,7 @@ function start(port, opts, onReady) {
     var received = {};   // remotePath -> Buffer (what the client pushed)
     // What the test gets back; drops counts connections turned away by the Host-PC-IP gate. (Not named
     // `handle`: the per-connection frame handler below is, and would shadow it.)
-    var api = { received: received, drops: 0 };
+    var api = { received: received, drops: 0, live: 0, busyDrops: 0 };
     var srv = net.createServer(function (sock) {
         // Real sdbd accepts a TCP connection only on the address Developer Mode's Host PC IP names;
         // a connection to any other local address is accepted then dropped before CNXN (#52). With
@@ -22,6 +22,10 @@ function start(port, opts, onReady) {
             var la = String(sock.localAddress || '').replace(/^::ffff:/, '');
             if (la !== opts.hostPcIp) { api.drops++; sock.once('data', function () { try { sock.destroy(); } catch (e) {} }); return; }
         }
+        // A real sdbd takes one client at a time (a 2019 Tizen 5.0 set, TV-Store#73) and drops the next
+        // one the same silent way. With opts.single, so does the fake.
+        if (opts.single && api.live > 0) { api.drops++; api.busyDrops++; sock.once('data', function () { try { sock.destroy(); } catch (e) {} }); return; }
+        api.live++; sock.once('close', function () { api.live--; });
         var connected = false, buf = Buf.alloc(0), nextRemote = 1000;
         var chans = {};  // remoteId -> {clientId, service, syncBuf, syncState}
         function send(c,a0,a1,p){ sock.write(frame(c,a0,a1,p)); }

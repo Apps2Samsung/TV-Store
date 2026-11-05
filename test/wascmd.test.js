@@ -4,7 +4,8 @@
  * touches sdbd; its "install failed[...]" is read like vd_appinstall's (CERT_MISMATCH); when it did not
  * get to install ("cannot working in released image", or nothing said) the install falls back to sdbd
  * and says so in the log. The same over process.binding('spawn_sync'), the path a Tizen 4+ Node without
- * child_process takes. A2S_INSTALLER=sdb keeps wascmd out. /ping reports the installer.
+ * child_process takes. A2S_INSTALLER=sdb keeps wascmd out. /ping reports the installer. Since 0.3.20 (#57)
+ * wascmd is off unless the switch in Settings turned it on; the first check proves that default.
  * After #67 and #68 (a Tizen 9 set's service died in the start-up probe): nothing is started before
  * the first install, the usage text is logged then; the switch in Settings (POST /settings
  * { installer: { mode } }) keeps wascmd out and survives a restart; a marker left by a run that died
@@ -107,11 +108,37 @@ var handlers = { shell: function (cmd) { shells.push(cmd); return cmd.indexOf('v
 fake.start(SDB, handlers, function (h) {
     handle = h;
     startService({}, function (ping) {
-        // 0. /ping says wascmd is there, runnable, and will be tried first.
+        // -1. Off by default (#57, 0.3.20): without a choice in the data folder the mode is sdb, the start-up
+        //     log says so, an install goes to sdbd and the fake wascmd never runs, although it is there and
+        //     runnable. The switch turns it on; that choice is saved (mode auto with optIn) and survives a
+        //     restart. An older file saying mode auto without optIn (the default then) is not a choice.
+        var i0 = ping.installer;
+        if (!i0 || i0.mode !== 'sdb' || i0.env || !i0.wascmd || !i0.wascmd.available) fail('/ping must say sdb by default with wascmd available: ' + JSON.stringify(i0));
+        call('POST', '/cert', JSON.stringify({ certificates: [CERT] }), function (e, code, j) {
+        if (e || code !== 200 || !j.ok) fail('hand-over: ' + code + ' ' + JSON.stringify(j));
+        logs(function (text) {
+        if (!/installer: sdbd \(the TV's own installer, wascmd, is off, as it is by default; the switch in Settings turns it on\)/.test(text)) fail('the start-up log must say off by default:\n' + text);
+        mode('ok');
+        installProbe(function (j, calls, wl) {
+            if (!j.ok || j.result.via !== 'sdb' || sdbInstalls(calls) !== 1 || wl) fail('by default the install must go to sdbd without running wascmd: ' + JSON.stringify(j) + ' ' + JSON.stringify(wl));
+            fs.writeFileSync(path.join(dir, '.a2s-installer.json'), JSON.stringify({ mode: 'auto', off: null }));
+            restart({}, function (ping) {
+                if (ping.installer.mode !== 'sdb') fail('an old file with mode auto and no optIn must not turn wascmd on: ' + JSON.stringify(ping.installer));
+                settings({ installer: { mode: 'auto' } }, function (e, code, j) {
+                    if (e || code !== 200 || !j.ok || j.installer.mode !== 'auto') fail('switch on: ' + code + ' ' + JSON.stringify(j));
+                    if (!savedInstaller() || savedInstaller().mode !== 'auto' || savedInstaller().optIn !== true) fail('the choice must be saved with optIn: ' + JSON.stringify(savedInstaller()));
+                    restart({}, zero);
+                });
+            });
+        });
+        });
+        });
+    });
+    function zero(ping) {
+        // 0. /ping says wascmd is there, runnable, and will be tried first (the switch is on now).
         var inst = ping.installer;
         if (!inst || inst.mode !== 'auto' || inst.env || inst.off !== null || !inst.wascmd || !inst.wascmd.available || !inst.wascmd.executable || inst.wascmd.denied !== null || inst.wascmd.path !== FAKE || inst.wascmd.spawn !== 'child_process' || inst.last !== null) fail('/ping installer: ' + JSON.stringify(inst));
-        call('POST', '/cert', JSON.stringify({ certificates: [CERT] }), function (e, code, j) {
-            if (e || code !== 200 || !j.ok) fail('hand-over: ' + code + ' ' + JSON.stringify(j));
+        (function (e, code, j) {
             // 0b. The start-up log says wascmd first, and that nothing was started for it (#67, #68): the
             //     usage text is not there yet, and no fake wascmd ran.
             logs(function (text) {
@@ -159,8 +186,8 @@ fake.start(SDB, handlers, function (h) {
                 });
             });
             });
-        });
-    });
+        })(null, 200, { ok: true });
+    }
 });
 
 // 5. The binding path (a Tizen 4+ Node without child_process): the same install goes through wascmd.
@@ -213,7 +240,7 @@ function replaceWithoutSdb() {
 }
 
 // 8. The switch in Settings (#67, #68): { installer: { mode: 'sdb' } } keeps wascmd out, is saved in the
-//    data folder and survives a restart; 'auto' brings wascmd back; bad blocks are refused with 400.
+//    data folder and survives a restart; 'auto' brings wascmd back (opt-in since 0.3.20, #57); bad blocks are refused with 400.
 function settingsSwitch() {
     fake.start(SDB, handlers, function (h) {
         handle = h;
@@ -235,7 +262,8 @@ function settingsSwitch() {
                     restart({}, function (ping) {
                         if (ping.installer.mode !== 'sdb') fail('the switch must survive a restart: ' + JSON.stringify(ping.installer));
                         logs(function (text) {
-                            if (!/installer: sdbd only \(the switch in Settings\)/.test(text)) fail('the start-up log must say the switch is on:\n' + text);
+                            if (!/installer: sdbd \(the TV's own installer, wascmd, is off, as it is by default; the switch in Settings turns it on\)/.test(text)) fail('the start-up log must say the switch is off:\n' + text);
+                            if (savedInstaller().optIn) fail('off must drop optIn: ' + JSON.stringify(savedInstaller()));
                             settings({ installer: { mode: 'auto' } }, function (e, code, j) {
                                 if (e || code !== 200 || !j.ok || j.installer.mode !== 'auto' || j.installer.off !== null) fail('back to auto: ' + JSON.stringify(j));
                                 installProbe(function (j, calls, wl) {

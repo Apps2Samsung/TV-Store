@@ -118,22 +118,26 @@ function logPlatform() {
 // is asked first, without a fork, whether this service may run the binary at all (wascmd.status());
 // a marker file stands in the data folder while wascmd runs, so a service that finds it at start
 // knows the last run died inside that call and keeps to sdbd from then on; and a spawn that fails
-// outright (EACCES, ENOENT) is remembered the same way. The mode is a Settings switch kept in the
-// data folder ('auto' or 'sdb'), or A2S_INSTALLER=sdb in the environment (a test); setting 'auto'
-// from Settings forgets what was learned. INSTALLER_LAST says which way the last install took.
+// outright (EACCES, ENOENT) is remembered the same way. A 2019 Tizen 5.0 set then showed the end of
+// it (#57): there the run is allowed and the fork still takes the service down before anything is
+// installed. So since 0.3.20 wascmd is off by default: the mode is 'sdb' unless the Settings switch
+// "Try the TV's own installer" was turned on (kept in the data folder as mode 'auto' with optIn,
+// so an older file's 'auto', which meant the default then, is not read as a choice), or
+// A2S_INSTALLER=sdb|auto in the environment (a test); setting 'auto' from Settings forgets what was
+// learned. INSTALLER_LAST says which way the last install took.
 var INSTALLER_FILE = DATA_DIR ? path.join(DATA_DIR, '.a2s-installer.json') : null;
 var WASCMD_MARK = DATA_DIR ? path.join(DATA_DIR, '.a2s-wascmd-running') : null;
-var INSTALLER_CFG = { mode: 'auto', off: null };   // off: { why, at } once wascmd is not to be tried again on this TV
+var INSTALLER_CFG = { mode: 'sdb', off: null };   // off: { why, at } once wascmd is not to be tried again on this TV
 try {
     if (INSTALLER_FILE) {
         var ic = JSON.parse(fs.readFileSync(INSTALLER_FILE, 'utf8'));
         if (ic && typeof ic === 'object') {
-            if (ic.mode === 'sdb') INSTALLER_CFG.mode = 'sdb';
+            if (ic.mode === 'auto' && ic.optIn === true) { INSTALLER_CFG.mode = 'auto'; INSTALLER_CFG.optIn = true; }
             if (ic.off && typeof ic.off === 'object' && ic.off.why) INSTALLER_CFG.off = { why: String(ic.off.why), at: ic.off.at || null };
         }
     }
 } catch (e) {}
-var INSTALLER_ENV = process.env.A2S_INSTALLER === 'sdb';
+var INSTALLER_ENV = /^(sdb|auto)$/.test(process.env.A2S_INSTALLER || '') ? process.env.A2S_INSTALLER : null;
 var INSTALLER_LAST = null;
 // Read once: whether the binary is there, whether this service may run it and how this Node starts
 // a process cannot change while the service runs, and the page polls /ping all the time.
@@ -146,8 +150,8 @@ function saveInstallerCfg() {
     try { fs.writeFileSync(INSTALLER_FILE, JSON.stringify(INSTALLER_CFG)); }
     catch (e) { log('installer: cannot save settings: ' + e.message); }
 }
-function installerMode() { return INSTALLER_ENV ? 'sdb' : INSTALLER_CFG.mode; }
-// Whether an install goes to wascmd first: the switch at auto, the binary runnable, nothing learned against it.
+function installerMode() { return INSTALLER_ENV || INSTALLER_CFG.mode; }
+// Whether an install goes to wascmd first: the switch on (auto), the binary runnable, nothing learned against it.
 function wascmdWanted() { return installerMode() === 'auto' && WASCMD.available && !INSTALLER_CFG.off; }
 function installerStatus() { return { mode: installerMode(), env: INSTALLER_ENV, wascmd: WASCMD, off: INSTALLER_CFG.off, last: INSTALLER_LAST }; }
 // The marker around a run of wascmd: on before anything is started, off once it answered. A process
@@ -162,13 +166,13 @@ function wascmdOff(why) {
     INSTALLER_CFG.off = { why: why, at: new Date().toISOString() };
     saveInstallerCfg();
     markWascmd(false);
-    log('installer: ' + why + '; sdbd only from now on (the switch in Settings turns the TV\'s own installer back on)');
+    log('installer: ' + why + '; sdbd only from now on (turn the switch in Settings off and on again to let the TV\'s own installer try once more)');
 }
 // The log's line about the installer, at start and when Settings changes it.
 function installerLine() {
     var w = WASCMD;
-    if (INSTALLER_ENV) return 'sdbd only (A2S_INSTALLER=sdb)';
-    if (INSTALLER_CFG.mode === 'sdb') return 'sdbd only (the switch in Settings)';
+    if (INSTALLER_ENV === 'sdb') return 'sdbd only (A2S_INSTALLER=sdb)';
+    if (!INSTALLER_ENV && INSTALLER_CFG.mode === 'sdb') return 'sdbd (the TV\'s own installer, wascmd, is off, as it is by default; the switch in Settings turns it on)';
     if (INSTALLER_CFG.off) return 'sdbd only (' + INSTALLER_CFG.off.why + ', since ' + INSTALLER_CFG.off.at + ')';
     if (w.available) return 'wascmd first (' + w.path + ' via ' + w.spawn + '), sdbd as the fallback; nothing is started before the first install';
     if (!w.present) return 'sdbd (' + w.path + ' is not there)';
@@ -184,9 +188,10 @@ function installerSettingsProblem(i) {
 // Apply { mode } from Settings (already validated): persist; 'auto' also forgets what was learned.
 function applyInstallerSettings(i) {
     INSTALLER_CFG.mode = i.mode;
-    if (i.mode === 'auto') { INSTALLER_CFG.off = null; markWascmd(false); }
+    if (i.mode === 'auto') { INSTALLER_CFG.off = null; INSTALLER_CFG.optIn = true; markWascmd(false); }
+    else delete INSTALLER_CFG.optIn;
     saveInstallerCfg();
-    log('installer: ' + (i.mode === 'sdb' ? 'sdbd only from now on (the switch in Settings)' : 'back to automatic (the switch in Settings): ' + installerLine()));
+    log('installer: ' + (i.mode === 'sdb' ? 'the TV\'s own installer is off again (the switch in Settings): ' : 'the TV\'s own installer is on (the switch in Settings): ') + installerLine());
 }
 // What wascmd prints without arguments: its flags, which no document gives (the uninstall one in
 // particular), so a real set's log is where they get read from. Once, before the first install.
@@ -545,13 +550,20 @@ function connectSdb(hosts, cb, i, seen) {
 // What the user can do about a failed sdb connection. A refused connection means sdbd is not
 // listening: Developer Mode is off. One that sdbd accepts and drops without a word is what a caller
 // the Host PC IP does not name gets (#26). Both the TV's own IP and 127.0.0.1 are tried (#52), so a
-// drop on every address means Host PC IP points somewhere else (a phone or PC).
+// drop on every address means Host PC IP points somewhere else (a phone or PC). Unless a phone or PC
+// is on the developer connection right now: sdbd takes one client at a time (seen on a 2019 Tizen
+// 5.0 set, #73), and drops a second one the same silent way. The relay knows about its own sessions,
+// so with one open the drop is read as that, not as a wrong Host PC IP.
 function sdbAdvice(err, seen) {
     var ip = ownIp();
     var either = 'this TV\u2019s own IP' + (ip ? ' (' + ip + ')' : '') + ' or 127.0.0.1';
     if (seen.every(function (s) { return s.code === 'ECONNREFUSED'; }))
         return coded('DEV_MODE_OFF', 'Developer Mode is off on this TV. Turn it on (Apps, then 1 2 3 4 5) with Host PC IP set to ' + either + ', restart the TV and try again.');
-    if (seen.some(function (s) { return !s.frame && /^(ECONNRESET|EPIPE|SDB_CLOSED)$/.test(s.code || ''); }))
+    var dropped = seen.some(function (s) { return !s.frame && /^(ECONNRESET|EPIPE|SDB_CLOSED)$/.test(s.code || ''); });
+    var busy = relayStatus().sessions;
+    if (dropped && busy > 0)
+        return coded('SDB_BUSY', 'The TV\u2019s developer connection is in use: a phone or PC is connected to this TV through the relay (' + busy + (busy === 1 ? ' session' : ' sessions') + '), and the TV takes one connection at a time. Close Apps2Samsung there, or wait until it is done, and try again.');
+    if (dropped)
         return coded('HOST_PC_IP', 'The TV turned the install away. In Developer Mode (Apps, then 1 2 3 4 5), Host PC IP must be ' + either + ', not a phone or PC. Change it, restart the TV and try again.');
     return err;
 }

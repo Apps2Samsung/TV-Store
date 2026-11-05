@@ -58,7 +58,7 @@
     // TV's current IP and loopback too, and keeps whichever answers.
     var BASE = 'http://127.0.0.1:8077';
     var KOFI = 'https://ko-fi.com/patrickst';
-    var VERSION = '0.3.19';
+    var VERSION = '0.3.20';
     var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13, RETURN: 10009, ESC: 27, BACK: 8 };
 
     // What the manifest providers are called; resolved.json carries only their ids.
@@ -256,7 +256,7 @@
         });
     }
 
-    // The installer switch (#67, #68): whether a signed package may go to the TV's own installer
+    // The installer switch (#57, #67, #68; off by default since 0.3.20): whether a signed package may go to the TV's own installer
     // (wascmd, run by the service) or only through sdbd, as before 0.3.16. Lives in the service like
     // the relay: /ping carries it (installer.mode, and installer.off when the service learned on its
     // own to keep to sdbd), POST /settings { installer: { mode } } flips it.
@@ -264,12 +264,12 @@
     function installerRow() {
         var i = ready && ready.installer;
         if (!i) return '';
-        var on = i.mode === 'sdb', w = i.wascmd || {};
-        var hint = on ? 'On: every install goes through the TV\'s developer connection (sdbd), the way TV-Store did before 0.3.16.'
-            : i.off ? 'Off, but TV-Store keeps to sdbd on this TV anyway: ' + i.off.why + '. Turn this on and off again to let it try the TV\'s own installer once more.'
-            : w.available ? 'Off: TV-Store hands an install to the TV\'s own installer first and uses sdbd when that does not work. Turn this on when the service keeps stopping or installs fail on this TV.'
-            : 'Off, and this TV lets TV-Store install through sdbd only anyway' + (w.denied ? ' (it may not run ' + w.path + ': ' + w.denied + ')' : '') + '.';
-        return '<div class="opt f" tabindex="0" data-k="opt:installer" data-opt="installer"><div class="ot"><div class="ont">Install through sdbd only</div><div class="oh">' + esc(hint) + '</div></div>'
+        var on = i.mode === 'auto', w = i.wascmd || {};
+        var hint = !on ? 'Off: installs go through the TV\'s developer connection (sdbd). On, TV-Store hands an install to the TV\'s own installer first; on every TV tried so far (Tizen 5 and 9) that took the service down, so leave this off unless you want to report what your TV does.'
+            : i.off ? 'On, but TV-Store keeps to sdbd on this TV anyway: ' + i.off.why + '. Turn this off and on again to let it try the TV\'s own installer once more.'
+            : w.available ? 'On: TV-Store hands an install to the TV\'s own installer first and uses sdbd when that does not work. If the service stops during an install, turn this off.'
+            : 'On, but this TV lets TV-Store install through sdbd only anyway' + (w.denied ? ' (it may not run ' + w.path + ': ' + w.denied + ')' : '') + '.';
+        return '<div class="opt f" tabindex="0" data-k="opt:installer" data-opt="installer"><div class="ot"><div class="ont">Try the TV\'s own installer (wascmd)</div><div class="oh">' + esc(hint) + '</div></div>'
             + '<span class="sw' + (on ? ' on' : '') + '"><i></i></span></div>';
     }
     function installerNotice() { return installerError ? '<div class="notice bad">' + esc('Could not change the installer setting: ' + installerError) + '</div>' : ''; }
@@ -1049,7 +1049,7 @@
         }
         var hidden = catalogApps.length - apps.length;
         var h = '<div class="shd"><div><div class="nm">Settings</div><div class="mt">Remembered on this TV' + (hidden > 0 ? ' · ' + hidden + (hidden === 1 ? ' app' : ' apps') + ' hidden now' : '') + '</div></div></div>'
-            + '<div class="opts">' + opt('showAdult', 'Show adult (18+) apps', 'Apps marked adult-only stay out of the store until this is on.')
+            + '<div class="sbody vscroll"><div class="opts">' + opt('showAdult', 'Show adult (18+) apps', 'Apps marked adult-only stay out of the store until this is on.')
             + opt('showNeedsHead', 'Show apps that need a phone or PC', 'Some apps need Apps2Samsung on a phone or PC to install. Turn this off to keep them out of the store.')
             + opt('verboseLog', 'Verbose logging', 'Writes much more detail to the TV-Store log. Turn it on when a bug report asks for it, and off again afterwards.')
             + relayRow() + installerRow() + '</div>' + relayNotice() + installerNotice();
@@ -1061,13 +1061,13 @@
             + '<div class="trow"><span class="k">Catalog</span><span class="v">' + esc(catalogApps.length + ' apps, signature checked') + '</span></div>'
             + '<div class="trow"><span class="k">TV-Store</span><span class="v">v' + VERSION + (ready && ready.node ? ' · Node ' + esc(ready.node) : '') + '</span></div>'
             + '<div class="trow"><span class="k">This TV</span><span class="v">' + esc((device ? device + ' · ' : '') + (tvTizen ? 'Tizen ' + tvTizen : 'Tizen version not known')) + '</span></div></div>';
-        if (confirmingAdult) return h;    // the question needs the room the QR codes take
+        if (confirmingAdult) return h + '</div>';    // the question needs the room the QR codes take
         // Your own file (#30): the upload page's address, as a QR for a phone.
         if (ready && ready.ownIp) {
             var u = 'http://' + ready.ownIp + ':8077/upload';
             h += '<div class="qrrow">' + qr(u, 120) + '<div><b>Install your own app</b><span>Scan with your phone, or open <span class="mono">' + esc(u) + '</span> on a computer in the same network, and send a .wgt or .tpk. TV-Store then asks here whether to install it.</span></div></div>';
         }
-        return h + logBlock();
+        return h + logBlock() + '</div>';
     }
 
     // ---- actions ----------------------------------------------------------------------------------
