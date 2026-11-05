@@ -224,6 +224,13 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
   with `SDB_BUSY` ("a phone or PC is connected to this TV through the relay") instead of blaming
   Host PC IP; close Apps2Samsung there, or wait, and install again.
 
+  Updating TV-Store itself through the relay works, with one visible hiccup (Apps2Samsung#1005):
+  the installer stops the running TV-Store to replace it, and the relay is TV-Store's own service,
+  so the phone, PC or `sdb` session loses its connection the moment the install starts and never
+  sees "install completed". The install still lands. Open TV-Store again (or wait for the head to
+  relaunch it), and the new version is there with the relay back on its port. Apps2Samsung is to
+  say so up front and read the version from the TV afterwards instead of reporting a failure.
+
 The header counts what the switches hide ("12 apps · 3 hidden").
 
 ## Pins, search by developer
