@@ -24,6 +24,7 @@ var refusals = require('./refusal.js');
 var certs = require('./certs.js');
 var sdbhosts = require('./sdbhosts.js');
 var wascmd = require('./wascmd.js');
+var iconsMod = require('./icons.js');
 
 var PORT = 8077;
 // sdbd's port; a test points the service at a fake sdbd (test/install.test.js).
@@ -687,10 +688,15 @@ function withCatalog(cb, fresh) {
         try { cat = catalogTrust.verify(buf, CATALOG_KEY); }
         catch (e) { log('catalog: ' + e.message); return done(e); }
         cat.at = Date.now(); CATALOG = cat;
-        log('catalog: signature ok, generated ' + cat.catalog.generatedAt + ', ' + Object.keys(cat.index).length + ' files');
+        log('catalog: signature ok, generated ' + cat.catalog.generatedAt + ', ' + Object.keys(cat.index).length + ' files, ' + Object.keys(cat.icons).length + ' icons');
+        icons.prune(cat.icons);
         done(null, cat);
     });
 }
+
+// App icons (#66): fetched like a package, kept only when they hash to what the signed catalog
+// says, cached in the data folder, served at GET /icon/<sha256>. See icons.js.
+var icons = iconsMod.create({ dir: DATA_DIR ? path.join(DATA_DIR, 'icons') : null, get: get, withCatalog: withCatalog, log: log, logv: logv });
 
 // The signing certificates a head hands over (see #844): author/distributor key+cert as PEM (not
 // a .p12: Node has no PKCS#12 parser), every profile the head holds since #44 (certs.js has the
@@ -748,7 +754,7 @@ http.createServer(function (req, res) {
     if (req.method === 'OPTIONS') { cors(res, 204, 'text/plain'); return res.end(); }
     var route = url.parse(req.url).pathname;
     // The page polls /ping and /logs all the time; those would drown the rest.
-    if (VERBOSE && !/^\/(ping|logs|log\.txt|uploads)$/.test(route)) res.on('finish', function () { logv('http: ' + req.method + ' ' + route + ' -> ' + res.statusCode); });
+    if (VERBOSE && !/^\/(ping|logs|log\.txt|uploads|icon\/.*)$/.test(route)) res.on('finish', function () { logv('http: ' + req.method + ' ' + route + ' -> ' + res.statusCode); });
     if (route === '/log.txt') { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Access-Control-Allow-Origin': '*' }); return res.end(logText()); }
     // The upload page and the upload itself come from a phone or PC (#30); the install of it only
     // from the TV-Store screen, below the gate and with the token.
@@ -780,6 +786,8 @@ http.createServer(function (req, res) {
         UPLOAD = null; unlink(UPLOAD_FILE);
         json(res, 200, { ok: true });
     });
+    var iconHex = /^\/icon\/([0-9a-fA-F]{64})$/.exec(route);
+    if (iconHex && req.method === 'GET') return icons.serve(iconHex[1].toLowerCase(), res);
     if (route === '/catalog') return withCatalog(function (err, cat) { if (err) { log('catalog: failed: ' + err.message); return json(res, 502, { ok: false, error: err.message }); } cors(res, 200, 'application/json'); res.end(cat.payload); });
     if (route === '/cert' && req.method === 'POST') return body(req, function (err, b) {
         var incoming = err ? [] : certs.normalize(b);

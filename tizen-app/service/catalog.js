@@ -7,7 +7,9 @@
  *   - resolved.json.signed is line 1 a base64 RSA-SHA256 signature, then resolved.json byte for
  *     byte, signed by the Apps2Samsung catalog workflow; only the key in catalog-key.js verifies it;
  *   - every package file in it carries its SHA-256 (`digest`, "sha256:<hex>"), and a download is
- *     installed only when its bytes hash to that.
+ *     installed only when its bytes hash to that;
+ *   - a package file may name its icon (`icon`, a URL, and `icon_digest`, "sha256:<hex>", #66), and
+ *     the icon is shown only when its bytes hash to that (icons.js).
  * Pure functions, so test/catalog.test.js can run them with a throwaway key.
  */
 'use strict';
@@ -36,16 +38,18 @@ function verify(buf, publicKeyPem, now) {
     if ((now || Date.now()) - at > MAX_AGE_MS) throw new Error('the signed catalog is from ' + catalog.generatedAt + ', more than 7 days old: check the TV’s clock, or the Apps2Samsung catalog workflow');
 
     var s = scan(catalog);
-    return { catalog: catalog, payload: payload, index: s.index, levels: s.levels };
+    return { catalog: catalog, payload: payload, index: s.index, levels: s.levels, icons: s.icons };
 }
 
-// One walk over providers -> releases -> assets for both lookups the install needs:
+// One walk over providers -> releases -> assets for the lookups the install and the icons need:
 //   index:  download URL -> lower-case hex SHA-256, for every package file the catalog lists;
 //   levels: download URL -> 'partner' for every file the catalog says needs a Partner certificate
 //           (#50): cert_level on a community package (copied onto each of its files in catalog.json,
-//           matched to the release asset by file name) or on a provider (every file of it).
+//           matched to the release asset by file name) or on a provider (every file of it);
+//   icons:  lower-case hex SHA-256 -> icon URL, for every file that names an icon with its hash
+//           (#66); an icon without a hash is not listed, so it is never fetched.
 function scan(catalog) {
-    var index = {}, levels = {};
+    var index = {}, levels = {}, icons = {};
     (catalog.providers || []).forEach(function (p) {
         var byFile = {};
         ((p.catalog && p.catalog.apps) || []).forEach(function (e) { if (e.file && String(e.cert_level || '').toLowerCase() === 'partner') byFile[e.file] = true; });
@@ -56,14 +60,17 @@ function scan(catalog) {
                 var m = /^sha256:([0-9a-fA-F]{64})$/.exec(a.digest || '');
                 index[a.browser_download_url] = m ? m[1].toLowerCase() : null;
                 if (all || byFile[a.name]) levels[a.browser_download_url] = 'partner';
+                var im = /^sha256:([0-9a-fA-F]{64})$/.exec(a.icon_digest || '');
+                if (im && typeof a.icon === 'string' && /^https?:\/\//.test(a.icon)) icons[im[1].toLowerCase()] = a.icon;
             });
         });
     });
-    return { index: index, levels: levels };
+    return { index: index, levels: levels, icons: icons };
 }
 function index(catalog) { return scan(catalog).index; }
 function levels(catalog) { return scan(catalog).levels; }
+function icons(catalog) { return scan(catalog).icons; }
 
 function sha256(buf) { return crypto.createHash('sha256').update(buf).digest('hex'); }
 
-module.exports = { verify: verify, scan: scan, index: index, levels: levels, sha256: sha256, MAX_AGE_MS: MAX_AGE_MS };
+module.exports = { verify: verify, scan: scan, index: index, levels: levels, icons: icons, sha256: sha256, MAX_AGE_MS: MAX_AGE_MS };

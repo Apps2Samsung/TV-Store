@@ -53,6 +53,21 @@ throwsLike(function () { cat.verify(tampered, pub, now); }, /signature does not 
 throwsLike(function () { cat.verify(signed(good), other, now); }, /signature does not match/, 'another key');
 throwsLike(function () { cat.verify(Buf.from(good.replace(/\n/g, ' '), 'utf8'), pub, now); }, /not signed/, 'unsigned catalog');
 throwsLike(function () { cat.verify(signed(catalog('2026-10-10T00:00:00Z')), pub, now); }, /more than 7 days old/, 'stale catalog');
+// Icons (#66): hash -> URL for every file that names an icon with its hash; without the hash, or
+// with a hash that is not one, the icon is not listed, so the service never fetches it.
+var ih = crypto.createHash('sha256').update('icon bytes').digest('hex');
+var ic = cat.icons({ providers: [
+    { id: 'jellyfin', releases: [{ assets: [
+        { name: 'a.wgt', browser_download_url: 'u/a.wgt', icon: 'https://apps2samsung.com/catalog/icons/' + ih + '.png', icon_digest: 'sha256:' + ih.toUpperCase() },
+        { name: 'b.wgt', browser_download_url: 'u/b.wgt', icon: 'https://apps2samsung.com/catalog/icons/' + ih + '.png', icon_digest: 'sha256:' + ih },
+        { name: 'c.wgt', browser_download_url: 'u/c.wgt', icon: 'https://apps2samsung.com/catalog/icons/x.png' },
+        { name: 'd.wgt', browser_download_url: 'u/d.wgt', icon: 'https://apps2samsung.com/catalog/icons/x.png', icon_digest: 'sha256:nope' },
+        { name: 'e.wgt', browser_download_url: 'u/e.wgt', icon: 'ftp://x/y.png', icon_digest: 'sha256:' + ih },
+        { name: 'f.wgt', browser_download_url: 'u/f.wgt' }
+    ] }] }
+] });
+if (JSON.stringify(ic) !== JSON.stringify((function () { var o = {}; o[ih] = 'https://apps2samsung.com/catalog/icons/' + ih + '.png'; return o; })())) fail('icons: ' + JSON.stringify(ic));
+if (JSON.stringify(r.icons) !== '{}') fail('a catalog without icons verifies with an empty icon map');
 if (cat.sha256(Buf.from('package bytes', 'utf8')) !== hash) fail('sha256 helper');
 // The shipped key parses: verifying anything with it answers false instead of throwing.
 if (crypto.createVerify('RSA-SHA256').update('x').verify(shipped, 'AAAA', 'base64') !== false) fail('shipped key');
