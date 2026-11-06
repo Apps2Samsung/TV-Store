@@ -153,6 +153,7 @@
     }
     var ready = null;          // the service's /ping
     var tvTizen = '';          // the Tizen version this TV runs ("4.0"), from the platform; '' off a TV
+    var tvDuid = '';           // this TV's DUID (webapis.productinfo), held against each certificate's device list (#78); '' when it cannot be read
     var problem = null;        // { title, text } when the service or the catalog failed
     var loading = true;
     var view = 'install';      // 'install' | 'tv'
@@ -282,6 +283,84 @@
             if (!err && res && res.ok && res.installer) { ready.installer = res.installer; installerError = null; }
             else installerError = err ? err.message : (res && res.error) || 'no answer from the service';
             renderSheet(); focusKey('opt:installer');
+        });
+    }
+
+    // The signing certificates on this TV (#78): one row per profile the service holds, with what a
+    // user needs to tell them apart and to see why one cannot install here. OK on a row offers "Use
+    // as default" (the profile tried first when an app has none of its own; a pick made here survives
+    // the next arm from a phone or PC) and "Remove", which asks first. Fingerprint: the first 12
+    // characters of the id, the same value the Apps2Samsung debug log prints.
+    var certSel = null, certConfirm = false, certBusy = false, certError = null;
+    var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    var EXPIRES_SOON_DAYS = 30;
+    function dayOf(iso) { var d = new Date(iso); return isNaN(d.getTime()) ? '' : d.getUTCDate() + ' ' + MONTHS[d.getUTCMonth()] + ' ' + d.getUTCFullYear(); }
+    function daysLeft(iso) { var t = new Date(iso).getTime(); return isNaN(t) ? null : Math.ceil((t - Date.now()) / 864e5); }
+    function certName(c) { return c.name || c.id.slice(0, 12); }
+    // How long a profile holds: the author certificate, and the distributor one when it runs out first.
+    function certExpiry(c) {
+        var which = 'Valid until', iso = c.validUntil;
+        if (c.distributorValidUntil && (!iso || new Date(c.distributorValidUntil) < new Date(iso))) { which = 'Distributor certificate valid until'; iso = c.distributorValidUntil; }
+        var left = iso ? daysLeft(iso) : null;
+        if (left === null) return { cls: '', text: 'Expiry not known' };
+        if (left <= 0) return { cls: ' bad', text: (which === 'Valid until' ? 'Expired on ' : 'Distributor certificate expired on ') + dayOf(iso) + '; the TV may refuse apps signed with it' };
+        if (left <= EXPIRES_SOON_DAYS) return { cls: ' warn', text: which + ' ' + dayOf(iso) + ', ' + (left === 1 ? 'tomorrow' : 'in ' + left + ' days') + '. Create a new one in Apps2Samsung and arm TV-Store again' };
+        return { cls: '', text: which + ' ' + dayOf(iso) };
+    }
+    // Whether the distributor certificate lists this TV. A certificate without a device list (a Tizen
+    // Studio one) says nothing either way.
+    function certCoverage(c) {
+        var list = c.deviceIds || [];
+        if (!list.length) return { cls: '', text: 'No device list in the certificate' };
+        if (!tvDuid) return { cls: '', text: 'Lists ' + list.length + (list.length === 1 ? ' TV' : ' TVs') + '; this TV\'s id could not be read to compare' };
+        var mine = tvDuid.toUpperCase();
+        if (list.some(function (d) { return String(d).toUpperCase() === mine; })) return { cls: '', text: 'Covers this TV' };
+        return { cls: ' bad', text: 'Does not cover this TV (' + tvDuid + '), so it cannot install here' };
+    }
+    function certsBlock() {
+        var list = (ready && ready.certificates) || [];
+        if (!armed() || !list.length || !list[0].id) return '';   // an older service sends no ids: the line in the table below says it
+        var h = '<div class="vhead"><span class="t">Signing certificates</span><span class="h">' + list.length + ' on this TV</span></div><div class="opts crts">';
+        list.forEach(function (c) {
+            var sel = c.id === certSel, exp = certExpiry(c), cov = certCoverage(c);
+            var lvl = c.level === 'partner' ? 'Partner' : c.level === 'public' ? 'Public' : 'Unknown level, used as Public';
+            h += '<div class="opt crt f' + (sel ? ' sel' : '') + '" tabindex="0" data-k="certrow:' + c.id + '" data-certrow="' + c.id + '"><div class="ot">'
+                + '<div class="ont">' + esc(certName(c)) + (c.primary ? badge('b-ok', 'Default') : '') + '</div>'
+                + '<div class="oh">' + esc(lvl) + ' · author <span class="fp">' + esc(c.id.slice(0, 12)) + '</span>' + (c.primary && c.chosenOnTv ? esc(' · chosen on this TV') : '') + '</div>'
+                + '<div class="oh' + exp.cls + '">' + esc(exp.text) + '</div>'
+                + '<div class="oh' + cov.cls + '">' + esc(cov.text) + '</div></div></div>';
+            if (!sel) return;
+            if (certConfirm) {
+                var last = list.length === 1;
+                h += '<div class="crtact"><div class="notice">' + esc('Remove \u2018' + certName(c) + '\u2019 from this TV? ' + (last
+                        ? 'It is the only one here: TV-Store cannot install anything until a phone or PC arms it again.'
+                        : 'Apps installed with it cannot be updated from TV-Store until a phone or PC arms this TV with it again.')) + '</div>'
+                    + '<div class="btns"><button class="btn danger grow f" data-k="certremoveyes" data-act="certremoveyes"' + (certBusy ? ' disabled' : '') + '>Remove</button><button class="btn f" data-k="certremoveno" data-act="certremoveno">Cancel</button></div></div>';
+            } else {
+                h += '<div class="crtact"><div class="btns">' + (c.primary ? '' : '<button class="btn primary grow f" data-k="certdefault" data-act="certdefault"' + (certBusy ? ' disabled' : '') + '>Use as default</button>')
+                    + '<button class="btn grow f" data-k="certremove" data-act="certremove"' + (certBusy ? ' disabled' : '') + '>Remove</button></div></div>';
+            }
+        });
+        h += '</div>';
+        if (certError) h += '<div class="notice bad">' + esc(certError) + '</div>';
+        if (list.length > 1) h += '<div class="notice info">' + esc('An app is signed with the certificate it was installed with first, then with the default, then with the rest. An app that needs a Partner certificate only takes a Partner one.') + '</div>';
+        return h;
+    }
+    function selectCert(id) { certSel = certSel === id ? null : id; certConfirm = false; certError = null; renderSheet(); focusKey('certrow:' + id); }
+    function certAction(route, then) {
+        if (!certSel || certBusy) return;
+        var id = certSel;
+        certBusy = true; certError = null;
+        xhr('POST', route, { id: id }, function (err, res) {
+            certBusy = false;
+            if (err || !res || !res.ok) { certError = 'Could not change the certificates: ' + (err ? err.message : (res && res.error) || 'no answer from the service'); renderSheet(); focusKey('certrow:' + id); return; }
+            var next = {};
+            for (var k in ready) if (ready.hasOwnProperty(k)) next[k] = ready[k];
+            next.certificates = res.certificates || []; next.certCount = res.certCount || 0; next.certReady = !!res.certReady;
+            next.certNames = next.certificates.map(function (c) { return c.name; });
+            certConfirm = false;
+            setReady(next);
+            then(id);
         });
     }
 
@@ -432,6 +511,7 @@
         ['ETHERNET_NETWORK', 'WIFI_NETWORK'].forEach(function (t) {
             try { tizen.systeminfo.getPropertyValue(t, function (n) { if (n && n.ipAddress && !tvIp) tvIp = n.ipAddress; }, function () {}); } catch (e) {}
         });
+        try { if (window.webapis && webapis.productinfo && webapis.productinfo.getDuid) tvDuid = String(webapis.productinfo.getDuid() || '').trim(); } catch (e) {}
         try {
             tizen.systeminfo.getPropertyValue('BUILD', function (b) {
                 device = b && b.model ? b.model : '';
@@ -864,7 +944,7 @@
         sheet = s; renderSheet(true);
     }
     function closeSheet(then) {
-        sheet = null; confirmingAdult = false;
+        sheet = null; confirmingAdult = false; certSel = null; certConfirm = false; certError = null;
         sheetEl.className = 'sheet'; sheetEl.innerHTML = ''; appEl.className = 'app';
         if (then) return then();
         renderPage(); focusKey(returnFocus) || focusFirst();
@@ -1057,7 +1137,8 @@
             + '<div class="btns" style="margin-top:16px"><button class="btn primary grow f" data-k="adultyes" data-act="adultyes" data-default>I am 18 or older</button><button class="btn f" data-k="adultno" data-act="adultno">Cancel</button></div>';
         var certList = (ready && ready.certificates ? ready.certificates.map(function (c) { return c.name + (c.level === 'partner' || c.level === 'public' ? ' (' + levelName(c.level) + ')' : ''); }) : (ready && ready.certNames) || []);
         var certText = !armed() ? 'not yet' : ready.certCount > 1 ? ready.certCount + ' handed over: ' + certList.join(', ') : 'handed over' + (certList[0] ? ': ' + certList[0] : '');
-        h += '<div class="table kv"><div class="trow"><span class="k">Signing certificate' + (ready && ready.certCount > 1 ? 's' : '') + '</span><span class="v">' + esc(certText) + '</span></div>'
+        var certs = certsBlock();
+        h += certs + '<div class="table kv">' + (certs ? '' : '<div class="trow"><span class="k">Signing certificate' + (ready && ready.certCount > 1 ? 's' : '') + '</span><span class="v">' + esc(certText) + '</span></div>')
             + '<div class="trow"><span class="k">Catalog</span><span class="v">' + esc(catalogApps.length + ' apps, signature checked') + '</span></div>'
             + '<div class="trow"><span class="k">TV-Store</span><span class="v">v' + VERSION + (ready && ready.node ? ' · Node ' + esc(ready.node) : '') + '</span></div>'
             + '<div class="trow"><span class="k">This TV</span><span class="v">' + esc((device ? device + ' · ' : '') + (tvTizen ? 'Tizen ' + tvTizen : 'Tizen version not known')) + '</span></div></div>';
@@ -1175,6 +1256,7 @@
         if (id === 'gear') { openSheet({ mode: 'settings' }); return; }
         if ((k = el.getAttribute('data-chip'))) { chip = k; renderPage(); focusKey('chip:' + k) || focusFirst(); return; }
         if ((k = el.getAttribute('data-opt'))) { toggle(k); return; }
+        if ((k = el.getAttribute('data-certrow'))) { selectCert(k); return; }
         if ((k = el.getAttribute('data-var'))) { sheet.v = parseInt(k, 10); renderSheet(); return; }
         if ((k = el.getAttribute('data-cert'))) { chooseCert(sheet.mode === 'upload' ? uploadApp(upload).variants[0] : sheet.app.variants[sheet.v], k); renderSheet(); focusKey('cert:' + k); return; }
         if ((k = el.getAttribute('data-app'))) { var x = byKey(k), vi = el.getAttribute('data-vi'); if (x) openApp(x, vi != null ? parseInt(vi, 10) : null); return; }
@@ -1194,6 +1276,10 @@
             case 'replacejob': startInstall(job.app, job.vIdx, { replace: true }); return;
             case 'adultyes': setSetting('showAdult', true); return;
             case 'adultno': confirmingAdult = false; renderSheet(); focusKey('opt:showAdult'); return;
+            case 'certdefault': certAction('/cert/default', function (id) { renderSheet(); focusKey('certrow:' + id); }); return;
+            case 'certremove': certConfirm = true; renderSheet(); focusKey('certremoveno'); return;
+            case 'certremoveno': certConfirm = false; renderSheet(); focusKey('certremove'); return;
+            case 'certremoveyes': certAction('/cert/remove', function () { certSel = null; renderSheet(); focus(focusables()[0]); }); return;
             case 'tvupd': startInstall(tvSel, state(tvSel).variant); return;
             case 'tvsheet': openApp(tvSel); return;
             case 'tvopen': launch(tvSel.variants[state(tvSel).variant].appId); return;
@@ -1283,7 +1369,11 @@
     }
 
     function back() {
-        if (sheet) { if (sheet.mode === 'settings' && confirmingAdult) { confirmingAdult = false; renderSheet(); focusKey('opt:showAdult'); return; } closeSheet(); return; }
+        if (sheet) {
+            if (sheet.mode === 'settings' && confirmingAdult) { confirmingAdult = false; renderSheet(); focusKey('opt:showAdult'); return; }
+            if (sheet.mode === 'settings' && certSel) { var id = certSel; if (certConfirm) { certConfirm = false; renderSheet(); focusKey('certremove'); return; } certSel = null; renderSheet(); focusKey('certrow:' + id); return; }
+            closeSheet(); return;
+        }
         if (document.activeElement === searchEl && query) { query = ''; searchEl.value = ''; renderPage(); return; }
         if (view === 'tv') { view = 'install'; renderPage(); focusFirst(); return; }
         if (chip !== 'all' || query) { chip = 'all'; query = ''; searchEl.value = ''; renderPage(); focusFirst(); return; }
