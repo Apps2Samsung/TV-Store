@@ -177,14 +177,15 @@
     var SETTINGS_KEY = 'a2s.store.settings';
     var settings = (function () {
         // hideSelfNotice: the TV-Store version whose "vX is out" banner was dismissed (#43); the
-        // banner comes back for the next release.
-        var s = { showAdult: false, showNeedsHead: true, verboseLog: false, hideSelfNotice: '' };
+        // banner comes back for the next release. selfUpdate: the #41 experiment, off by default.
+        var s = { showAdult: false, showNeedsHead: true, verboseLog: false, hideSelfNotice: '', selfUpdate: false };
         try {
             var saved = JSON.parse(window.localStorage.getItem(SETTINGS_KEY) || '{}');
             if (typeof saved.showAdult === 'boolean') s.showAdult = saved.showAdult;
             if (typeof saved.showNeedsHead === 'boolean') s.showNeedsHead = saved.showNeedsHead;
             if (typeof saved.verboseLog === 'boolean') s.verboseLog = saved.verboseLog;
             if (typeof saved.hideSelfNotice === 'string') s.hideSelfNotice = saved.hideSelfNotice;
+            if (typeof saved.selfUpdate === 'boolean') s.selfUpdate = saved.selfUpdate;
         } catch (e) {}
         return s;
     })();
@@ -711,6 +712,23 @@
     // (#41). A head on a phone or PC is outside the package and updates it fine.
     function isSelf(x) { return !!x && x === self(); }
     var SELF_HOW = 'TV-Store cannot replace itself while it runs: the installer stops the service that drives the install. Update it from Apps2Samsung on a phone or PC (On the TV, Update).';
+    // The #41 experiment: with "Let TV-Store update itself" on, the service installs TV-Store's own
+    // package through sdbd and expects to be stopped by the installer on the way (Apps2Samsung#1005
+    // saw the install land anyway). Not for a copy a head installed under another package id: an
+    // install from here would land a second TV-Store. Never part of Update all, which it would end.
+    function selfCan(x) { return isSelf(x) && settings.selfUpdate && !selfRenamed(); }
+    var SELF_TRY = 'Experiment: TV-Store installs its own update. It closes during the install; open it again after a minute and it says whether the update landed.';
+    // How the last self-update went, from the marker the service found at start: { mark, outcome }.
+    var selfResult = null;
+    function selfOutcome(mark) { return mark && mark.to && mark.to === VERSION ? 'landed' : mark && mark.from && mark.from === VERSION ? 'not-landed' : 'unknown'; }
+    function selfResultHtml() {
+        if (!selfResult) return '';
+        var m = selfResult.mark, o = selfResult.outcome, last = m.lines && m.lines.length ? m.lines[m.lines.length - 1].replace(/^\S+\s+/, '') : '';
+        var text = o === 'landed' ? 'TV-Store updated itself to v' + VERSION + '. Thanks for trying the experiment; a word on GitHub issue #41 helps.'
+            : o === 'not-landed' ? 'The update to v' + (m.to || '?') + ' did not land; this is still v' + VERSION + '.' + (last ? ' Last log line before TV-Store closed: ' + last + '.' : '') + ' Please add the TV-Store log (Settings) to GitHub issue #41, and update from Apps2Samsung on a phone or PC.'
+            : 'TV-Store sent an update of itself' + (m.to ? ' to v' + m.to : '') + ' and now runs v' + VERSION + '. Please add the TV-Store log (Settings) to GitHub issue #41.';
+        return '<div class="notice row' + (o === 'landed' ? ' info' : o === 'not-landed' ? ' bad' : '') + '" style="margin:0 0 26px"><span>' + esc(text) + '</span><button class="btn f" data-k="selfack" data-act="selfack">Got it</button></div>';
+    }
     function updates() { return catalogApps.filter(function (x) { return state(x).update; }); }
     function onTv() { return catalogApps.filter(function (x) { return state(x).installed; }); }
     function byKey(k) { for (var i = 0; i < catalogApps.length; i++) if (catalogApps[i].key === k) return catalogApps[i]; return null; }
@@ -849,7 +867,7 @@
         // has a Got it that hides it for that version (#43); the On the TV row and the sheet keep
         // saying it. It comes back for the next release.
         var me = self(), ms = me ? state(me) : null, selfLatest = '', selfText = '';
-        if (ms && ms.update) { selfLatest = ms.latest; selfText = 'TV-Store v' + ms.latest + ' is out (this is v' + ms.version + '). ' + SELF_HOW; }
+        if (ms && ms.update) { selfLatest = ms.latest; selfText = 'TV-Store v' + ms.latest + ' is out (this is v' + ms.version + '). ' + (selfCan(me) ? 'Find it under On the TV and press Update. ' + SELF_TRY : SELF_HOW); }
         else if (me && selfRenamed()) {
             // Installed under another package id: the platform lists this copy under that id, so
             // state() cannot see it. Compare the catalog's version with our own and send the user to
@@ -857,6 +875,7 @@
             var own = (selfInfo() || {}).version || '', latest = me.variants[0] ? me.variants[0].version : '';
             if (own && latest && newer(latest, own)) { selfLatest = latest; selfText = 'TV-Store v' + latest + ' is out (this is v' + own + '). This copy was installed under another package id by Apps2Samsung, so update it from Apps2Samsung (On the TV, Update) rather than from here.'; }
         }
+        h += selfResultHtml();
         if (selfLatest && settings.hideSelfNotice !== selfLatest)
             h += '<div class="notice row" style="margin:0 0 26px"><span>' + esc(selfText) + '</span><button class="btn f" data-k="dismissself" data-act="dismissself" data-v="' + esc(selfLatest) + '">Got it</button></div>';
 
@@ -923,11 +942,11 @@
             + '<div class="trow"><span class="k">In the catalog</span><span class="v"' + (st.update ? ' style="color:#F0A020"' : '') + '>v' + esc(st.latest || v.version) + '</span></div>'
             + (x.variants.length > 1 ? '<div class="trow"><span class="k">Variant</span><span class="v">' + esc(st.known ? v.label + (st.byPin ? ' · pinned' : '') : 'Not known: the builds share one package') + '</span></div>' : '') + '</div>'
             + '<div class="btns" style="margin-top:18px">';
-        if (st.update && st.known && !v.needsHead && fits(v) && !isSelf(x) && armed() && !signPlan(v).missing) h += '<button class="btn primary grow f" data-k="tvupd" data-act="tvupd">Update</button>';
+        if (st.update && st.known && !v.needsHead && fits(v) && (!isSelf(x) || selfCan(x)) && armed() && !signPlan(v).missing) h += '<button class="btn primary grow f" data-k="tvupd" data-act="tvupd">Update</button>';
         else h += '<button class="btn grow f" data-k="tvsheet" data-act="tvsheet">Details</button>';
         if (v.appId) h += '<button class="btn f" data-k="tvopen" data-act="tvopen">Open</button>';
         h += '</div>';
-        if (st.update && isSelf(x)) h += '<div class="hint" style="text-align:left">' + SELF_HOW + '</div>';
+        if (st.update && isSelf(x)) h += '<div class="hint" style="text-align:left">' + esc(selfCan(x) ? SELF_TRY : SELF_HOW) + '</div>';
         else if (st.update && v.needsHead) h += '<div class="hint" style="text-align:left">' + esc(x.name + ' ' + v.needsHead + ': update it with Apps2Samsung on a phone or PC.') + '</div>';
         else if (!st.known && x.variants.length > 1) h += '<div class="hint" style="text-align:left">' + esc('TV-Store cannot tell which build of ' + x.name + ' this is: the builds share one package. Open Details, pick your build and pin it; the pinned build is the one that gets updated.') + '</div>';
         return h + '</div>';
@@ -1000,9 +1019,10 @@
         }
 
         var label = st.installed && st.known && st.variant === sheet.v ? (st.update ? 'Update to v' + v.version : 'Reinstall') : (st.installed ? 'Install this variant' : 'Install on this TV');
-        var me = isSelf(x), plan = signPlan(v);
+        var me = isSelf(x) && !selfCan(x), plan = signPlan(v);
         if (!me && fits(v) && !v.needsHead && armed()) h += signWithHtml(v, plan);
         if (me) h += '<div class="notice">' + SELF_HOW + '</div>';
+        else if (isSelf(x)) h += '<div class="notice">' + esc(SELF_TRY) + '</div>';
         else if (!fits(v)) h += '<div class="notice">' + esc(x.name + (x.variants.length > 1 ? ' (' + v.label + ')' : '') + ' asks for Tizen ' + v.tizen + ' or newer, and this TV runs Tizen ' + tvTizen + '. The TV would refuse it' + (x.variants.some(fits) ? ', so pick a build above that fits this set.' : '.')) + '</div>';
         else if (v.needsHead) h += '<div class="notice">' + esc(x.name + ' ' + v.needsHead + ', which this TV cannot do yet. Install it with Apps2Samsung on a phone or PC.') + '</div>';
         else if (!armed()) h += '<div class="notice">Not armed yet. Open this TV’s Toolbox in Apps2Samsung 3.0 or newer on your phone or PC and press Arm TV-Store once; after that every install runs here.</div>';
@@ -1096,9 +1116,10 @@
             return '<div class="trow' + cls + '">' + ico + '<span style="flex:1">' + (i < done ? s[0] : s[1]) + '</span><span class="v">' + side + '</span></div>';
         }).join('') + '</div>';
         if (job.error) h += '<div class="notice bad">' + esc(job.error) + '</div>';
+        else if (isSelf(job.app)) h += '<div class="notice">' + esc(SELF_TRY) + '</div>';
         else h += '<div class="notice info">You can keep browsing with RETURN; the ' + (upd ? 'update' : 'install') + ' carries on in the background and the app shows up under On the TV when it is in.</div>';
         h += '<div class="sfoot"><div class="btns">';
-        if (job.error && job.code === 'CERT_MISMATCH' && !job.replace) h += '<button class="btn primary grow f" data-k="replacejob" data-act="replacejob" data-default>Remove the old copy and install again</button><button class="btn f" data-k="close" data-act="close">Keep the old copy</button>';
+        if (job.error && job.code === 'CERT_MISMATCH' && !job.replace && !isSelf(job.app)) h += '<button class="btn primary grow f" data-k="replacejob" data-act="replacejob" data-default>Remove the old copy and install again</button><button class="btn f" data-k="close" data-act="close">Keep the old copy</button>';
         else if (job.error) h += '<button class="btn primary grow f" data-k="retryjob" data-act="retryjob" data-default>Try again</button><button class="btn f" data-k="close" data-act="close">Back to the store</button>';
         else h += '<button class="btn grow f" data-k="close" data-act="close" data-default>Keep browsing</button>';
         h += '</div><div class="hint mono">' + esc(job.line || '') + '</div></div>';
@@ -1132,7 +1153,8 @@
             + '<div class="sbody vscroll"><div class="opts">' + opt('showAdult', 'Show adult (18+) apps', 'Apps marked adult-only stay out of the store until this is on.')
             + opt('showNeedsHead', 'Show apps that need a phone or PC', 'Some apps need Apps2Samsung on a phone or PC to install. Turn this off to keep them out of the store.')
             + opt('verboseLog', 'Verbose logging', 'Writes much more detail to the TV-Store log. Turn it on when a bug report asks for it, and off again afterwards.')
-            + relayRow() + installerRow() + '</div>' + relayNotice() + installerNotice();
+            + relayRow() + installerRow()
+            + opt('selfUpdate', 'Let TV-Store update itself (experiment)', 'Off: update TV-Store from Apps2Samsung on a phone or PC. On: TV-Store offers its own update under On the TV. It closes during the install; open it again after a minute and it says whether the update landed. Results help GitHub issue #41.') + '</div>' + relayNotice() + installerNotice();
         if (confirmingAdult) h += '<div class="notice">These apps are meant for adults only. Turn them on only if you are 18 or older.</div>'
             + '<div class="btns" style="margin-top:16px"><button class="btn primary grow f" data-k="adultyes" data-act="adultyes" data-default>I am 18 or older</button><button class="btn f" data-k="adultno" data-act="adultno">Cancel</button></div>';
         var certList = (ready && ready.certificates ? ready.certificates.map(function (c) { return c.name + (c.level === 'partner' || c.level === 'public' ? ' (' + levelName(c.level) + ')' : ''); }) : (ready && ready.certNames) || []);
@@ -1160,7 +1182,7 @@
     }
 
     function startInstall(x, vIdx, opts) {
-        if ((job && job.running) || isSelf(x)) return;
+        if ((job && job.running) || (isSelf(x) && !selfCan(x))) return;
         var v = x.variants[vIdx], st = state(x), replace = !!(opts && opts.replace);
         job = { app: x, v: v, vIdx: vIdx, update: st.installed && st.known && st.variant === vIdx, replace: replace, running: true, finished: false, ok: false, step: 0, bytes: 0, line: '', error: null, code: null, started: Date.now(), plan: signPlan(v), certificate: '', level: '' };
         if (sheet) { sheet = { mode: 'job' }; renderSheet(true); } else openSheet({ mode: 'job' });
@@ -1173,12 +1195,15 @@
         var req = v.upload ? { upload: v.upload, token: uploadToken, tizen: tvTizen, installed: onTv, replace: replace } : { url: v.url, file: v.file, appId: v.appId, packageId: v.packageId, name: x.name, tizen: tvTizen, installed: onTv, replace: replace };
         // Sign with (#50): the choice made on the TV; the service takes the catalog's and the manifest's word otherwise.
         if (certChoiceOf(v)) req.certLevel = certChoiceOf(v);
+        if (isSelf(x)) { req.selfUpdate = true; req.fromVersion = VERSION; req.toVersion = v.version || ''; }
         // Download, sign and install in one call; a slow set with a big package needs more than the
         // usual 3 min, and while wascmd runs (#57) the service answers nothing at all for up to 5 min.
         xhr('POST', '/install', req, function (err, res) {
             clearInterval(timer);
             pollLog(me, since, function () {
                 me.running = false; me.finished = true; me.ended = Date.now();
+                // TV-Store's own update: the service going away mid-install is what the update does.
+                if (err && isSelf(me.app)) err = new Error('The connection to the TV-Store service dropped, which is what installing TV-Store over itself does. Close TV-Store and open it again; it then says whether the update landed.');
                 if (err || !res.ok) { me.error = err ? err.message : res.error; me.code = err ? null : (res.code || null); renderHeader(); if (sheet && sheet.mode === 'job') renderSheet(true); queue = []; return; }
                 me.ok = true; me.step = 4; me.certificate = (res.result && res.result.certificate) || ''; me.level = (res.result && res.result.level) || '';
                 if (v.packageId) { installed[v.packageId] = v.version; claims = null; rememberVariant(v); }
@@ -1266,6 +1291,7 @@
             case 'author': var by = sheet.app.author; closeSheet(function () { searchFor(by); }); return;
             case 'pin': togglePin(sheet.app, sheet.v); renderPage(); renderSheet(); focusKey('pin'); return;
             case 'retry': location.reload(); return;
+            case 'selfack': selfResult = null; xhr('POST', '/selfupdate/ack', { version: VERSION }, function () {}); renderPage(); focusFirst(); return;
             case 'dismissself': settings.hideSelfNotice = el.getAttribute('data-v') || ''; saveSettings(); renderPage(); focusFirst(); return;
             case 'allvars': sheet.all = true; renderSheet(); focusKey('var:' + sheet.v); return;
             case 'install': if (!el.disabled) startInstall(sheet.app, sheet.v); return;
@@ -1443,6 +1469,7 @@
     startService(function (err, ping) {
         if (err) { loading = false; problem = { title: 'The TV-Store service did not start', short: 'Service stopped', text: err.message + ' Close TV-Store and open it again; if it keeps happening, reinstall it from Apps2Samsung.' }; renderPage(); focusFirst(); return; }
         ready = ping; renderFoot(); syncVerbose();
+        if (ping && ping.selfUpdate) selfResult = { mark: ping.selfUpdate, outcome: selfOutcome(ping.selfUpdate) };
         readInstalled(function (map) {
             setInstalled(map);
             xhr('GET', '/catalog', null, function (err, cat) {

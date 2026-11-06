@@ -245,6 +245,20 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
   sees "install completed". The install still lands. Open TV-Store again (or wait for the head to
   relaunch it), and the new version is there with the relay back on its port. Apps2Samsung is to
   say so up front and read the version from the TV afterwards instead of reporting a failure.
+- **Let TV-Store update itself (experiment)**: off by default (#41). Off, TV-Store sends you to
+  Apps2Samsung on a phone or PC to update it, as since 0.3.11. On, a newer TV-Store in the catalog
+  gets an **Update** button under On the TV like any other app. 0.3.11 dropped this on the theory
+  that the installer stops the service driving the install so the update never lands, but nobody
+  saw where it stopped (the log then lived in memory), and Apps2Samsung#1005 showed `sdbd`
+  finishing an update of TV-Store after the service that sent it was stopped. The service installs
+  its own package through `sdbd` only (never `wascmd`, which runs as its child) and never with
+  "remove the old copy first". Just before `0 vd_appinstall` it writes a marker to its data
+  folder, which an update keeps. TV-Store then closes; open it again after a minute. The next
+  start finds the marker and shows whether the update landed, with the last log lines of the run
+  that sent it on `/ping` (`selfUpdate: { from, to, at, certificate, lines }`) until **Got it**
+  (`POST /selfupdate/ack`). It is never part of **Update all**, and not offered for a copy
+  Apps2Samsung installed under another package id. Results on GitHub issue #41 help, above all
+  from Tizen 9 sets, where 0.3.5 failed.
 
 The header counts what the switches hide ("12 apps · 3 hidden").
 

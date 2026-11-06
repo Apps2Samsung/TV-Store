@@ -25,6 +25,7 @@ var certs = require('./certs.js');
 var sdbhosts = require('./sdbhosts.js');
 var wascmd = require('./wascmd.js');
 var iconsMod = require('./icons.js');
+var selfupdate = require('./selfupdate.js');
 
 var PORT = 8077;
 // sdbd's port; a test points the service at a fake sdbd (test/install.test.js).
@@ -145,6 +146,37 @@ var WASCMD = wascmd.status();
 // The marker left behind by a run that died inside wascmd, as the time that run started it.
 var WASCMD_DIED = null;
 try { if (WASCMD_MARK && fs.existsSync(WASCMD_MARK)) WASCMD_DIED = fs.readFileSync(WASCMD_MARK, 'utf8').trim() || 'unknown time'; } catch (e) {}
+
+// TV-Store updating itself (#41, experiment; selfupdate.js has the why). OWN_PKG is this package's
+// id (A2S_PACKAGE_ID stands in for it in a test). SELF_UPDATE is the marker a run left behind when
+// it sent its own update: { from, to, at, certificate, file, lines }, until the page has shown the
+// outcome and said so (POST /selfupdate/ack). The lines of the run that sent it come from the
+// previous log, copied into the marker on the first start after it, so a second restart keeps them.
+var OWN_PKG = process.env.A2S_PACKAGE_ID || PKG;
+var SELF_MARK = DATA_DIR ? path.join(DATA_DIR, '.a2s-self-update.json') : null;
+var SELF_UPDATE = null;
+try { if (SELF_MARK && fs.existsSync(SELF_MARK)) SELF_UPDATE = JSON.parse(fs.readFileSync(SELF_MARK, 'utf8')); } catch (e) { SELF_UPDATE = { at: '', lines: ['the marker could not be read: ' + e.message] }; }
+if (SELF_UPDATE && !Array.isArray(SELF_UPDATE.lines)) {
+    var prevLog = ''; try { prevLog = fs.readFileSync(LOG_PREV, 'utf8'); } catch (e) {}
+    SELF_UPDATE.lines = selfupdate.linesSince(prevLog, new Date(Date.parse(SELF_UPDATE.at) - 10 * 60 * 1000).toISOString(), 40);
+    try { fs.writeFileSync(SELF_MARK, JSON.stringify(SELF_UPDATE)); } catch (e) {}
+}
+function writeSelfMark(entry) {
+    var m = selfupdate.marker(entry, new Date().toISOString());
+    try { fs.writeFileSync(SELF_MARK, JSON.stringify(m)); } catch (e) { log('self-update: could not write the marker: ' + e.message); }
+}
+function clearSelfMark() { SELF_UPDATE = null; unlinkQuiet(SELF_MARK); }
+function unlinkQuiet(f) { if (f) { try { fs.unlinkSync(f); } catch (e) {} } }
+// An install of TV-Store's own package: refused unless the page asked for it (the Settings switch),
+// and never as a replace. Marks the entry so the rest of the pipeline keeps to sdbd.
+function selfGate(entry) {
+    entry.self = selfupdate.isOwn(entry, OWN_PKG);
+    if (!entry.self) return null;
+    var r = selfupdate.refusal(entry);
+    if (r) { log('install: ' + (entry.file || OWN_PKG) + ' is TV-Store itself; not installing it: ' + r.code); return coded(r.code, r.message); }
+    log('self-update: installing TV-Store ' + (entry.toVersion ? 'v' + entry.toVersion + ' ' : '') + 'over itself' + (entry.fromVersion ? ' (this is v' + entry.fromVersion + ')' : '') + ', through sdbd only');
+    return null;
+}
 function saveInstallerCfg() {
     if (!INSTALLER_FILE) return;
     try { fs.writeFileSync(INSTALLER_FILE, JSON.stringify(INSTALLER_CFG)); }
@@ -344,8 +376,9 @@ function installUpload(b, cb) {
     UPLOAD_BUSY = true;
     log('install: uploaded ' + up.size + ' bytes, ' + up.name + ' from ' + up.from + ', SHA-256 ' + up.sha256 + ', confirmed on the TV; signing');
     var entry = { appId: up.ids.appId, packageId: up.ids.packageId, file: up.name, name: up.ids.name, requiredVersion: up.ids.requiredVersion, tizen: b.tizen, installed: !!b.installed, replace: !!b.replace,
-                  certLevel: b.certLevel, manifestPartner: !!up.ids.partner };
-    var gate = tizenGate(entry);
+                  certLevel: b.certLevel, manifestPartner: !!up.ids.partner,
+                  selfUpdate: b.selfUpdate === true, fromVersion: b.fromVersion, toVersion: up.ids.version };
+    var gate = selfGate(entry) || tizenGate(entry);
     if (gate) { UPLOAD_BUSY = false; return cb(gate); }
     signAndInstall(entry, up.name.replace(/[^A-Za-z0-9._-]/g, '_'), UPLOAD_FILE, outFile, function (err, r) {
         UPLOAD_BUSY = false;
@@ -465,6 +498,8 @@ function install(entry, cb) {
         if (!want) return cb(coded('NO_HASH', 'the catalog has no hash for this file, so the TV cannot check it; install it from Apps2Samsung on a phone or PC'));
         entry.catalogLevel = cat.levels[downloadUrl] || '';
         if (!DATA_DIR) return cb(new Error('the service has no folder it can write to'));
+        var own = selfGate(entry);
+        if (own) return cb(own);
         var base = path.join(DATA_DIR, 'job-' + Date.now()), inFile = base + '.in.wgt', outFile = base + '.signed.wgt';
         function clean(err, r) { [inFile, outFile].forEach(function (f) { try { fs.unlinkSync(f); } catch (e) {} }); cb(err, r); }
         log('install: downloading ' + downloadUrl);
@@ -606,6 +641,7 @@ function signAndInstall(entry, remoteName, inFile, outFile, cb) {
     removeOld(entry, function (err) { if (err) { log('install: ' + err.message); return cb(err); } (function attempt() {
         var cert = tries[i++], started = Date.now();
         tried.push(cert);
+        if (entry.self) entry.selfCert = cert.name;
         signer.signFile(inFile, outFile, cert, function (err) {
             if (err) { log('install: ' + err.message); return tried.length > 1 ? finish(err) : cb(err); }
             var size = fs.statSync(outFile).size;
@@ -640,7 +676,7 @@ function signAndInstall(entry, remoteName, inFile, outFile, cb) {
 // fails outright is remembered, so the next install and the next start skip wascmd without a fork.
 function installSigned(entry, remoteName, outFile, size, cb) {
     var id = entry.appId || entry.packageId || '';
-    if (wascmdWanted()) {
+    if (wascmdWanted() && !entry.self) {
         log('install: handing to wascmd on the TV itself (' + wascmd.path + ', no sdbd and no Host PC IP involved)');
         var wasStarted = Date.now();
         markWascmd(true);
@@ -672,8 +708,18 @@ function installSigned(entry, remoteName, outFile, size, cb) {
                 if (err) { c.end(); return cb(err); }
                 logv('timing: push took ' + (Date.now() - pushStarted) + ' ms');
                 var installStarted = Date.now();
+                // TV-Store's own package: the installer is expected to stop this service from here
+                // on. The marker and the log line are on disk before the command goes out.
+                if (entry.self) { writeSelfMark(entry); log('self-update: sending vd_appinstall; the installer stops TV-Store now. Open TV-Store again in a minute'); }
                 c.shell('0 vd_appinstall ' + id + ' ' + remote, function (err, out) {
                     c.end();
+                    // Still running: a refusal or a lost connection means nothing was replaced, so the
+                    // marker goes; "install completed" keeps it, for the next start to confirm the version.
+                    if (entry.self) {
+                        var refused = !!err || /install failed/i.test(out);
+                        if (refused) unlinkQuiet(SELF_MARK);
+                        log('self-update: still running after vd_appinstall ' + (err ? 'failed: ' + err.message : refused ? 'refused it' : 'answered; TV-Store may still be restarted'));
+                    }
                     if (err) return cb(err);
                     INSTALLER_LAST = 'sdb';
                     logv('timing: vd_appinstall took ' + (Date.now() - installStarted) + ' ms');
@@ -787,7 +833,14 @@ http.createServer(function (req, res) {
     if (!fromThisTv(req)) { cors(res, 403, 'text/plain'); return res.end('only this TV may use TV-Store'); }
     if (route === '/ping') return json(res, 200, { ok: true, service: 'tv-store', ownIp: ownIp(), logUrl: 'http://' + ownIp() + ':' + PORT + '/log.txt', signerReady: signer.ready, certReady: haveCerts(),
         certCount: haveCerts() ? loadCerts().certificates.length : 0, certNames: certs.names(loadCerts()), certificates: certs.summary(loadCerts()),
-        certFile: CERT_FILE, certError: CERT_ERROR, node: process.version, verbose: VERBOSE, relay: relayStatus(), installer: installerStatus(), remembered: rememberedLevels() });
+        certFile: CERT_FILE, certError: CERT_ERROR, node: process.version, verbose: VERBOSE, relay: relayStatus(), installer: installerStatus(), remembered: rememberedLevels(), selfUpdate: SELF_UPDATE });
+    // The page has shown how the last self-update went (#41); { version } is what runs now.
+    if (route === '/selfupdate/ack' && req.method === 'POST') return body(req, function (err, b) {
+        var running = !err && b && typeof b.version === 'string' ? b.version : '';
+        if (SELF_UPDATE) log('self-update: the update to v' + (SELF_UPDATE.to || '?') + ' sent at ' + SELF_UPDATE.at + ' ' + ({ landed: 'landed', 'not-landed': 'did not land', unknown: 'has an unknown outcome' })[selfupdate.outcome(SELF_UPDATE, running)] + '; TV-Store v' + (running || '?') + ' runs now');
+        clearSelfMark();
+        json(res, 200, { ok: true });
+    });
     if (route === '/settings' && req.method === 'POST') return body(req, function (err, b) {
         if (err || !b || (typeof b.verbose !== 'boolean' && b.relay === undefined && b.installer === undefined)) return json(res, 400, { ok: false, error: 'need { verbose: true|false }, { relay: { enabled, port, allow } } and/or { installer: { mode } }' });
         if (b.relay !== undefined) { var why = relaySettingsProblem(b.relay); if (why) return json(res, 400, { ok: false, error: why }); }
@@ -842,6 +895,7 @@ http.createServer(function (req, res) {
     // otherwise. Nothing is started here: a probe at start-up is what took the service down.
     if (WASCMD_DIED && installerMode() === 'auto' && !INSTALLER_CFG.off) wascmdOff('the last run of this service ended while wascmd was running (started ' + WASCMD_DIED + ')');
     log('installer: ' + installerLine());
+    if (SELF_UPDATE) log('self-update: the last run sent an update of TV-Store' + (SELF_UPDATE.to ? ' to v' + SELF_UPDATE.to : '') + ' at ' + SELF_UPDATE.at + ' and was stopped; the page says whether it landed');
     logPlatform();
     if (RELAY_CFG.enabled) { log('relay: enabled, starting on port ' + RELAY_CFG.port); startRelay(); }
 });
