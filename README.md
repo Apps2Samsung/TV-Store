@@ -330,10 +330,14 @@ node test/sdb-loopback.test.js  # install works whether Host PC IP is the TV's o
 node test/wascmd.test.js    # install through wascmd from the service (fake wascmd), its refusals, the sdbd fallback, over spawn_sync too; nothing started before the first install, the Settings switch, a run that died, EACCES without a fork (#67, #68)
 node test/relay.test.js     # the on-TV sdb relay: a session survives the hop, allow list, cap, idle, stop; every failure told apart with a reason
 node test/relay-settings.test.js  # relay settings over /settings: validation, restart only on change, status; GET /relay for the LAN
+node test/certs.test.js     # signing profiles: payload shapes, merge, order, levels, expiry and DUIDs from the DER, default and remove on the TV (#78)
+node test/selfupdate.test.js  # TV-Store updating itself (#41): refused without the switch, the marker, reported after the installer stops the service
 ```
 
 Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching the version in
-`config.xml`) publishes a GitHub release with `TV-Store.wgt` as its one asset.
+`config.xml`) publishes a GitHub release with `TV-Store.wgt` as its one asset. A release can also
+start as a draft with the `.wgt` from the build workflow attached: publishing it creates the tag,
+and the release workflow then replaces that asset with the one it builds from the tag.
 
 ## Status
 
@@ -343,7 +347,8 @@ Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching 
 | Install through `wascmd` from the service, no Host PC IP (#57) | built against a fake `wascmd`, falls back to `sdbd` (0.3.16); its usage text in the log and a replace that stops with a reason when `sdbd` is out of reach (0.3.17); two Tizen 9 sets refuse the run with `EACCES` and the start-up probe took their service down (#67, #68), so nothing starts before the first install, the kernel is asked first, a run that died is remembered and Settings has a switch (0.3.18); a Tizen 5.0 set lets the service start it and the fork still takes the service down before anything is installed (0.3.19). Refused or fatal on every retail set tried, so off by default and opt-in through Settings (0.3.20); `sdbd` is the path that installs |
 | Signing on the TV | done, identical output to the Apps2Samsung signer |
 | Arming from Apps2Samsung (phone, PC, CLI) | done |
-| The screens above | built (0.3.4); pins, developer search, your own .wgt or .tpk (0.3.10); finds itself under a renamed package id and sends you to Apps2Samsung to update it (0.3.11); Public or Partner certificate per app (0.3.13); the sdb relay switch (0.3.14); the relay's failure reasons under it (0.3.15); app icons from the signed catalog, hash-checked and cached by the service, once the Apps2Samsung snapshot publishes them (0.3.19, #66); Settings scrolls with the focus now that it is taller than the screen (0.3.20, #74) |
+| The screens above | built (0.3.4); pins, developer search, your own .wgt or .tpk (0.3.10); finds itself under a renamed package id and sends you to Apps2Samsung to update it (0.3.11); Public or Partner certificate per app (0.3.13); the sdb relay switch (0.3.14); the relay's failure reasons under it (0.3.15); app icons from the signed catalog, hash-checked and cached by the service, once the Apps2Samsung snapshot publishes them (0.3.19, #66); Settings scrolls with the focus now that it is taller than the screen (0.3.20, #74); every signing certificate listed in Settings with its level, fingerprint, expiry and whether it covers this TV, a default to pick and a profile to remove (0.3.21, #78) |
+| TV-Store updating itself (#41) | dropped in 0.3.11; back as an experiment behind a Settings switch, off by default, through `sdbd` with a marker that tells the next start whether it landed (0.3.21). Apps2Samsung#1005 saw an update of TV-Store land on a Tizen 5.0 set after the service that sent it was stopped; untested from the TV itself, Tizen 9 above all |
 | First real install from the TV | done, 2019 Tizen 5.0 set (0.3.4) |
 | Tizen 3.0 and 4.0 sets (2017, 2018) | untested |
 | Tizen 10 sets (2025) | done, retail set (0.3.9) |
