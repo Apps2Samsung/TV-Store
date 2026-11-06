@@ -53,7 +53,9 @@ var idPub = certs.fingerprint(PUB.authorCertPem), idPar = certs.fingerprint(PAR.
 if (idPub === idPar) fail('the two level profiles must have their own author');
 var two = certs.merge(null, certs.normalize({ certificates: [PUB, PAR] }));
 if (two.certificates[0].level !== 'public' || two.certificates[1].level !== 'partner') fail('levels on the entries: ' + JSON.stringify(certs.summary(two)));
-if (JSON.stringify(certs.summary(two)) !== JSON.stringify([{ name: 'Jelly2Sams - Public', level: 'public' }, { name: 'Jelly2Sams - Partner', level: 'partner' }])) fail('summary: ' + JSON.stringify(certs.summary(two)));
+var sum = certs.summary(two);
+if (sum.map(function (c) { return c.name + '/' + c.level + '/' + c.primary; }).join() !== 'Jelly2Sams - Public/public/true,Jelly2Sams - Partner/partner/false' || sum[0].id !== idPub) fail('summary: ' + JSON.stringify(sum));
+if (JSON.stringify(sum).indexOf('PRIVATE KEY') >= 0 || JSON.stringify(sum).indexOf('BEGIN CERTIFICATE') >= 0) fail('the summary must carry no keys or certificates');
 if (!certs.has(two, 'partner') || !certs.has(two, 'public') || certs.has(certs.merge(null, certs.normalize({ certificates: [PUB] })), 'partner')) fail('has(level)');
 // No wish: both, the primary first. A wish: only that level, so a Partner app is never signed
 // Public on the way, and a remembered profile of the other level is left out.
@@ -81,4 +83,46 @@ if (!old || old.primary !== idA || old.certificates.length !== 1) fail('0.3.x fi
 var fresh = certs.fromStored(JSON.parse(JSON.stringify(store)));
 if (!fresh || fresh.primary !== idA || fresh.certificates.length !== 2) fail('this version\'s file');
 if (certs.fromStored({ junk: 1 }) !== null || certs.fromStored(null) !== null) fail('junk file');
-console.log('PASS: certificate store: payload shapes, merge of a second hand-over, order per package, Public and Partner levels, 0.3.x file');
+
+// #78: what Settings shows per profile, read from the DER: expiry of both certificates and the
+// DUIDs the distributor certificate covers.
+var info = certs.certInfo(pem('author.crt'));
+if (info.validUntil !== '2046-10-19T18:09:47.000Z' || info.deviceIds.length !== 0) fail('certInfo of the author fixture: ' + JSON.stringify(info));
+var dinfo = certs.certInfo(pem('duid-distributor.crt'));
+if (dinfo.deviceIds.join() !== 'TESTDUID0001,TESTDUID0002' || !/^20\d\d-/.test(dinfo.validUntil)) fail('certInfo of the DUID fixture: ' + JSON.stringify(dinfo));
+// The chain's first certificate is the leaf; the Samsung CA after it is not read.
+if (certs.certInfo(pem('public-distributor.crt')).validUntil !== '2036-10-29T14:37:33.000Z') fail('certInfo reads the leaf of a chain');
+var junkInfo = certs.certInfo('-----BEGIN CERTIFICATE-----\nMIIBAAAA\n-----END CERTIFICATE-----');
+if (junkInfo.validUntil !== '' || junkInfo.deviceIds.length !== 0 || certs.certInfo('').validUntil !== '') fail('certInfo of junk: ' + JSON.stringify(junkInfo));
+var DU = { name: 'With DUIDs', authorKeyPem: pem('author.key'), authorCertPem: pem('author.crt'), distributorKeyPem: pem('duid-distributor.key'), distributorCertPem: pem('duid-distributor.crt') };
+var ds = certs.summary(certs.merge(null, certs.normalize({ certificates: [DU] })))[0];
+if (ds.deviceIds.join() !== 'TESTDUID0001,TESTDUID0002' || ds.validUntil !== '2046-10-19T18:09:47.000Z' || ds.distributorValidUntil !== dinfo.validUntil) fail('summary carries expiry and DUIDs: ' + JSON.stringify(ds));
+
+// #78: a default picked on the TV. It survives a re-arm that would make the head's first choice primary.
+if (certs.setDefault(two, 'gone') !== null || certs.setDefault(null, idPub) !== null) fail('setDefault of an unknown id');
+var picked = certs.setDefault(two, idPar);
+if (picked.primary !== idPar || picked.tvDefault !== idPar || ids(picked.certificates) !== [idPub, idPar].join()) fail('setDefault keeps the order, sets primary');
+if (ids(certs.order(picked, null)) !== [idPar, idPub].join()) fail('the TV-side default is tried first');
+if (ids(certs.order(picked, idPub)) !== [idPub, idPar].join()) fail('the profile a package took still comes before the default');
+if (ids(certs.order(picked, null, 'public')) !== idPub) fail('a level wish still filters past the default');
+var rearmed = certs.merge(picked, certs.normalize({ certificates: [PUB, PAR] }));
+if (rearmed.primary !== idPar || rearmed.tvDefault !== idPar) fail('a re-arm keeps the default chosen on the TV: ' + rearmed.primary);
+var s2 = certs.summary(rearmed);
+if (!s2[1].primary || !s2[1].chosenOnTv || s2[0].primary || s2[0].chosenOnTv) fail('summary marks the default chosen on the TV');
+var back = certs.fromStored(JSON.parse(JSON.stringify(rearmed)));
+if (back.primary !== idPar || back.tvDefault !== idPar) fail('the TV-side default is read back from the file');
+// Without a TV-side default a stored primary is read back too (it was always the first entry before #78).
+var plain = certs.fromStored({ primary: idPar, certificates: JSON.parse(JSON.stringify(two.certificates)) });
+if (plain.primary !== idPar || plain.tvDefault !== null) fail('a stored primary is read back');
+if (certs.fromStored({ primary: 'gone', tvDefault: 'gone', certificates: JSON.parse(JSON.stringify(two.certificates)) }).primary !== idPub) fail('a stale primary falls back to the first');
+
+// #78: removing a profile on the TV.
+if (certs.remove(two, 'gone') !== null) fail('remove of an unknown id');
+var less = certs.remove(rearmed, idPar);
+if (less.certificates.length !== 1 || less.primary !== idPub || less.tvDefault !== null) fail('removing the TV-side default: the first left is primary, the pick is gone');
+var keep = certs.remove(certs.merge(picked, certs.normalize(Object.assign({ name: 'Studio' }, B))), idB);
+if (keep.primary !== idPar || keep.tvDefault !== idPar || keep.certificates.length !== 2) fail('removing another profile keeps the TV-side default');
+var none = certs.remove(one, idPub);
+if (none.certificates.length !== 0 || none.primary !== null || certs.order(none).length !== 0) fail('removing the last profile leaves an empty store');
+if (certs.merge(none, certs.normalize({ certificates: [PAR] })).primary !== idPar) fail('arming an emptied store');
+console.log('PASS: certificate store: payload shapes, merge of a second hand-over, order per package, Public and Partner levels, 0.3.x file, expiry and DUIDs, default and remove on the TV');

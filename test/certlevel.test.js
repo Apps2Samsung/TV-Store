@@ -76,6 +76,8 @@ function installUpload(file, flags, cb) {
 }
 function installs(calls) { return calls.filter(function (c) { return c.indexOf('vd_appinstall') >= 0; }).length; }
 function logs(cb) { call('GET', '/logs', null, function (e, code, j) { cb((j && j.logs || []).join('\n')); }); }
+// name and level per profile; the rest of /ping's certificate fields (#78) is certs.test.js's.
+function lv(list) { return JSON.stringify((list || []).map(function (c) { return { name: c.name, level: c.level }; })); }
 function handOver(list, cb) {
     call('POST', '/cert', JSON.stringify({ certificates: list }), function (e, code, j) {
         if (e || code !== 200 || !j.ok) fail('hand-over: ' + code + ' ' + JSON.stringify(j));
@@ -86,9 +88,9 @@ function handOver(list, cb) {
 function run() {
     // A Public-only TV.
     handOver([PUB], function (j) {
-        if (JSON.stringify(j.certificates) !== JSON.stringify([{ name: 'PC - Public', level: 'public' }])) fail('/cert must answer the levels: ' + JSON.stringify(j));
+        if (lv(j.certificates) !== JSON.stringify([{ name: 'PC - Public', level: 'public' }])) fail('/cert must answer the levels: ' + JSON.stringify(j));
         call('GET', '/ping', null, function (e, code, j) {
-            if (JSON.stringify(j.certificates) !== JSON.stringify([{ name: 'PC - Public', level: 'public' }])) fail('/ping must name the level: ' + JSON.stringify(j));
+            if (lv(j.certificates) !== JSON.stringify([{ name: 'PC - Public', level: 'public' }])) fail('/ping must name the level: ' + JSON.stringify(j));
             // 1. Sign with: Partner on a Public-only TV: refused before anything is signed, the file keeps waiting.
             installUpload(PLAIN, { certLevel: 'partner' }, function (j, calls, up) {
                 if (j.ok || j.code !== 'NEEDS_PARTNER' || j.error.indexOf('PC - Public') < 0 || j.error.indexOf('Arm TV-Store again') < 0) fail('NEEDS_PARTNER: ' + JSON.stringify(j));
@@ -110,7 +112,7 @@ function run() {
 function bothLevels() {
     // Armed again from a PC that now has a Partner profile too: Public first, as the head sends it.
     handOver([PUB, PAR], function (j) {
-        if (j.certCount !== 2 || JSON.stringify(j.certificates) !== JSON.stringify([{ name: 'PC - Public', level: 'public' }, { name: 'PC - Partner', level: 'partner' }])) fail('two levels: ' + JSON.stringify(j));
+        if (j.certCount !== 2 || lv(j.certificates) !== JSON.stringify([{ name: 'PC - Public', level: 'public' }, { name: 'PC - Partner', level: 'partner' }])) fail('two levels: ' + JSON.stringify(j));
         // 3. A plain package: Public, the head's first choice.
         installUpload(PLAIN, {}, function (j, calls) {
             if (!j.ok || j.result.level !== 'public' || installs(calls) !== 1) fail('plain package stays Public: ' + JSON.stringify(j));
@@ -152,10 +154,7 @@ function bothLevels() {
                                         // 10. A choice the service does not know is Automatic.
                                         installUpload(VPN2, { certLevel: 'platform' }, function (j, calls) {
                                             if (!j.ok || j.result.level !== 'partner' || installs(calls) !== 1) fail('unknown choice is automatic: ' + JSON.stringify(j));
-                                            stop();
-                                            try { fs.readdirSync(dir).forEach(function (f) { fs.unlinkSync(path.join(dir, f)); }); fs.rmdirSync(dir); } catch (e) {}
-                                            console.log('PASS: Partner refused up front on a Public-only TV, a partner privilege picks Partner when there is one, DRM-only stays Public, a remembered profile holds, Sign with: Partner is a mismatch fixed by replace, Sign with: Public holds, levels on /ping and /cert');
-                                            process.exit(0);
+                                            settingsSteps();
                                         });
                                     });
                                 });
@@ -163,6 +162,42 @@ function bothLevels() {
                         });
                     });
                 }
+            });
+        });
+    });
+}
+
+// #78: the default and remove from Settings on the TV, and a re-arm that keeps the TV's pick.
+function settingsSteps() {
+    var idPar = null;
+    call('GET', '/ping', null, function (e, code, j) {
+        var par = (j.certificates || []).filter(function (c) { return c.level === 'partner'; })[0];
+        if (!par || !/^[0-9a-f]{64}$/.test(par.id) || par.primary || j.certificates[0].primary !== true) fail('/ping names id and default: ' + JSON.stringify(j.certificates));
+        idPar = par.id;
+        call('POST', '/cert/default', JSON.stringify({ id: 'nope' }), function (e, code, j) {
+            if (code !== 400 || j.ok) fail('default with an unknown id: ' + code + ' ' + JSON.stringify(j));
+            call('POST', '/cert/default', JSON.stringify({ id: idPar }), function (e, code, j) {
+                var p = j && (j.certificates || []).filter(function (c) { return c.primary; });
+                if (!j.ok || p.length !== 1 || p[0].id !== idPar || !p[0].chosenOnTv) fail('default chosen on the TV: ' + JSON.stringify(j));
+                // A head arms again with Public first: the TV's pick stays the default.
+                handOver([PUB, PAR], function (j) {
+                    var p = j.certificates.filter(function (c) { return c.primary; });
+                    if (p.length !== 1 || p[0].id !== idPar) fail('a re-arm keeps the default chosen on the TV: ' + JSON.stringify(j.certificates));
+                    call('POST', '/cert/remove', JSON.stringify({ id: idPar }), function (e, code, j) {
+                        if (!j.ok || j.certCount !== 1 || j.certificates[0].level !== 'public' || !j.certificates[0].primary || j.certificates[0].chosenOnTv) fail('remove: ' + JSON.stringify(j));
+                        var stored = JSON.parse(fs.readFileSync(path.join(dir, '.a2s-tvstore-certs.json'), 'utf8'));
+                        if (stored.certificates.length !== 1 || stored.tvDefault !== null) fail('remove reaches the file: ' + JSON.stringify({ n: stored.certificates.length, tvDefault: stored.tvDefault }));
+                        var byPkg = {}; try { byPkg = JSON.parse(fs.readFileSync(path.join(dir, '.a2s-tvstore-cert-by-package.json'), 'utf8')); } catch (x) {}
+                        if (Object.keys(byPkg).some(function (k) { return byPkg[k] === idPar; })) fail('a removed profile is forgotten per package: ' + JSON.stringify(byPkg));
+                        logs(function (text) {
+                            if (text.indexOf('is the default now, chosen on the TV') < 0 || text.indexOf('the default stays') < 0 || text.indexOf('removed on the TV; 1 left') < 0) fail('the log says what Settings did:\n' + text);
+                            stop();
+                            try { fs.readdirSync(dir).forEach(function (f) { fs.unlinkSync(path.join(dir, f)); }); fs.rmdirSync(dir); } catch (x) {}
+                            console.log('PASS: Partner refused up front on a Public-only TV, a partner privilege picks Partner when there is one, DRM-only stays Public, a remembered profile holds, Sign with: Partner is a mismatch fixed by replace, Sign with: Public holds, levels on /ping and /cert, default and remove from Settings survive a re-arm');
+                            process.exit(0);
+                        });
+                    });
+                });
             });
         });
     });

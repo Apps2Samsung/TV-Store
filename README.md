@@ -49,8 +49,23 @@ TV answers `install failed[118, -12]` ("same id and different certificate"; `118
 set), signs again with the next profile until the TV takes one (#44). So an app installed from a
 phone updates from TV-Store once that phone has armed the TV. Only when none of the profiles on the
 TV matches does TV-Store offer to remove the old copy and install again; the app's settings and
-sign-ins on the TV go with the old copy, which is why it asks first. The arming device's profiles
-are listed under Settings.
+sign-ins on the TV go with the old copy, which is why it asks first.
+
+### Signing certificates in Settings
+
+Settings lists every profile on the TV, one row each (#78): the name the phone or PC gave it, its
+level (Public, Partner, or unknown, which is used as Public), the author fingerprint (the first 12
+characters of its SHA-256, the same value the Apps2Samsung debug log prints, so the two can be
+matched), how long it is valid (with a warning when it has run out or runs out within 30 days), and
+whether its distributor certificate lists this TV's DUID. A profile that does not list this TV
+cannot install here. OK on a row offers:
+
+- **Use as default**: the profile tried first for an app that has none of its own yet. An app
+  installed before still takes the profile it was installed with first, and an app that needs
+  Partner still only takes a Partner one. A default chosen here stays the default when a phone or
+  PC arms the TV again; without one, arming makes that device's first choice the default.
+- **Remove**, after a confirmation: for a stale or expired profile that keeps being tried. Apps
+  installed with it cannot be updated from TV-Store until a device arms the TV with it again.
 
 ## Public or Partner certificate
 

@@ -241,6 +241,15 @@
   .sw i{position:absolute;top:3px;left:3px;width:30px;height:30px;border-radius:50%;background:#F4F7FB}
   .sw.on{background:#2DD4BF}
   .sw.on i{left:31px}
+  /* Signing certificates in Settings (#78) */
+  .crts{margin-top:0}
+  .crt .ont .badge{font-size:14px;margin:0 0 0 12px;vertical-align:middle}
+  .crt.sel{background:rgba(45,212,191,.16)}
+  .crt .fp{font-family:Menlo,Consolas,monospace;font-size:16px}
+  .opt .oh.warn{color:#F0A020}
+  .opt .oh.bad{color:#FF6B5E}
+  .crtact{padding:4px 20px 18px;border-bottom:1px solid rgba(244,247,251,.10)}
+  .crtact .notice{margin:0 0 14px}
 
   .foot{position:relative;display:flex;align-items:center;flex:none;padding-top:14px;font-size:17px;color:#9FB0C6}
   .foot span{margin-right:28px;white-space:nowrap}
@@ -269,6 +278,8 @@
   </div>
   <div class="sheet" id="sheet"></div>
 </div>
+<!-- webapis: the DUID, held against the device list of each signing certificate (#78). Absent off a TV. -->
+<script src="$WEBAPIS/webapis/webapis.js"></script>
 <script src="js/qrcode.js"></script>
 <script src="js/app.js"></script>
 </body>

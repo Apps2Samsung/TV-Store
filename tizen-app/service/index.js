@@ -750,6 +750,13 @@ function rememberCert(packageId, certId) {
     map[packageId] = certId;
     try { fs.writeFileSync(path.join(DATA_DIR, CERT_BY_PKG_NAME), JSON.stringify(map)); } catch (e) {}
 }
+// A removed profile is no longer the one any package took first.
+function forgetCert(certId) {
+    var map = certByPackage(), changed = false;
+    for (var pkg in map) if (map.hasOwnProperty(pkg) && map[pkg] === certId) { delete map[pkg]; changed = true; }
+    if (changed && DATA_DIR) { try { fs.writeFileSync(path.join(DATA_DIR, CERT_BY_PKG_NAME), JSON.stringify(map)); } catch (e) {} }
+}
+function certById(store, id) { return ((store && store.certificates) || []).filter(function (c) { return !!id && c.id === id; })[0] || null; }
 function saveCerts(b) {
     CERTS = b; CERT_ERROR = null;
     for (var i = 0; i < CERT_DIRS.length; i++) {
@@ -808,9 +815,20 @@ http.createServer(function (req, res) {
             return json(res, 400, { ok: false, error: 'need { authorKeyPem, authorCertPem, distributorKeyPem, distributorCertPem } or { certificates: [ ... ] }' });
         }
         var store = certs.merge(loadCerts(), incoming);
-        log('cert: received ' + incoming.length + ' signing certificate(s) from a head (' + incoming.map(certLabel).join(', ') + '); ' + store.certificates.length + ' on this TV now');
+        log('cert: received ' + incoming.length + ' signing certificate(s) from a head (' + incoming.map(certLabel).join(', ') + '); ' + store.certificates.length + ' on this TV now'
+            + (store.tvDefault ? ', the default stays ' + certLabel(certById(store, store.tvDefault)) + ' (chosen on the TV)' : ''));
         saveCerts(store);
         json(res, 200, { ok: true, certFile: CERT_FILE, certError: CERT_FILE ? null : CERT_ERROR, certCount: store.certificates.length, certificates: certs.summary(store) });
+    });
+    // Settings on the TV (#78): pick the default profile, or drop one. { id } is the profile's id
+    // from /ping's certificates.
+    if ((route === '/cert/default' || route === '/cert/remove') && req.method === 'POST') return body(req, function (err, b) {
+        var store = loadCerts(), id = !err && b && typeof b.id === 'string' ? b.id : '', c = certById(store, id);
+        if (!c) return json(res, 400, { ok: false, error: 'no signing certificate with that id on this TV' });
+        if (route === '/cert/default') { store = certs.setDefault(store, id); log('cert: ' + certLabel(c) + ' is the default now, chosen on the TV'); }
+        else { store = certs.remove(store, id); forgetCert(id); log('cert: ' + certLabel(c) + ' (' + id.slice(0, 12) + ') removed on the TV; ' + store.certificates.length + ' left'); }
+        saveCerts(store);
+        json(res, 200, { ok: true, certReady: haveCerts(), certCount: store.certificates.length, certificates: certs.summary(store) });
     });
     if (route === '/install' && req.method === 'POST') return body(req, function (err, b) {
         if (err || !b || !(b.url || b.upload)) return json(res, 400, { ok: false, error: 'need { url, file, appId } or { upload, token }' });
