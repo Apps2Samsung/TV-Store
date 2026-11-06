@@ -26,6 +26,8 @@ function start(port, opts, onReady) {
         // one the same silent way. With opts.single, so does the fake.
         if (opts.single && api.live > 0) { api.drops++; api.busyDrops++; sock.once('data', function () { try { sock.destroy(); } catch (e) {} }); return; }
         api.live++; sock.once('close', function () { api.live--; });
+        // A client killed mid-reply (TV-Store stopped by its own update, #41) resets the socket; that is not the fake's error.
+        sock.on('error', function () {});
         var connected = false, buf = Buf.alloc(0), nextRemote = 1000;
         var chans = {};  // remoteId -> {clientId, service, syncBuf, syncState}
         function send(c,a0,a1,p){ sock.write(frame(c,a0,a1,p)); }
