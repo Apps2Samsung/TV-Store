@@ -20,17 +20,28 @@ var MAX_AGE_MS = 7 * 24 * 3600 * 1000;   // the workflow re-signs at least twice
 var Buf = require('./compat.js');
 function b64(s) { return Buf.from(s, 'base64'); }
 
-// buf: the bytes of resolved.json.signed. Returns { catalog, payload, index } or throws.
-function verify(buf, publicKeyPem, now) {
+// The .signed envelope, shared with the independent repositories (repos.js): line 1 a base64
+// signature, ending within the first 4096 bytes, then the payload. { sig, payload } or null.
+function envelope(buf) {
     var nl = -1;
     for (var i = 0; i < buf.length && i < 4096; i++) if (buf[i] === 0x0a) { nl = i; break; }
-    if (nl < 0) throw new Error('the catalog is not signed (no signature line)');
-    var sig = b64(buf.slice(0, nl).toString('ascii').trim());
-    var payload = buf.slice(nl + 1);
-
+    if (nl < 0) return null;
+    var line = buf.slice(0, nl).toString('ascii').trim();
+    if (!/^[A-Za-z0-9+\/]+={0,2}$/.test(line)) return null;
+    return { sig: b64(line), payload: buf.slice(nl + 1) };
+}
+function signatureOk(payload, sig, publicKeyPem) {
     var v = crypto.createVerify('RSA-SHA256');
     v.update(payload);
-    if (!v.verify(publicKeyPem, sig)) throw new Error('the catalog signature does not match: not installing from it');
+    try { return v.verify(publicKeyPem, sig); } catch (e) { return false; }
+}
+
+// buf: the bytes of resolved.json.signed. Returns { catalog, payload, index } or throws.
+function verify(buf, publicKeyPem, now) {
+    var env = envelope(buf);
+    if (!env) throw new Error('the catalog is not signed (no signature line)');
+    var payload = env.payload;
+    if (!signatureOk(payload, env.sig, publicKeyPem)) throw new Error('the catalog signature does not match: not installing from it');
 
     var catalog = JSON.parse(payload.toString('utf8'));
     var at = Date.parse(catalog.generatedAt || '');
@@ -38,7 +49,7 @@ function verify(buf, publicKeyPem, now) {
     if ((now || Date.now()) - at > MAX_AGE_MS) throw new Error('the signed catalog is from ' + catalog.generatedAt + ', more than 7 days old: check the TV’s clock, or the Apps2Samsung catalog workflow');
 
     var s = scan(catalog);
-    return { catalog: catalog, payload: payload, index: s.index, levels: s.levels, icons: s.icons };
+    return { catalog: catalog, payload: payload, index: s.index, levels: s.levels, icons: s.icons, moved: s.moved };
 }
 
 // One walk over providers -> releases -> assets for the lookups the install and the icons need:
@@ -47,12 +58,21 @@ function verify(buf, publicKeyPem, now) {
 //           (#50): cert_level on a community package (copied onto each of its files in catalog.json,
 //           matched to the release asset by file name) or on a provider (every file of it);
 //   icons:  lower-case hex SHA-256 -> icon URL, for every file that names an icon with its hash
-//           (#66); an icon without a hash is not listed, so it is never fetched.
+//           (#66); an icon without a hash is not listed, so it is never fetched;
+//   moved:  package id -> { url, fingerprint } for every community package whose manifest says it
+//           moved to an independent repository (moved_to, #82), copied onto each of its files in
+//           catalog.json; the package id from the entry, else from its release asset.
+var MOVED_URL = /^https:\/\/[^\s\/@:]+(?::\d+)?\/\S*[.]signed$/, FINGERPRINT = /^[0-9a-f]{64}$/;
 function scan(catalog) {
-    var index = {}, levels = {}, icons = {};
+    var index = {}, levels = {}, icons = {}, moved = {};
     (catalog.providers || []).forEach(function (p) {
-        var byFile = {};
-        ((p.catalog && p.catalog.apps) || []).forEach(function (e) { if (e.file && String(e.cert_level || '').toLowerCase() === 'partner') byFile[e.file] = true; });
+        var byFile = {}, assetByName = {};
+        (p.releases || []).forEach(function (r) { (r.assets || []).forEach(function (a) { if (a.name && !assetByName[a.name]) assetByName[a.name] = a; }); });
+        ((p.catalog && p.catalog.apps) || []).forEach(function (e) {
+            if (e.file && String(e.cert_level || '').toLowerCase() === 'partner') byFile[e.file] = true;
+            var m = e.moved_to, pkg = e.package_id || (assetByName[e.file] && assetByName[e.file].package_id);
+            if (pkg && m && typeof m.url === 'string' && MOVED_URL.test(m.url) && typeof m.fingerprint === 'string' && FINGERPRINT.test(m.fingerprint)) moved[pkg] = { url: m.url, fingerprint: m.fingerprint, name: e.group || e.name || pkg };
+        });
         var all = String(p.cert_level || '').toLowerCase() === 'partner';
         (p.releases || []).forEach(function (r) {
             (r.assets || []).forEach(function (a) {
@@ -65,7 +85,7 @@ function scan(catalog) {
             });
         });
     });
-    return { index: index, levels: levels, icons: icons };
+    return { index: index, levels: levels, icons: icons, moved: moved };
 }
 function index(catalog) { return scan(catalog).index; }
 function levels(catalog) { return scan(catalog).levels; }
@@ -73,4 +93,4 @@ function icons(catalog) { return scan(catalog).icons; }
 
 function sha256(buf) { return crypto.createHash('sha256').update(buf).digest('hex'); }
 
-module.exports = { verify: verify, scan: scan, index: index, levels: levels, icons: icons, sha256: sha256, MAX_AGE_MS: MAX_AGE_MS };
+module.exports = { verify: verify, envelope: envelope, signatureOk: signatureOk, scan: scan, index: index, levels: levels, icons: icons, sha256: sha256, MAX_AGE_MS: MAX_AGE_MS };

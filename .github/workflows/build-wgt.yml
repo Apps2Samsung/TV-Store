@@ -14,7 +14,7 @@ jobs:
           node-version: '20'
       - name: Syntax-check the service and UI
         run: |
-          for f in tizen-app/service/sdb.js tizen-app/service/relay.js tizen-app/service/zip.js tizen-app/service/index.js tizen-app/service/signer.js tizen-app/service/catalog.js tizen-app/service/catalog-key.js tizen-app/service/compat.js tizen-app/service/manifest.js tizen-app/service/refusal.js tizen-app/service/certs.js tizen-app/service/sdbhosts.js tizen-app/service/wascmd.js tizen-app/service/selfupdate.js tizen-app/service/icons.js tizen-app/js/app.js test/fake-sdbd.js test/run.js test/relay.test.js test/relay-settings.test.js test/sign.test.js test/config.test.js test/sdb-errors.test.js test/manifest.test.js test/refusal.test.js test/certs.test.js test/install.test.js test/certlevel.test.js test/sdbhosts.test.js test/sdb-loopback.test.js test/wascmd.test.js test/selfupdate.test.js; do
+          for f in tizen-app/service/sdb.js tizen-app/service/relay.js tizen-app/service/zip.js tizen-app/service/index.js tizen-app/service/signer.js tizen-app/service/catalog.js tizen-app/service/catalog-key.js tizen-app/service/compat.js tizen-app/service/manifest.js tizen-app/service/refusal.js tizen-app/service/certs.js tizen-app/service/sdbhosts.js tizen-app/service/wascmd.js tizen-app/service/selfupdate.js tizen-app/service/icons.js tizen-app/service/repos.js tizen-app/js/app.js test/fake-sdbd.js test/run.js test/relay.test.js test/relay-settings.test.js test/sign.test.js test/config.test.js test/sdb-errors.test.js test/manifest.test.js test/refusal.test.js test/certs.test.js test/install.test.js test/certlevel.test.js test/sdbhosts.test.js test/sdb-loopback.test.js test/wascmd.test.js test/selfupdate.test.js test/repos.test.js test/sources.test.js; do
             node --check "$f"
           done
       - name: config.xml ids (package id is 10 alphanumerics)
@@ -33,6 +33,10 @@ jobs:
         run: node test/bundle.test.js
       - name: Signed catalog test (signature, staleness, hashes)
         run: node test/catalog.test.js
+      - name: Independent repositories, the spec's test vectors (#82)
+        run: node test/repos.test.js
+      - name: Sources in the service (check, add, per-source install, rollback, remove) (#82)
+        run: node test/sources.test.js
       - name: sdb connect errors (refused, dropped without a reply)
         run: node test/sdb-errors.test.js
       - name: Package manifest ids (.wgt config.xml, .tpk tizen-manifest.xml)
@@ -69,6 +73,8 @@ jobs:
           node --expose-gc test/stream-sign.test.js
           node test/bundle.test.js
           node test/catalog.test.js
+          node test/repos.test.js
+          node test/sources.test.js
           node test/sdb-errors.test.js
           node test/manifest.test.js
           node test/refusal.test.js

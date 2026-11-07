@@ -6,8 +6,8 @@
  * Certs arrive as PEM (key + cert chain) from a head, not as a .p12: Node has no PKCS#12 parser and the
  * TV's Node is old, so the head (which already holds the decrypted material) hands over PEM. A cert PEM
  * may hold several blocks (leaf, then intermediates); every one of them goes into KeyInfo, as from a PC. The canonical
- * byte sequences here are the exact ones C#'s canonicalizers produce — proven equal, not reimplemented
- * as a general c14n — so the output installs identically.
+ * byte sequences here are the exact ones C#'s canonicalizers produce (proven equal, not reimplemented
+ * as a general c14n), so the output installs identically.
  */
 'use strict';
 var Buf = require('./compat.js');
@@ -32,7 +32,7 @@ function pemCerts(certPem) {
     return out;
 }
 
-// The #prop SignatureProperties object, in c14n11 canonical form (for the #prop digest) — proven to
+// The #prop SignatureProperties object, in c14n11 canonical form (for the #prop digest), proven to
 // match C#. targetId = "AuthorSignature" | "DistributorSignature"; role = "author" | "distributor".
 function propCanonical(targetId, role) {
     return '<Object xmlns="' + DSIG + '" Id="prop"><SignatureProperties xmlns:dsp="http://www.w3.org/2009/xmldsig-properties">'
@@ -60,7 +60,7 @@ function buildSignature(which, refs, propDigestB64, keyPem, certPem) {
     var refObjs = refs.map(function (r) { return reference(r.uri, r.digest, r.withTransform); });
     var propRef = reference('#prop', propDigestB64, true);
 
-    // Canonical SignedInfo (exclusive-c14n: namespace first, explicit close tags) — this is what we sign.
+    // Canonical SignedInfo (exclusive-c14n: namespace first, explicit close tags): this is what we sign.
     var siCanon = '<SignedInfo xmlns="' + DSIG + '">'
         + '<CanonicalizationMethod Algorithm="' + EXC_C14N + '"></CanonicalizationMethod>'
         + '<SignatureMethod Algorithm="' + RSA_SHA512 + '"></SignatureMethod>'
@@ -68,7 +68,7 @@ function buildSignature(which, refs, propDigestB64, keyPem, certPem) {
     // createSign, not crypto.sign / createPrivateKey: those are Node 12 / 11.6, the TV runs 4.4.3.
     var sigVal = crypto.createSign('RSA-SHA512').update(Buf.from(siCanon, 'utf8')).sign(keyPem, 'base64');
 
-    // Stored SignedInfo (self-closed empties, no xmlns on SignedInfo — it inherits from Signature).
+    // Stored SignedInfo (self-closed empties, no xmlns on SignedInfo: it inherits from Signature).
     var siStored = '<SignedInfo>'
         + '<CanonicalizationMethod Algorithm="' + EXC_C14N + '" />'
         + '<SignatureMethod Algorithm="' + RSA_SHA512 + '" />'

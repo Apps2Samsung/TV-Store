@@ -26,6 +26,7 @@ var sdbhosts = require('./sdbhosts.js');
 var wascmd = require('./wascmd.js');
 var iconsMod = require('./icons.js');
 var selfupdate = require('./selfupdate.js');
+var repos = require('./repos.js');
 
 var PORT = 8077;
 // sdbd's port; a test points the service at a fake sdbd (test/install.test.js).
@@ -46,7 +47,14 @@ function parseRelayPort(v, dflt) { var n = parseInt(v, 10); return relayPortProb
 var RELAY_PORT = parseRelayPort(process.env.A2S_RELAY_PORT, RELAY_PORT_DEFAULT);
 // Signed by the Apps2Samsung catalog workflow; see catalog.js for why the content is checked
 // instead of the connection.
-var CATALOG_URL = 'https://apps2samsung.com/catalog/resolved.json.signed';
+var CATALOG_URL = process.env.A2S_CATALOG_URL || 'https://apps2samsung.com/catalog/resolved.json.signed';
+// A test signs its own catalog: A2S_CATALOG_KEY names a PEM file with the key that verifies it.
+var CATALOG_KEY_PEM = CATALOG_KEY;
+if (process.env.A2S_CATALOG_KEY) { try { CATALOG_KEY_PEM = fs.readFileSync(process.env.A2S_CATALOG_KEY, 'utf8'); } catch (e) {} }
+// A test points host names at its own server, the way curl --resolve does: "host=127.0.0.1:port,...".
+// The independent repositories may not use an IP address or localhost (repos.js), so a test needs this.
+var RESOLVE = {};
+String(process.env.A2S_RESOLVE || '').split(',').forEach(function (p) { var m = /^([^=]+)=([^:]+):(\d+)$/.exec(p.trim()); if (m) RESOLVE[m[1].toLowerCase()] = { host: m[2], port: parseInt(m[3], 10) }; });
 var STAGING = '/home/owner/share/tmp/sdk_tools';   // where sdbd accepts a pushed .wgt
 // How a signed package reaches the TV's installer (#57): see the installer block below the log.
 var LOGS = [];
@@ -386,6 +394,8 @@ function installUpload(b, cb) {
         // The file is gone once signed (signAndInstall drops it); a failure before that (no
         // certificate yet) keeps the upload waiting for another try.
         if (!err || !fs.existsSync(UPLOAD_FILE)) { UPLOAD = null; unlink(UPLOAD_FILE); }
+        // A file sent in by hand comes from no source: the app is read as before #82 again.
+        if (!err) forgetSource(entry.packageId);
         cb(err, r);
     });
 }
@@ -442,31 +452,55 @@ function ownIp() {
 // HTTPS without certificate validation: the TV's CA store is too old for today's chains, so
 // nothing fetched here is trusted for where it came from. The catalog is trusted through its
 // signature and a package through the hash the catalog gives it (catalog.js).
-function get(u, cb, hops) {
-    hops = hops || 0;
-    if (hops > 5) return cb(new Error('too many redirects for ' + u));
-    var o = url.parse(u), secure = o.protocol === 'https:';
-    var opts = { protocol: o.protocol, hostname: o.hostname, port: o.port || (secure ? 443 : 80), path: o.path,
+function requestOpts(u) {
+    var o = url.parse(u), secure = o.protocol === 'https:', r = RESOLVE[String(o.hostname || '').toLowerCase()];
+    var opts = { protocol: o.protocol, hostname: r ? r.host : o.hostname, port: r ? r.port : (o.port || (secure ? 443 : 80)), path: o.path,
                  headers: { 'User-Agent': 'Apps2Samsung-TV-Store' } };
+    if (r) { opts.headers.Host = o.host; opts.servername = o.hostname; }
     if (secure) opts.rejectUnauthorized = false;
-    var req = (secure ? https : http).get(opts, function (res) {
-        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) { res.resume(); logv('http: ' + res.statusCode + ' redirect to ' + res.headers.location); return get(url.resolve(u, res.headers.location), cb, hops + 1); }
-        if (res.statusCode !== 200) { res.resume(); return cb(new Error('HTTP ' + res.statusCode + ' for ' + u)); }
-        var chunks = []; res.on('data', function (d) { chunks.push(d); }); res.on('end', function () { cb(null, Buffer.concat(chunks)); });
+    return { opts: opts, mod: secure ? https : http };
+}
+// lim (optional): { maxBytes, deadlineMs }, for what someone other than Apps2Samsung publishes (#82):
+// a response bigger than maxBytes is cut off with err.reason 'size', and the whole fetch, redirects
+// included, gives up after deadlineMs. Five redirects at most, 30 s of silence at most, always.
+function get(u, cb, hops, lim) {
+    hops = hops || 0; lim = lim || {};
+    if (lim.deadlineMs && !lim.until) lim = { maxBytes: lim.maxBytes, until: Date.now() + lim.deadlineMs };
+    if (hops > 5) return cb(new Error('too many redirects for ' + u));
+    var done = false, timer = null, req;
+    function fin(err, buf) { if (done) return; done = true; if (timer) clearTimeout(timer); cb(err, buf); }
+    function tooBig() { var e = new Error('the answer from ' + u + ' is larger than ' + lim.maxBytes + ' bytes'); e.reason = 'size'; return e; }
+    var ro = requestOpts(u);
+    req = ro.mod.get(ro.opts, function (res) {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+            res.resume(); logv('http: ' + res.statusCode + ' redirect to ' + res.headers.location);
+            if (done) return;
+            done = true; if (timer) clearTimeout(timer);
+            return get(url.resolve(u, res.headers.location), cb, hops + 1, lim);
+        }
+        if (res.statusCode !== 200) { res.resume(); return fin(new Error('HTTP ' + res.statusCode + ' for ' + u)); }
+        if (lim.maxBytes && parseInt(res.headers['content-length'] || '0', 10) > lim.maxBytes) { req.abort(); return fin(tooBig()); }
+        var chunks = [], size = 0;
+        res.on('data', function (d) {
+            size += d.length;
+            if (lim.maxBytes && size > lim.maxBytes) { req.abort(); return fin(tooBig()); }
+            chunks.push(d);
+        });
+        res.on('end', function () { fin(null, Buffer.concat(chunks)); });
+        res.on('error', fin);
     });
-    req.on('error', cb); req.setTimeout(30000, function () { req.abort(); });
+    req.on('error', fin); req.setTimeout(30000, function () { req.abort(); });
+    if (lim.until) timer = setTimeout(function () { req.abort(); fin(new Error('no complete answer from ' + u + ' in time')); }, Math.max(1, lim.until - Date.now()));
 }
 
 // get() to a file, hashing on the way: cb(err, { size, sha256 }). A package never sits in memory.
 function getToFile(u, file, cb, hops) {
     hops = hops || 0;
     if (hops > 5) return cb(new Error('too many redirects for ' + u));
-    var o = url.parse(u), secure = o.protocol === 'https:', done = false;
+    var done = false;
     function fin(err, r) { if (done) return; done = true; cb(err, r); }
-    var opts = { protocol: o.protocol, hostname: o.hostname, port: o.port || (secure ? 443 : 80), path: o.path,
-                 headers: { 'User-Agent': 'Apps2Samsung-TV-Store' } };
-    if (secure) opts.rejectUnauthorized = false;
-    var req = (secure ? https : http).get(opts, function (res) {
+    var ro = requestOpts(u);
+    var req = ro.mod.get(ro.opts, function (res) {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) { res.resume(); done = true; logv('http: ' + res.statusCode + ' redirect to ' + res.headers.location); return getToFile(url.resolve(u, res.headers.location), file, cb, hops + 1); }
         if (res.statusCode !== 200) { res.resume(); return fin(new Error('HTTP ' + res.statusCode + ' for ' + u)); }
         var h = crypto.createHash('sha256'), size = 0, out = fs.createWriteStream(file);
@@ -487,15 +521,25 @@ function json(res, code, obj) { cors(res, code, 'application/json'); res.end(JSO
 // The full install pipeline for one package. progress via log; final state via cb.
 function install(entry, cb) {
     var downloadUrl = entry.url, remoteName = (entry.file || 'package.wgt').replace(/[^A-Za-z0-9._-]/g, '_');
-    // Only what the signed catalog lists, with the hash it gives: the loopback port is open to
-    // every app on the TV, and none of them gets to choose what is signed with the user's
-    // certificate. (A file the user sent in by hand goes through installUpload instead, behind
-    // the token only the TV-Store screen has.)
-    withCatalog(function (err, cat) {
+    // Only what the signed catalog, or a signed repository the user added (#82), lists, with the
+    // hash it gives: the loopback port is open to every app on the TV, and none of them gets to
+    // choose what is signed with the user's certificate. (A file the user sent in by hand goes
+    // through installUpload instead, behind the token only the TV-Store screen has.)
+    trustFor(entry.source, function (err, cat) {
         if (err) return cb(err);
-        if (!cat.index.hasOwnProperty(downloadUrl)) return cb(coded('NOT_IN_CATALOG', 'this download is not in the signed catalog'));
+        if (!cat.index.hasOwnProperty(downloadUrl)) return cb(coded('NOT_IN_CATALOG', 'this download is not in ' + cat.label));
         var want = cat.index[downloadUrl];
         if (!want) return cb(coded('NO_HASH', 'the catalog has no hash for this file, so the TV cannot check it; install it from Apps2Samsung on a phone or PC'));
+        // An installed app updates from the source it came from (#82). Another source's copy of the
+        // same package replaces it only when the person at the TV said so.
+        var from = installedFrom(entry);
+        if (from && from !== cat.id && entry.switchSource !== true) {
+            log('install: ' + entry.packageId + ' came from ' + sourceLabel(from) + ', not from ' + cat.label + '; not switching without a yes on the TV');
+            return cb(coded('SOURCE_SWITCH', (entry.name || entry.packageId) + ' on this TV came from ' + sourceLabel(from) + '. Installing this copy from ' + cat.label + ' replaces it, and its updates then come from there. Confirm that on the TV first.'));
+        }
+        if (from && from !== cat.id) log('install: moving ' + entry.packageId + ' from ' + sourceLabel(from) + ' to ' + cat.label + ', confirmed on the TV');
+        var done = cb;
+        cb = function (err, r) { if (!err) { rememberSource(entry.packageId, cat.id); if (r) r.source = cat.id; } done(err, r); };
         entry.catalogLevel = cat.levels[downloadUrl] || '';
         if (!DATA_DIR) return cb(new Error('the service has no folder it can write to'));
         var own = selfGate(entry);
@@ -507,8 +551,8 @@ function install(entry, cb) {
         getToFile(downloadUrl, inFile, function (err, got) {
             logv('timing: download took ' + (Date.now() - started) + ' ms');
             if (err) return clean(err);
-            if (got.sha256 !== want) { log('install: hash mismatch, got ' + got.sha256 + ' want ' + want); return clean(coded('HASH_MISMATCH', 'the download does not match the catalog (SHA-256 differs); not installing it')); }
-            log('install: downloaded ' + got.size + ' bytes, SHA-256 matches the catalog; signing');
+            if (got.sha256 !== want) { log('install: hash mismatch, got ' + got.sha256 + ' want ' + want); return clean(coded('HASH_MISMATCH', 'the download does not match ' + cat.label + ' (SHA-256 differs); not installing it')); }
+            log('install: downloaded ' + got.size + ' bytes, SHA-256 matches ' + cat.label + '; signing');
             // The Tizen version the package asks for, against the one the page reports for this TV
             // (#47): a package the TV would refuse with [118, -19] is turned away before the push.
             manifest.read(inFile, function (err, ids) {
@@ -743,18 +787,273 @@ function withCatalog(cb, fresh) {
     get(CATALOG_URL, function (err, buf) {
         if (err) return done(err);
         var cat;
-        try { cat = catalogTrust.verify(buf, CATALOG_KEY); }
+        try { cat = catalogTrust.verify(buf, CATALOG_KEY_PEM); }
         catch (e) { log('catalog: ' + e.message); return done(e); }
         cat.at = Date.now(); CATALOG = cat;
         log('catalog: signature ok, generated ' + cat.catalog.generatedAt + ', ' + Object.keys(cat.index).length + ' files, ' + Object.keys(cat.icons).length + ' icons');
-        icons.prune(cat.icons);
+        cat.id = 'official'; cat.label = 'the signed catalog';
+        pruneIcons();
         done(null, cat);
     });
 }
 
 // App icons (#66): fetched like a package, kept only when they hash to what the signed catalog
 // says, cached in the data folder, served at GET /icon/<sha256>. See icons.js.
-var icons = iconsMod.create({ dir: DATA_DIR ? path.join(DATA_DIR, 'icons') : null, get: get, withCatalog: withCatalog, log: log, logv: logv });
+var icons = iconsMod.create({ dir: DATA_DIR ? path.join(DATA_DIR, 'icons') : null, get: get, withCatalog: withIconIndex, log: log, logv: logv });
+// The icons the official catalog and every repository that verified name, hash -> URL. The official
+// catalog failing leaves the repositories' icons, and the other way round.
+function withIconIndex(cb) {
+    withCatalog(function (err, cat) {
+        var all = {}, k;
+        if (cat) for (k in cat.icons) if (cat.icons.hasOwnProperty(k)) all[k] = cat.icons[k];
+        withSources(false, function (list) {
+            list.forEach(function (r) { if (r.verified) for (var h in r.verified.icons) if (r.verified.icons.hasOwnProperty(h) && !all.hasOwnProperty(h)) all[h] = r.verified.icons[h]; });
+            if (err && !Object.keys(all).length) return cb(err);
+            cb(null, { icons: all });
+        });
+    });
+}
+// Drops cached icons nothing names any more, once the official catalog and every enabled repository
+// had a go: one that has not loaded yet would otherwise lose its icons at every start.
+function pruneIcons() {
+    if (!CATALOG) return;
+    var all = {}, k;
+    for (k in CATALOG.icons) if (CATALOG.icons.hasOwnProperty(k)) all[k] = true;
+    for (var i = 0; i < SOURCES.length; i++) {
+        if (!SOURCES[i].enabled) continue;
+        var st = SOURCE_STATE[SOURCES[i].repositoryId];
+        if (!st) return;
+        if (st.verified) for (k in st.verified.icons) if (st.verified.icons.hasOwnProperty(k)) all[k] = true;
+    }
+    icons.prune(all);
+}
+
+// ---- independent repositories (#82) ----------------------------------------------------------------
+// Signed repositories next to the official catalog, Cydia-style. repos.js has the trust model: a
+// source reaches the TV only from Apps2Samsung (Send sources to TV), with the fingerprint of the key
+// the user approved there, and the person at the TV confirms it once more; every manifest is
+// checked against that fingerprint, its repository id, its age, and the last one accepted from it
+// (no rollback). Kept in the data folder next to the other settings:
+//   { url, repositoryId, fingerprint, name, maintainer, publicKeyPem, enabled, addedAt,
+//     lastGeneratedAt, lastOkAt, lastError, lastErrorReason, lastErrorAt }
+// A source that fails says why and drops out; the official catalog and the others carry on.
+var SOURCES_FILE = DATA_DIR ? path.join(DATA_DIR, '.a2s-sources.json') : null;
+var SOURCES = [];
+try {
+    if (SOURCES_FILE && fs.existsSync(SOURCES_FILE)) {
+        var sf = JSON.parse(fs.readFileSync(SOURCES_FILE, 'utf8'));
+        (sf && Array.isArray(sf.sources) ? sf.sources : []).forEach(function (s) {
+            var n = repos.normalizeSource(s);
+            if (!n.source) return log('sources: dropping a stored source that is not valid (' + n.error + ')');
+            var e = n.source;
+            ['maintainer', 'addedAt', 'lastGeneratedAt', 'lastOkAt', 'lastError', 'lastErrorReason', 'lastErrorAt'].forEach(function (k) { if (typeof s[k] === 'string') e[k] = s[k]; });
+            e.enabled = s.enabled !== false;
+            SOURCES.push(e);
+        });
+    }
+} catch (e) { log('sources: cannot read ' + SOURCES_FILE + ': ' + e.message); }
+var SOURCE_STATE = {};     // repositoryId -> { at, verified } or { at, error }
+var SOURCE_WAITING = {};   // repositoryId -> callbacks waiting for the fetch that runs
+var SOURCE_LIMIT = { maxBytes: repos.MAX_BYTES, deadlineMs: 60000 };
+var SOURCE_TTL = 10 * 60 * 1000, SOURCE_FAIL_TTL = 2 * 60 * 1000;
+function saveSources() {
+    if (!SOURCES_FILE) return;
+    try { fs.writeFileSync(SOURCES_FILE, JSON.stringify({ sources: SOURCES })); }
+    catch (e) { log('sources: cannot save: ' + e.message); }
+}
+function sourceById(id) { for (var i = 0; i < SOURCES.length; i++) if (SOURCES[i].repositoryId === id) return SOURCES[i]; return null; }
+function sourceLabel(id) { if (!id || id === 'official') return 'the official catalog'; var s = sourceById(id); return s ? '‘' + (s.name || id) + '’' : id + ' (a source no longer on this TV)'; }
+// What the page and Apps2Samsung get to see of a source: everything but the key itself.
+function publicSource(s) {
+    var st = SOURCE_STATE[s.repositoryId];
+    return { url: s.url, repositoryId: s.repositoryId, fingerprint: s.fingerprint, name: s.name || s.repositoryId, maintainer: s.maintainer || '', domain: repos.hostOf(s.url),
+             enabled: s.enabled, addedAt: s.addedAt || null, lastGeneratedAt: s.lastGeneratedAt || null, lastOkAt: s.lastOkAt || null,
+             lastError: s.lastError || null, lastErrorReason: s.lastErrorReason || null, lastErrorAt: s.lastErrorAt || null,
+             ok: !!(st && st.verified), apps: st && st.verified ? st.verified.manifest.providers.length : null };
+}
+
+// The public key of a source: the one Apps2Samsung handed over or the TV pinned before, else
+// repository.pem next to the manifest, kept only when it hashes to the approved fingerprint.
+function sourceKey(s, cb) {
+    if (s.publicKeyPem) return cb(null, s.publicKeyPem);
+    var ku = url.resolve(s.url, 'repository.pem');
+    get(ku, function (err, buf) {
+        if (err) return cb(new Error('could not fetch the repository key (' + err.message + ')'));
+        var pem = buf.toString('utf8'), k = repos.keyInfo(pem);
+        if (!k || k.fingerprint !== s.fingerprint) {
+            var e = new Error('repository.pem next to the repository is not the key approved in Apps2Samsung' + (k ? ' (it is ' + k.fingerprint.slice(0, 16) + '…)' : '') + ': if the publisher changed keys, approve the new one in Apps2Samsung and send the source to this TV again');
+            e.reason = 'fingerprint';
+            return cb(e);
+        }
+        cb(null, pem);
+    }, 0, { maxBytes: 64 * 1024, deadlineMs: 30000 });
+}
+// Fetch and verify one source, nothing stored: cb(err, verified) with verified.publicKeyPem.
+function fetchSource(s, cb) {
+    sourceKey(s, function (err, pem) {
+        if (err) return cb(err);
+        get(s.url, function (err, buf) {
+            if (err) return cb(err);
+            var v;
+            try { v = repos.verify(buf, { publicKeyPem: pem, fingerprint: s.fingerprint, repositoryId: s.repositoryId, notBefore: s.lastGeneratedAt }); }
+            catch (e) { return cb(e); }
+            v.publicKeyPem = pem;
+            cb(null, v);
+        }, 0, SOURCE_LIMIT);
+    });
+}
+// A stored source, fetched and verified, cached like the official catalog (a failure for 2 min);
+// the outcome is written back to the store. cb({ verified } | { error }).
+function loadSource(s, fresh, cb) {
+    var id = s.repositoryId, st = SOURCE_STATE[id];
+    if (st && !fresh && Date.now() - st.at < (st.verified ? SOURCE_TTL : SOURCE_FAIL_TTL)) return cb(st);
+    if (SOURCE_WAITING[id]) return SOURCE_WAITING[id].push(cb);
+    SOURCE_WAITING[id] = [cb];
+    fetchSource(s, function (err, v) {
+        var now = new Date().toISOString();
+        if (sourceById(id) === s) {
+            if (err) {
+                s.lastError = err.message; s.lastErrorReason = err.reason || null; s.lastErrorAt = now;
+                SOURCE_STATE[id] = { at: Date.now(), error: err };
+                log('sources: ' + (s.name || id) + ' failed' + (err.reason ? ' [' + err.reason + ']' : '') + ': ' + err.message);
+            } else {
+                if (!s.lastGeneratedAt || Date.parse(v.generatedAt) > Date.parse(s.lastGeneratedAt)) s.lastGeneratedAt = v.generatedAt;
+                s.publicKeyPem = v.publicKeyPem; s.name = v.repository.name; s.maintainer = v.repository.maintainer;
+                s.lastOkAt = now; delete s.lastError; delete s.lastErrorReason; delete s.lastErrorAt;
+                SOURCE_STATE[id] = { at: Date.now(), verified: v };
+                log('sources: ' + s.name + ' (' + id + '): signature ok, generated ' + v.generatedAt + ', ' + Object.keys(v.index).length + ' files');
+            }
+            saveSources();
+        }
+        var w = SOURCE_WAITING[id]; delete SOURCE_WAITING[id];
+        var out = err ? { error: err } : SOURCE_STATE[id] || { at: Date.now(), verified: v };
+        w.forEach(function (f) { f(out); });
+        pruneIcons();
+    });
+}
+// Every enabled source, loaded side by side: cb([{ source, verified } | { source, error }]).
+function withSources(fresh, cb) {
+    var list = SOURCES.filter(function (s) { return s.enabled; }), out = [], left = list.length;
+    if (!left) return cb([]);
+    list.forEach(function (s, i) {
+        loadSource(s, fresh, function (st) {
+            out[i] = { source: s, verified: st.verified || null, error: st.error || null };
+            if (--left === 0) cb(out);
+        });
+    });
+}
+// What an install from `source` may download: { id, label, index, levels }. No source, or
+// 'official': the signed catalog, as before #82.
+function trustFor(source, cb) {
+    if (!source || source === 'official') return withCatalog(function (err, cat) { cb(err, cat); });
+    var s = sourceById(String(source));
+    if (!s) return cb(coded('UNKNOWN_SOURCE', 'that source is no longer on this TV; nothing is installed from it'));
+    if (!s.enabled) return cb(coded('SOURCE_OFF', '‘' + (s.name || s.repositoryId) + '’ is turned off in Settings, Sources'));
+    loadSource(s, false, function (st) {
+        if (st.error) return cb(coded('SOURCE_FAILED', '‘' + (s.name || s.repositoryId) + '’ did not load, so nothing is installed from it: ' + st.error.message));
+        cb(null, { id: s.repositoryId, label: '‘' + (s.name || s.repositoryId) + '’', index: st.verified.index, levels: st.verified.levels });
+    });
+}
+
+// Where each package TV-Store installed came from: packageId -> 'official' | repositoryId. An app
+// without an entry that the TV lists counts as the official catalog's, as before #82.
+var SOURCE_OF = null, SOURCE_OF_NAME = '.a2s-source-by-package.json';
+function sourceOfPackage() {
+    if (SOURCE_OF) return SOURCE_OF;
+    try { SOURCE_OF = JSON.parse(fs.readFileSync(path.join(DATA_DIR, SOURCE_OF_NAME), 'utf8')) || {}; } catch (e) { SOURCE_OF = {}; }
+    return SOURCE_OF;
+}
+function saveSourceOf() { if (DATA_DIR) { try { fs.writeFileSync(path.join(DATA_DIR, SOURCE_OF_NAME), JSON.stringify(SOURCE_OF)); } catch (e) { log('sources: cannot save where apps came from: ' + e.message); } } }
+function rememberSource(packageId, id) { if (!packageId) return; var m = sourceOfPackage(); if (m[packageId] === id) return; m[packageId] = id; saveSourceOf(); }
+function forgetSource(packageId) { if (!packageId) return; var m = sourceOfPackage(); if (!m.hasOwnProperty(packageId)) return; delete m[packageId]; saveSourceOf(); }
+// The source an install would replace: the one remembered, else the official catalog when the page
+// says the TV has the package; null when it is not on the TV.
+function installedFrom(entry) {
+    if (!entry.packageId || !entry.installed) return null;
+    return sourceOfPackage()[entry.packageId] || 'official';
+}
+
+// Settings and Apps2Samsung's Send sources to TV, both through the page (POST /sources/...):
+// check one without keeping it, add it with the page's token, turn it off or on, remove it.
+// { moved: true } is a source the signed official catalog names in moved_to (#82): its URL and
+// fingerprint must be what the catalog says for some package, which stands in for the approval in
+// Apps2Samsung, and its repository id comes from the manifest itself (moved_to carries none).
+function checkSource(b, cb) {
+    var moved = !!(b && b.moved === true);
+    var n = repos.normalizeSource(b, { idFromManifest: moved });
+    if (n.error) return cb(coded('BAD_SOURCE', n.error));
+    var s = n.source;
+    function go(vouched) {
+        var had = s.repositoryId ? sourceById(s.repositoryId) : null;
+        if (had && had.fingerprint === s.fingerprint) s.lastGeneratedAt = had.lastGeneratedAt;
+        fetchSource(s, function (err, v) {
+            if (err) { var e = coded('SOURCE_REFUSED', err.message); e.reason = err.reason || null; return cb(e); }
+            if (!s.repositoryId) {
+                s.repositoryId = v.repository.id;
+                had = sourceById(s.repositoryId);
+                if (had && had.fingerprint === s.fingerprint && had.lastGeneratedAt && Date.parse(v.generatedAt) < Date.parse(had.lastGeneratedAt)) {
+                    var r = coded('SOURCE_REFUSED', 'the repository is from ' + v.generatedAt + ', older than the one already accepted (' + had.lastGeneratedAt + '): refused as a rollback'); r.reason = 'rollback'; return cb(r);
+                }
+            }
+            v.vouched = vouched;
+            cb(null, s, v, had);
+        });
+    }
+    if (!moved) return go(null);
+    withCatalog(function (err, cat) {
+        if (err) return cb(coded('SOURCE_REFUSED', 'the official catalog did not load, so it cannot vouch for this source: ' + err.message));
+        var pkgs = movedPackages(cat, s);
+        if (!pkgs.length) return cb(coded('NOT_MOVED', 'the official catalog names no app that moved to this repository with this key'));
+        go(pkgs);
+    });
+}
+// The package ids the official catalog says moved to source s (same URL and key).
+function movedPackages(cat, s) {
+    var out = [], m = (cat && cat.moved) || {};
+    for (var pkg in m) if (m.hasOwnProperty(pkg) && m[pkg].url === s.url && m[pkg].fingerprint === s.fingerprint) out.push(pkg);
+    return out;
+}
+function describe(s, v, had) {
+    var r = v.repository;
+    return { url: s.url, repositoryId: s.repositoryId, fingerprint: s.fingerprint, domain: repos.hostOf(s.url), name: r.name, maintainer: r.maintainer, description: r.description || '', homepage: r.homepage || '',
+             generatedAt: v.generatedAt, apps: v.manifest.providers.length, files: Object.keys(v.index).length, known: !!(had && had.enabled !== false), keyChanged: !!(had && had.fingerprint !== s.fingerprint),
+             movedFrom: v.vouched || null };
+}
+// The package ids a verified repository lists.
+function packagesIn(v) {
+    var out = {};
+    v.manifest.providers.forEach(function (p) { p.releases.forEach(function (r) { r.assets.forEach(function (a) { if (a.package_id) out[a.package_id] = true; }); }); });
+    return out;
+}
+function addSource(b, cb) {
+    checkSource(b, function (err, s, v, had) {
+        if (err) { log('sources: refused ' + (b && b.url) + ': ' + err.message); return cb(err); }
+        var at = new Date().toISOString();
+        s.publicKeyPem = v.publicKeyPem; s.name = v.repository.name; s.maintainer = v.repository.maintainer;
+        s.lastGeneratedAt = had && had.lastGeneratedAt && Date.parse(had.lastGeneratedAt) > Date.parse(v.generatedAt) ? had.lastGeneratedAt : v.generatedAt;
+        s.lastOkAt = at; s.addedAt = had && had.addedAt || at; s.enabled = true;
+        if (had) SOURCES[SOURCES.indexOf(had)] = s; else SOURCES.push(s);
+        SOURCE_STATE[s.repositoryId] = { at: Date.now(), verified: v };
+        saveSources();
+        log('sources: ' + (had ? (had.fingerprint !== s.fingerprint ? 'updated (new key) ' : 'updated ') : 'added ') + s.name + ' (' + s.repositoryId + ', ' + repos.hostOf(s.url) + ', key ' + s.fingerprint.slice(0, 16) + '…), '
+            + (v.vouched ? 'named by the official catalog as where ' + v.vouched.join(', ') + ' moved, ' : '') + 'confirmed on the TV; ' + Object.keys(v.index).length + ' files');
+        // Moved apps (#82): their updates come from the new repository from now on, for each package the
+        // official catalog says moved there, that it lists, and that came from the official catalog.
+        var adopted = [];
+        if (v.vouched) {
+            var listed = packagesIn(v), m = sourceOfPackage();
+            v.vouched.forEach(function (pkg) {
+                if (!listed[pkg] || (m[pkg] && m[pkg] !== 'official')) return;
+                rememberSource(pkg, s.repositoryId); adopted.push(pkg);
+            });
+            if (adopted.length) log('sources: updates of ' + adopted.join(', ') + ' come from ' + s.name + ' now (moved there, says the official catalog)');
+        }
+        var d = describe(s, v, had); d.adopted = adopted;
+        cb(null, d);
+    });
+}
+function pageToken(b) { return String((b && b.token) || '') === UPLOAD_TOKEN; }
+
 
 // The signing certificates a head hands over (see #844): author/distributor key+cert as PEM (not
 // a .p12: Node has no PKCS#12 parser), every profile the head holds since #44 (certs.js has the
@@ -833,7 +1132,8 @@ http.createServer(function (req, res) {
     if (!fromThisTv(req)) { cors(res, 403, 'text/plain'); return res.end('only this TV may use TV-Store'); }
     if (route === '/ping') return json(res, 200, { ok: true, service: 'tv-store', ownIp: ownIp(), logUrl: 'http://' + ownIp() + ':' + PORT + '/log.txt', signerReady: signer.ready, certReady: haveCerts(),
         certCount: haveCerts() ? loadCerts().certificates.length : 0, certNames: certs.names(loadCerts()), certificates: certs.summary(loadCerts()),
-        certFile: CERT_FILE, certError: CERT_ERROR, node: process.version, verbose: VERBOSE, relay: relayStatus(), installer: installerStatus(), remembered: rememberedLevels(), selfUpdate: SELF_UPDATE });
+        certFile: CERT_FILE, certError: CERT_ERROR, node: process.version, verbose: VERBOSE, relay: relayStatus(), installer: installerStatus(), remembered: rememberedLevels(), selfUpdate: SELF_UPDATE,
+        sources: SOURCES.map(publicSource), sourceOf: sourceOfPackage() });
     // The page has shown how the last self-update went (#41); { version } is what runs now.
     if (route === '/selfupdate/ack' && req.method === 'POST') return body(req, function (err, b) {
         var running = !err && b && typeof b.version === 'string' ? b.version : '';
@@ -860,6 +1160,42 @@ http.createServer(function (req, res) {
     });
     var iconHex = /^\/icon\/([0-9a-fA-F]{64})$/.exec(route);
     if (iconHex && req.method === 'GET') return icons.serve(iconHex[1].toLowerCase(), res);
+    // Independent repositories (#82). Reading is open to this TV; a change needs the page's token,
+    // like an upload, since other apps on the TV reach this port too.
+    if (route === '/sources' && req.method === 'GET') return json(res, 200, { ok: true, sources: SOURCES.map(publicSource) });
+    // Every source, in the order added; the enabled ones loaded and with their manifest when it verified.
+    if (route === '/sources/catalog') return withSources(/fresh=1/.test(url.parse(req.url).query || ''), function (list) {
+        json(res, 200, { ok: true, sources: SOURCES.map(function (s) {
+            var r = list.filter(function (x) { return x.source === s; })[0] || {}, p = publicSource(s);
+            p.error = r.error ? r.error.message : null; p.reason = r.error ? r.error.reason || null : null;
+            p.manifest = r.verified ? r.verified.manifest : null;
+            return p;
+        }) });
+    });
+    if (route === '/sources/check' && req.method === 'POST') return body(req, function (err, b) {
+        if (err) return json(res, 400, { ok: false, error: 'need { url, repositoryId, fingerprint }' });
+        checkSource(b, function (err, s, v, had) { if (err) return json(res, 200, { ok: false, error: err.message, code: err.code, reason: err.reason || null }); json(res, 200, { ok: true, source: describe(s, v, had) }); });
+    });
+    if (route === '/sources/add' && req.method === 'POST') return body(req, function (err, b) {
+        if (err) return json(res, 400, { ok: false, error: 'need { url, repositoryId, fingerprint, token }' });
+        if (!pageToken(b)) { log('sources: refused an add without the token'); return json(res, 403, { ok: false, error: 'only the TV-Store screen may add a source', code: 'NO_TOKEN' }); }
+        addSource(b, function (err, d) { if (err) return json(res, 200, { ok: false, error: err.message, code: err.code, reason: err.reason || null }); json(res, 200, { ok: true, source: d, sources: SOURCES.map(publicSource), sourceOf: sourceOfPackage() }); });
+    });
+    if ((route === '/sources/remove' || route === '/sources/enable') && req.method === 'POST') return body(req, function (err, b) {
+        var s = !err && b ? sourceById(String(b.repositoryId || '')) : null;
+        if (!s) return json(res, 400, { ok: false, error: 'no source with that repositoryId on this TV' });
+        if (!pageToken(b)) return json(res, 403, { ok: false, error: 'only the TV-Store screen may change the sources', code: 'NO_TOKEN' });
+        if (route === '/sources/remove') {
+            SOURCES.splice(SOURCES.indexOf(s), 1); delete SOURCE_STATE[s.repositoryId];
+            log('sources: removed ' + (s.name || s.repositoryId) + ' (' + s.repositoryId + ') on the TV; apps installed from it stay, without updates');
+        } else {
+            s.enabled = b.enabled !== false;
+            if (!s.enabled) delete SOURCE_STATE[s.repositoryId];
+            log('sources: ' + (s.name || s.repositoryId) + ' turned ' + (s.enabled ? 'on' : 'off') + ' on the TV');
+        }
+        saveSources();
+        json(res, 200, { ok: true, sources: SOURCES.map(publicSource) });
+    });
     if (route === '/catalog') return withCatalog(function (err, cat) { if (err) { log('catalog: failed: ' + err.message); return json(res, 502, { ok: false, error: err.message }); } cors(res, 200, 'application/json'); res.end(cat.payload); });
     if (route === '/cert' && req.method === 'POST') return body(req, function (err, b) {
         var incoming = err ? [] : certs.normalize(b);

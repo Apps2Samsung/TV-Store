@@ -124,7 +124,7 @@ SdbClient.prototype.write = function (ch, payload, cb) {
 SdbClient.prototype.close = function (ch) { try { this._send(CMD.CLSE, ch.localId, ch.remoteId); } catch (e) {} delete this._channels[ch.localId]; };
 SdbClient.prototype.end = function () { try { this._sock.destroy(); } catch (e) {} };
 
-// shell:<command> — collect all output, then callback.
+// shell:<command>: collect all output, then callback.
 SdbClient.prototype.shell = function (command, cb) {
     var out = [], finished = false;
     function fin(err) { if (finished) return; finished = true; cb(err, Buffer.concat(out).toString('utf8')); }

@@ -2,7 +2,8 @@
 
 The Apps2Samsung catalog on the TV itself. Browse with the remote, press OK, and the app installs
 as a real Tizen package, straight into the Apps row. No PC or phone in the loop after a one-time
-setup.
+setup. Next to the official catalog, TV-Store also lists apps from signed
+[independent repositories](#independent-repositories-sources) that you add in Apps2Samsung.
 
 ![Home](docs/design/C1-home.png)
 
@@ -98,7 +99,8 @@ A Samsung TV only installs sideloaded packages through its developer connection 
 same door Apps2Samsung uses from a PC. TV-Store is a web app with a small background service that
 acts as the TV's own PC:
 
-1. downloads the package from the catalog and checks it against the SHA-256 the catalog gives it,
+1. downloads the package from the catalog (or from an [independent repository](#independent-repositories-sources)
+   you added) and checks it against the SHA-256 that catalog gives it,
 2. signs it on the TV with your certificate (the same signatures Apps2Samsung makes),
 3. pushes it to the TV's own `sdbd` and has that install it (or, with the Settings switch **Try
    the TV's own installer** on, hands it to `wascmd` on the TV itself first, #57 below).
@@ -193,6 +195,142 @@ network like the log; the install is not: only the TV-Store screen can start it,
 service writes into the app's private data folder at every start, where no other app on the TV
 can read it. The TV must be armed first.
 
+## Independent repositories (sources)
+
+Developers can publish their own **signed repository** of Tizen apps, Cydia-style, without going
+through the official catalog (#82, part of
+[tizen-community-packages#208](https://github.com/Apps2Samsung/tizen-community-packages/issues/208)).
+The format, the signature, the key fingerprint and the rules every client applies are specified in
+[tizen-community-packages: docs/repositories.md](https://github.com/Apps2Samsung/tizen-community-packages/blob/main/docs/repositories.md),
+with a ready-to-copy publisher template next to it. TV-Store lists those apps next to the official
+catalog's and installs them the same way: downloaded, checked against their hash, signed with your
+own certificate, installed.
+
+### Adding one
+
+You add a repository in **Apps2Samsung** on a phone or PC, which shows its name, address and key
+fingerprint and asks you to approve them (Apps2Samsung#1018). Then, in the TV's **Toolbox**, **Send
+sources to TV** hands the approved repositories to TV-Store, over the same connection arming uses.
+TV-Store checks each one and asks on screen before it keeps it: name, maintainer, address, how many
+apps, and the full key fingerprint (64 hex characters, compare it with what Apps2Samsung showed),
+then **Add source** or **Don't add**. A source that does not check out is shown with why, and only
+**Close** is offered.
+
+There is no way to type a repository address on the TV. The TV cannot validate HTTPS, so it has no
+safe way to decide on a key by itself: a key fetched over an unchecked connection could be anyone's.
+So what the TV trusts is the **fingerprint**, and a fingerprint reaches the TV only from somewhere
+that vouches for it: Apps2Samsung, where the user approved it, or the signed official catalog (a
+moved app, below). The key itself may come along (`publicKeyPem`); when it does not, the service
+fetches `repository.pem` next to the manifest and keeps it only when its SHA-256 is that
+fingerprint, which no swapped file can be. Either way the key is pinned on the TV from then on.
+Fetching is the normal path, since the official catalog's `moved_to` carries a fingerprint and no
+key. A publisher
+who changes keys needs a new approval in Apps2Samsung and a new **Send sources to TV**; until then
+the source stops loading, because its signature no longer matches the pinned key, and Settings says
+so.
+
+### What the TV checks
+
+Every time it loads a repository (cached for 10 minutes, like the official catalog), the service
+refuses it whole when any rule of the spec fails, with the spec's reason code in the log and in
+Settings: larger than 8 MiB (`size`); no signature line (`no-signature`); a key that is not RSA or
+has fewer than 3072 bits (`key`); a key other than the approved one (`fingerprint`); a bad signature
+(`signature`); not JSON (`json`); a `schemaVersion` this TV-Store does not know (`schema-version`);
+anything the schema does not allow, such as an `http://` download, a bad `digest`, or an icon
+without `icon_digest` (`schema`); a URL at an IP address, `localhost`, `*.local` or with a user
+name in it (`url`); a manifest that calls itself another repository than the approved one
+(`repository-id`); dated more than an hour ahead (`future`); more than 7 days old (`expired`);
+older than the last one accepted from it (`rollback`); and two providers with the same id, or one
+`package_id` and version from two providers (`duplicate`). The fetch itself gives up after 60
+seconds, 5 redirects or 8 MiB. `test/repos.test.js` runs every test vector of the spec through
+this.
+
+A file installs only when its bytes hash to its `digest`, and an icon shows only when it hashes to
+its `icon_digest`, exactly as for the official catalog. A repository's own signing certificate
+plays no part: TV-Store signs every package with your certificate, as always.
+
+### On the screen
+
+- Once the TV has a source besides the official catalog, every card says where the app comes from
+  (**Official** or the repository's name), the app sheet says "from …", and a **From** row of chips
+  under the categories filters the store by source. Without sources nothing changes.
+- An app from a repository says in its sheet that the repository's signature means the files come
+  from its publisher, not that Apps2Samsung reviewed them.
+- **An installed app belongs to the source it came from.** The service remembers that per package
+  (`.a2s-source-by-package.json`; a package it has no record for counts as the official catalog's,
+  as before). Its "Installed" and "Update" state, **On the TV** and **Update all** come only from
+  that source. Updates never jump to whichever source has the newest version.
+- **The same app from two sources** shows as two cards. The other source's card says the app on
+  the TV came from elsewhere, and its button reads **Install from *repository* instead**: pressing
+  it is the explicit choice that moves the app, and from then on its updates come from there. The
+  service refuses such an install (`SOURCE_SWITCH`) without that choice, whatever asks for it.
+- A source that does not load says why under **Settings, Sources** and drops out. The official
+  catalog and the other sources carry on. Nothing installs from a source that did not verify.
+- `required_version` and the "Needs Tizen X" badge, Partner certificates (`cert_level`), 18+
+  (`adult`) and root apps (`flags: ["root"]`) work for repository apps as for official ones.
+
+### Apps that moved out of the official catalog
+
+When an app leaves the official catalog for its developer's own repository, its manifest in
+tizen-community-packages gets `moved_to: { url, fingerprint }` for a notice period (see
+[Moving an app out of the official catalog](https://github.com/Apps2Samsung/tizen-community-packages/blob/main/docs/repositories.md#moving-an-app-out-of-the-official-catalog)).
+TV-Store reads it from the signed catalog:
+
+- While such an app is on the TV and still updates from the official catalog, the store shows a
+  banner: "*App* has moved to the developer's own repository at *domain*", with **Add source** and
+  **Not now** (remembered per repository). The app sheet says the same with the same button, and On
+  the TV points there.
+- **Add source** opens the usual confirmation, marked "Named by the official catalog". The signed
+  catalog vouches for the key here instead of an approval in Apps2Samsung, and the repository id is
+  read from the manifest (`moved_to` carries none). The service checks that the URL and fingerprint
+  are what the official catalog names for some package (`NOT_MOVED` otherwise).
+- Once added, every installed app the official catalog says moved there, that the repository
+  lists, and that came from the official catalog takes its updates from the repository from then
+  on, without a reinstall. When the repository is on the TV already, the button reads **Take updates
+  from there** and does only that.
+
+### Settings, Sources
+
+Settings lists **Official** (always there, cannot be removed) and every repository on the TV: its
+name, maintainer, address, the start of its key fingerprint, and when it last verified (with its app
+count) or why it does not load now. OK on a repository offers **Turn off** / **Turn on** (off: its
+apps are not shown and nothing installs from it) and **Remove**, which asks first. A removed
+repository's apps stay on the TV, but get no updates from anywhere until Apps2Samsung sends the
+source again. Adding sources happens only through Apps2Samsung.
+
+### For Apps2Samsung (Send sources to TV)
+
+Over the web inspector, like arming (`A2SStore.setCertificate`):
+
+```js
+A2SStore.addSources([
+  { url: 'https://owner.github.io/tizen/repository.json.signed',   // https, a public host name
+    repositoryId: 'io.github.owner.tizen',                          // repository.id, pinned
+    fingerprint: '<64 hex: SHA-256 of the DER public key>',         // as the user approved it
+    name: "Owner's Tizen apps",                                     // optional, shown until checked
+    publicKeyPem: '-----BEGIN PUBLIC KEY-----…' }                   // optional; must match the fingerprint (saves a fetch)
+])
+// -> Promise of { ok: true, results: [{ url, repositoryId, added: true|false, name?, error? }] }
+```
+
+The promise resolves once the person at the TV has answered every source (`added: false` with
+`error: 'declined on the TV'`, or why the source did not check out). `A2SStore.status()` (the
+service's `/ping`) lists the sources on the TV (`sources: [{ url, repositoryId, fingerprint, name,
+maintainer, domain, enabled, lastGeneratedAt, lastOkAt, lastError, lastErrorReason, ok, apps }]`,
+never the key) and where each installed package came from (`sourceOf: { packageId: 'official' |
+repositoryId }`). Sending a source the TV already has again is fine: with the same key it is turned
+on again and keeps its rollback state; with a new key the TV says the publisher changed keys.
+
+The service's own routes, for this TV only: `GET /sources`, `GET /sources/catalog[?fresh=1]` (every
+source with its verified manifest or its error), `POST /sources/check` (verify without keeping),
+and `POST /sources/add`, `/sources/enable { repositoryId, enabled }`, `/sources/remove {
+repositoryId }`, which need the page's token, like an upload, because every app on the TV can reach
+port 8077. `POST /install` takes `source` (`official` when left out) and `switchSource: true`.
+`POST /sources/check` and `/sources/add` take `{ url, fingerprint, moved: true }` without a
+`repositoryId` for a source the official catalog names in `moved_to`; `/sources/add` then answers
+which packages it moved over (`source.adopted`) and the new `sourceOf`. The
+sources are kept in `.a2s-sources.json` in the service's data folder.
+
 ## Settings
 
 Press **▲** at the top of the list to reach **Settings**. The switches are remembered on the TV:
@@ -260,6 +398,9 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
   Apps2Samsung installed under another package id. Results on GitHub issue #41 help, above all
   from Tizen 9 sets, where 0.3.5 failed.
 
+Below the switches, **Signing certificates** (above) and **Sources**
+([independent repositories](#settings-sources)) list what the TV holds.
+
 The header counts what the switches hide ("12 apps · 3 hidden").
 
 ## Pins, search by developer
@@ -288,6 +429,7 @@ The header counts what the switches hide ("12 apps · 3 hidden").
 - `tizen-app/service/wascmd.js`: the TV's own installer run by the service, without sdbd (#57)
 - `tizen-app/service/signer.js`: the package signer
 - `tizen-app/service/catalog.js` + `catalog-key.js`: the signed catalog check and its public key
+- `tizen-app/service/repos.js`: independent repositories (#82): every rule of the spec with its reason code, key size and fingerprint from the DER, the sources Apps2Samsung hands over
 - `tizen-app/service/icons.js`: app icons, fetched like a package, kept only with the catalog's hash, cached, served at `/icon/<sha256>` (#66)
 - `tizen-app/service/compat.js`: buffers that work on the TV's Node 4.4.3
 - `tizen-app/service/manifest.js`: the ids, the required Tizen version and the privileges a package carries in its own manifest
@@ -295,7 +437,7 @@ The header counts what the switches hide ("12 apps · 3 hidden").
 - `tizen-app/service/certs.js`: the signing profiles handed over, their Public or Partner level, which one each package took, the order to try
 - `tizen-app/js/app.js`: the UI, and `window.A2SStore`, which Apps2Samsung calls to arm the TV
 - `tizen-app/js/qrcode.js`: QR codes for the log address and the Ko-fi link ([qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 1.4.4, MIT)
-- `test/`: a fake `sdbd` plus signer and transport tests
+- `test/`: a fake `sdbd` plus signer and transport tests; `test/fixtures/repositories/` holds the spec's test vectors (copied from tizen-community-packages `spec/fixtures/`, test-only keys)
 - `docs/design/`: the screens above
 
 ## Tizen 9 and 10
@@ -319,6 +461,8 @@ node test/sign.test.js      # the signer, with a certificate chain
 node --expose-gc test/stream-sign.test.js  # the file-to-file signer on a 24 MB package
 node test/bundle.test.js    # the bundled service starts however the platform loads it
 node test/catalog.test.js   # the signed catalog: signature, age, hashes, icons
+node test/repos.test.js     # independent repositories (#82): every spec test vector for its reason, repository id, swapped key, URL rules
+node test/sources.test.js   # sources in the service: check and add with the token, a broken source next to a working one, install per source, no silent switch, rollback, off and remove, moved_to vouched by the official catalog, kept across a restart
 node test/icons.test.js     # app icons: served only with the catalog's hash, cached and hashed again, one download per hash, pruned
 node test/manifest.test.js  # the ids and privileges of a .wgt / .tpk from its manifest
 node test/upload.test.js    # send a file to the service, see it wait, token gate, discard
@@ -348,6 +492,7 @@ and the release workflow then replaces that asset with the one it builds from th
 | Signing on the TV | done, identical output to the Apps2Samsung signer |
 | Arming from Apps2Samsung (phone, PC, CLI) | done |
 | The screens above | built (0.3.4); pins, developer search, your own .wgt or .tpk (0.3.10); finds itself under a renamed package id and sends you to Apps2Samsung to update it (0.3.11); Public or Partner certificate per app (0.3.13); the sdb relay switch (0.3.14); the relay's failure reasons under it (0.3.15); app icons from the signed catalog, hash-checked and cached by the service, once the Apps2Samsung snapshot publishes them (0.3.19, #66); Settings scrolls with the focus now that it is taller than the screen (0.3.20, #74); every signing certificate listed in Settings with its level, fingerprint, expiry and whether it covers this TV, a default to pick and a profile to remove (0.3.21, #78) |
+| Independent repositories (#82) | built (0.3.21): verified per source against the spec's test vectors, sources from Apps2Samsung confirmed on the TV, every app labelled with its source, updates only from it; proven against local HTTPS stand-ins and a fake `sdbd`. Waits for Apps2Samsung's **Send sources to TV** (Apps2Samsung#1018) and a real repository for the test on a TV |
 | TV-Store updating itself (#41) | dropped in 0.3.11; back as an experiment behind a Settings switch, off by default, through `sdbd` with a marker that tells the next start whether it landed (0.3.21). Apps2Samsung#1005 saw an update of TV-Store land on a Tizen 5.0 set after the service that sent it was stopped; untested from the TV itself, Tizen 9 above all |
 | First real install from the TV | done, 2019 Tizen 5.0 set (0.3.4) |
 | Tizen 3.0 and 4.0 sets (2017, 2018) | untested |

@@ -45,6 +45,20 @@
  * the install. Only this page can: it sends the token the service writes into the package's
  * private folder (wgt-private), which no other app on the TV can read.
  *
+ * Independent repositories (#82): signed repositories a developer publishes, added in Apps2Samsung
+ * (which can validate HTTPS; the TV cannot) and handed over with Send sources to TV, which calls
+ * window.A2SStore.addSources here. Each one is checked by the service and confirmed on this screen
+ * (name, domain, key fingerprint) before it is kept. Their apps sit next to the official catalog's
+ * with the source on every card and sheet once there is more than one source, and a From row of
+ * chips filters by source. An installed app belongs to the source it came from (the service
+ * remembers it per package; none remembered is the official catalog): its updates come only from
+ * there, and the same package from another source is a separate card whose install says it moves
+ * the app. Settings, Sources lists them with their state, turns them off or removes them.
+ * An app the official catalog says moved to its developer's own repository (moved_to: { url,
+ * fingerprint }) gets a banner while it is installed, and its sheet a notice, both with Add source:
+ * the same confirmation, with the key vouched for by the signed official catalog instead of
+ * Apps2Samsung, after which the app's updates come from that repository.
+ *
  * Navigation is spatial: every focusable element carries the class `f`, and an arrow key moves to
  * the nearest one in that direction (inside the sheet while it is open). Scrolling follows the
  * focus: a row of cards sideways, the page and the variant list vertically. On the TV page, right
@@ -172,6 +186,12 @@
     var seenUpload = null;     // the id this page already asked about
     var uploadToken = null, uploadTokenError = null;
     var tried = [];            // what startService got from each address, for the error screen
+    var officialCat = null;    // the official catalog as the service verified it
+    var sources = [];          // the independent repositories (#82), from /sources/catalog: [{ repositoryId, name, ..., manifest | error }]
+    var srcFilter = 'all';     // 'all', 'official' or a repositoryId: the From chips
+    var offers = [];           // sources Apps2Samsung sent (A2SStore.addSources) still to confirm: [{ src, done }]
+    var offer = null;          // the one the sheet shows: { src, done, check, error, busy }
+    var srcSel = null, srcConfirm = false, srcBusy = false, srcError = null;   // Settings, Sources
 
     // ---- settings, remembered on the TV -------------------------------------------------------------
     var SETTINGS_KEY = 'a2s.store.settings';
@@ -365,6 +385,122 @@
         });
     }
 
+    // Settings, Sources (#82): the official catalog, always there, then every repository Apps2Samsung
+    // sent, with when it last verified or why it does not. OK on a repository offers Turn off / on
+    // and Remove (which asks first). Adding one only happens through Send sources to TV.
+    function whenOf(iso) {
+        var d = new Date(iso); if (!iso || isNaN(d.getTime())) return '';
+        return d.getDate() + ' ' + MONTHS[d.getMonth()] + ' ' + d.getHours() + ':' + (d.getMinutes() < 10 ? '0' : '') + d.getMinutes();
+    }
+    function fpShort(fp) { return String(fp || '').slice(0, 16).replace(/(.{4})(?=.)/g, '$1 '); }
+    function sourcesBlock() {
+        var list = (ready && ready.sources) || [];
+        var official = catalogApps.filter(function (x) { return x.source === 'official'; }).length;
+        var h = '<div class="vhead"><span class="t">Sources</span><span class="h">' + (list.length ? (list.length + 1) + ' on this TV' : 'Only the official catalog') + '</span></div><div class="opts crts">'
+            + '<div class="opt crt"><div class="ot"><div class="ont">Official' + badge('b-mute', 'Always on') + '</div><div class="oh">' + esc('The Apps2Samsung catalog, ' + official + ' apps, signature checked. It cannot be removed.') + '</div></div></div>';
+        list.forEach(function (s) {
+            var sel = s.repositoryId === srcSel, full = null;
+            sources.forEach(function (t) { if (t.repositoryId === s.repositoryId) full = t; });
+            var err = full && full.error ? full.error : s.enabled !== false && !s.ok && s.lastError ? s.lastError : '';
+            var state = s.enabled === false ? { cls: '', text: 'Turned off: its apps are not shown, and nothing installs from it' }
+                : err ? { cls: ' bad', text: 'Not loading: ' + err + (s.lastOkAt ? ' (last good ' + whenOf(s.lastOkAt) + ')' : '') }
+                : { cls: '', text: 'Checked ' + whenOf(s.lastOkAt) + (s.apps != null ? ', ' + s.apps + (s.apps === 1 ? ' app' : ' apps') : '') + (s.lastGeneratedAt ? ', signed ' + whenOf(s.lastGeneratedAt) : '') };
+            h += '<div class="opt crt f' + (sel ? ' sel' : '') + '" tabindex="0" data-k="srcrow:' + esc(s.repositoryId) + '" data-srcrow="' + esc(s.repositoryId) + '"><div class="ot">'
+                + '<div class="ont">' + esc(s.name || s.repositoryId) + (s.enabled === false ? badge('b-mute', 'Off') : err ? badge('b-warn', 'Not loading') : '') + '</div>'
+                + '<div class="oh">' + esc((s.maintainer ? 'by ' + s.maintainer + ' · ' : '') + s.domain + ' · key ') + '<span class="fp">' + esc(fpShort(s.fingerprint)) + '</span></div>'
+                + '<div class="oh' + state.cls + '">' + esc(state.text) + '</div></div></div>';
+            if (!sel) return;
+            if (srcConfirm) {
+                h += '<div class="crtact"><div class="notice">' + esc('Remove ‘' + (s.name || s.repositoryId) + '’ from this TV? Apps installed from it stay on the TV, but get no updates until Apps2Samsung sends this source again.') + '</div>'
+                    + '<div class="btns"><button class="btn danger grow f" data-k="srcremoveyes" data-act="srcremoveyes"' + (srcBusy ? ' disabled' : '') + '>Remove</button><button class="btn f" data-k="srcremoveno" data-act="srcremoveno">Cancel</button></div></div>';
+            } else {
+                h += '<div class="crtact"><div class="btns"><button class="btn grow f" data-k="srctoggle" data-act="srctoggle"' + (srcBusy ? ' disabled' : '') + '>' + (s.enabled === false ? 'Turn on' : 'Turn off') + '</button>'
+                    + '<button class="btn grow f" data-k="srcremove" data-act="srcremove"' + (srcBusy ? ' disabled' : '') + '>Remove</button></div></div>';
+            }
+        });
+        h += '</div>';
+        if (srcError) h += '<div class="notice bad">' + esc(srcError) + '</div>';
+        h += '<div class="notice info">' + esc('More sources come from Apps2Samsung on a phone or PC: add a signed repository there, then press Send sources to TV in this TV’s Toolbox. TV-Store asks here before it adds one. Every app shows which source it comes from, and updates only from that source.') + '</div>';
+        return h;
+    }
+    function selectSource(id) { srcSel = srcSel === id ? null : id; srcConfirm = false; srcError = null; renderSheet(); focusKey('srcrow:' + id); }
+    // A change to the sources, with the page's token (only this screen may make one).
+    function sourceAction(route, extra, then) {
+        if (!srcSel || srcBusy) return;
+        var id = srcSel;
+        srcBusy = true; srcError = null; renderSheet();
+        withUploadToken(function () {
+            var b = { repositoryId: id, token: uploadToken };
+            for (var k in extra) if (extra.hasOwnProperty(k)) b[k] = extra[k];
+            xhr('POST', route, b, function (err, res) {
+                if (err || !res || !res.ok) { srcBusy = false; srcError = 'Could not change the sources: ' + (err ? err.message : (res && res.error) || 'no answer from the service'); renderSheet(); focusKey('srcrow:' + id); return; }
+                if (ready) ready.sources = res.sources || [];
+                loadSources(false, function () {
+                    srcBusy = false; srcConfirm = false;
+                    rebuild(); renderPage(); then(id);
+                });
+            });
+        });
+    }
+
+    // Send sources to TV (#82): Apps2Samsung calls A2SStore.addSources, and each source waits here
+    // until the person at the TV has seen what the service verified (name, maintainer, domain, the
+    // key's fingerprint, how many apps) and said yes or no.
+    function offerSource(src, done) { offers.push({ src: src, done: done }); nextOffer(); }
+    function nextOffer() {
+        if (offer || !offers.length || loading || problem) return;
+        if (sheet && (sheet.mode === 'job' && job && job.running || sheet.mode === 'upload')) return;   // the 3 s tick asks again
+        offer = offers.shift();
+        offer.check = null; offer.error = null; offer.busy = false;
+        openSheet({ mode: 'source' });
+        xhr('POST', '/sources/check', offer.src, function (err, res) {
+            if (!offer || !sheet || sheet.mode !== 'source') return;
+            if (err || !res || !res.ok) offer.error = err ? err.message : (res && res.error) || 'no answer from the service';
+            else offer.check = res.source;
+            renderSheet(true);
+        }, null, 120000);
+    }
+    function sourceHtml() {
+        var o = offer, src = (o && o.src) || {}, c = o && o.check;
+        var h = '<div class="shd"><div style="min-width:0"><div class="nm">' + esc(c ? c.name : src.moved ? 'Where ' + (src.name || 'the app') + ' moved' : src.name || 'A new source') + '</div><div class="mt">' + esc((src.moved ? 'Named by the official catalog' : 'Sent from Apps2Samsung') + (c ? ' · ' + c.domain : '')) + '</div></div></div>';
+        if (!c && !o.error) return h + '<div class="waiting" style="margin-top:22px"><span class="spin"></span>Checking the source and its signature…</div>'
+            + '<div class="sfoot"><div class="btns"><button class="btn grow f" data-k="srcno" data-act="srcno" data-default>Don’t add</button></div></div>';
+        if (o.error) return h + '<div class="notice bad">' + esc('This source cannot be added: ' + o.error) + '</div>'
+            + '<div class="sfoot"><div class="btns"><button class="btn grow f" data-k="srcno" data-act="srcno" data-default>Close</button></div></div>';
+        if (c.description) h += '<div class="sdesc">' + esc(c.description) + '</div>';
+        h += '<div class="table kv"><div class="trow"><span class="k">Maintainer</span><span class="v">' + esc(c.maintainer) + '</span></div>'
+            + '<div class="trow"><span class="k">Address</span><span class="v">' + esc(c.domain) + '</span></div>'
+            + '<div class="trow"><span class="k">Apps</span><span class="v">' + esc(c.apps + (c.apps === 1 ? ' app' : ' apps') + ', signed ' + whenOf(c.generatedAt)) + '</span></div>'
+            + '<div class="trow fprow"><span class="k">Key fingerprint (SHA-256)</span><span class="fpbig">' + esc(c.fingerprint.slice(0, 32).replace(/(.{4})(?=.)/g, '$1 ')) + '<br>' + esc(c.fingerprint.slice(32).replace(/(.{4})(?=.)/g, '$1 ')) + '</span></div></div>';
+        if (c.keyChanged) h += '<div class="notice bad">' + esc('This source is on the TV already, with another key. The publisher changed keys: add it only if Apps2Samsung showed you the same new key.') + '</div>';
+        else if (c.known && !c.movedFrom) h += '<div class="notice info">' + esc('This source is on the TV already. Adding it again turns it on and keeps its apps where they are.') + '</div>';
+        if (c.movedFrom) h += '<div class="notice info">' + esc('The official catalog says ' + (c.movedFrom.length === 1 ? 'an app on its list moved' : c.movedFrom.length + ' apps on its list moved') + ' here, and names this key, so the key is vouched for by the signed catalog. Apps you have from there take their updates from this repository once it is added.') + '</div>'
+            + '<div class="notice">' + esc('A valid signature means the apps come from this publisher. Apps2Samsung does not review independent repositories.') + '</div>';
+        else h += '<div class="notice">' + esc('Check that the key matches the one Apps2Samsung showed. A valid signature means the apps come from this publisher. Apps2Samsung has not reviewed them.') + '</div>';
+        h += '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="srcyes" data-act="srcyes"' + (o.busy ? ' disabled' : '') + '>' + (o.busy ? 'Adding…' : c.known && c.movedFrom ? 'Take updates from there' : c.known ? 'Add again' : 'Add source') + '</button>'
+            + '<button class="btn f" data-k="srcno" data-act="srcno" data-default>Don’t add</button></div><div class="hint">RETURN does not add it.</div></div>';
+        return h;
+    }
+    function answerOffer(yes) {
+        var o = offer;
+        if (!o || o.busy) return;
+        function finish(r) {
+            offer = null; o.done(r);
+            closeSheet(function () { renderPage(); focusFirst(); nextOffer(); });
+        }
+        if (!yes || !o.check) return finish({ url: o.src.url, repositoryId: o.src.repositoryId, added: false, error: o.error || 'declined on the TV' });
+        o.busy = true; renderSheet();
+        withUploadToken(function () {
+            var b = {}; for (var k in o.src) if (o.src.hasOwnProperty(k)) b[k] = o.src[k];
+            b.token = uploadToken;
+            xhr('POST', '/sources/add', b, function (err, res) {
+                if (err || !res || !res.ok) { o.busy = false; o.check = null; o.error = err ? err.message : (res && res.error) || 'no answer from the service'; renderSheet(true); return; }
+                if (ready) { ready.sources = res.sources || []; if (res.sourceOf) ready.sourceOf = res.sourceOf; }
+                loadSources(false, function () { rebuild(); finish({ url: o.src.url, repositoryId: o.src.repositoryId, added: true, name: res.source && res.source.name }); });
+            });
+        });
+    }
+
     // A QR code as an <img> (qrcode.js, GIF data URL: old TV engines show that fine), on a white tile.
     function qr(text, px) {
         try {
@@ -545,12 +681,14 @@
         return m ? m[1] : '';
     }
 
-    function build(cat) {
-        var out = [], byKey = {};
+    // src: { id, name } of an independent repository (#82); none for the official catalog.
+    function build(cat, src) {
+        var out = [], byKey = {}, sid = src ? src.id : 'official';
         function app(key, name, category, description, author) {
+            if (src) key = 'r:' + src.id + ':' + key;
             if (!byKey[key]) {
                 byKey[key] = { key: key, name: name, category: CATEGORY_NAMES[category] ? category : 'other', description: description || '', author: author || '',
-                               variants: [], needsHead: null, adult: false, root: false, partner: false, icon: '' };
+                               variants: [], needsHead: null, adult: false, root: false, partner: false, icon: '', source: sid, sourceName: src ? src.name : 'Official' };
                 out.push(byKey[key]);
             }
             return byKey[key];
@@ -567,6 +705,8 @@
                     var a = byFile[e.file]; if (!a) return;
                     var v = variant(e.variant, e.file, a.browser_download_url, e.version || a.package_version, e.app_id || a.app_id, e.package_id || a.package_id, e.required_version || a.required_version, e.cert_level || p.cert_level, iconOf(a));
                     var x = app('c:' + (e.group || e.name), e.group || e.name, e.category, e.description, ownerOf(e.repo));
+                    var mt = e.moved_to;
+                    if (!src && mt && /^https:\/\/[^\s\/@:]+(?::\d+)?\/\S*[.]signed$/.test(mt.url || '') && /^[0-9a-f]{64}$/.test(mt.fingerprint || '')) v.movedTo = x.movedTo = { url: mt.url, fingerprint: mt.fingerprint };
                     x.variants.push(v);
                     if (v.icon && !x.icon) x.icon = v.icon;
                     if (v.certLevel === 'partner') x.partner = true;
@@ -581,11 +721,16 @@
                 return;
             }
 
-            var info = PROVIDERS[p.id] || { name: p.id, category: 'other', description: '' };
-            var x = app('p:' + p.id, info.name, info.category, info.description, ownerOf(p.url));
+            // A repository's provider says what it is itself; the official ones are named here.
+            var info = src ? { name: p.displayName || (p.buildInfo && p.buildInfo.name) || p.id, category: p.category, description: (p.buildInfo && p.buildInfo.description) || '' }
+                : PROVIDERS[p.id] || { name: p.id, category: 'other', description: '' };
+            var x = app('p:' + p.id, info.name, info.category, info.description, ownerOf(p.source_url || p.url) || (src && src.maintainer) || '');
+            if (src && p.adult === true) x.adult = true;
+            if (src && (p.flags || []).indexOf('root') >= 0) x.root = true;
             assets.forEach(function (a) {
                 var v = variant(null, a.name, a.browser_download_url, a.package_version, a.app_id, a.package_id, a.required_version, p.cert_level, iconOf(a));
                 if (!a.digest) v.needsHead = NO_HASH;
+                else if (x.root) v.needsHead = 'gains root on the TV and needs Host PC IP changed afterwards';
                 x.variants.push(v);
                 if (v.icon && !x.icon) x.icon = v.icon;
                 if (v.certLevel === 'partner') x.partner = true;
@@ -599,16 +744,82 @@
             x.needsHead = all ? x.variants[0].needsHead : null;
             x.sort = x.name.toLowerCase();
         });
-        out.sort(function (a, b) {
+        return sortApps(out);
+    }
+    // By category, then name; the same app from two sources stays together, the official one first.
+    function sortApps(list) {
+        return list.sort(function (a, b) {
             var ca = CATEGORY_ORDER.indexOf(a.category), cb = CATEGORY_ORDER.indexOf(b.category);
             if (ca !== cb) return ca - cb;
-            return a.sort < b.sort ? -1 : a.sort > b.sort ? 1 : 0;
+            if (a.sort !== b.sort) return a.sort < b.sort ? -1 : 1;
+            return (a.source === 'official' ? 0 : 1) - (b.source === 'official' ? 0 : 1);
+        });
+    }
+    // Every app: the official catalog's and those of each repository that verified (#82).
+    function buildAll() {
+        var all = officialCat ? build(officialCat) : [];
+        sources.forEach(function (s) { if (s.manifest && s.enabled !== false) all = all.concat(build(s.manifest, { id: s.repositoryId, name: s.name, maintainer: s.maintainer })); });
+        return sortApps(all);
+    }
+    function rebuild() { catalogApps = buildAll(); apps = visible(catalogApps); claims = null; }
+    // The repositories, verified by the service; cb() when they are in, or when there are none.
+    function loadSources(fresh, cb) {
+        xhr('GET', '/sources/catalog' + (fresh ? '?fresh=1' : ''), null, function (err, res) {
+            if (!err && res && res.ok) {
+                sources = res.sources || [];
+                if (ready) ready.sources = sources.map(function (s) { var c = {}; for (var k in s) if (k !== 'manifest') c[k] = s[k]; return c; });
+            }
+            if (srcFilter !== 'all' && srcFilter !== 'official' && !sourceName(srcFilter, true)) srcFilter = 'all';
+            if (cb) cb();
+        }, null, 120000);
+    }
+    // Whether the TV has any source besides the official catalog: only then do cards say where an app comes from.
+    function sourcesOn() { return !!(ready && ready.sources && ready.sources.some(function (s) { return s.enabled !== false; })); }
+    function sourceName(id, strict) {
+        if (!id || id === 'official') return 'Official';
+        var list = (ready && ready.sources) || sources;
+        for (var i = 0; i < list.length; i++) if (list[i].repositoryId === id) return list[i].name || id;
+        return strict ? '' : id;
+    }
+    // The source an installed package came from, as the service remembers it; none is the official catalog.
+    function sourceOfPkg(pkg) { var m = ready && ready.sourceOf; return (m && m[pkg]) || 'official'; }
+    function srcBadge(x) { return sourcesOn() ? badge(x.source === 'official' ? 'b-mute' : 'b-src', x.sourceName || sourceName(x.source)) : ''; }
+    // The package of build v is on the TV, from another source than app x: that source's name, else ''.
+    // moved_to (#82): where an official app moved, and what is left to do about it: { url, fingerprint,
+    // domain, source (the repository when the TV has it), done (its updates come from there already) }.
+    function hostOf(u) { var m = /^https?:\/\/([^\/:?#]+)/i.exec(String(u || '')); return m ? m[1].toLowerCase() : ''; }
+    function movedInfo(x) {
+        if (!x || !x.movedTo || x.source !== 'official') return null;
+        var m = x.movedTo, src = null, v = x.variants[0];
+        ((ready && ready.sources) || []).forEach(function (t) { if (t.url === m.url && t.fingerprint === m.fingerprint && t.enabled !== false) src = t; });
+        return { url: m.url, fingerprint: m.fingerprint, domain: hostOf(m.url), source: src, done: !!(src && v.packageId && sourceOfPkg(v.packageId) === src.repositoryId) };
+    }
+    var MOVED_SEEN_KEY = 'a2s.tvstore.movedseen';
+    var movedSeen = (function () { try { var a = JSON.parse(window.localStorage.getItem(MOVED_SEEN_KEY)); return Array.isArray(a) ? a : []; } catch (e) { return []; } })();
+    // Installed official apps that moved and still update from the official catalog, by repository URL.
+    function movedGroups() {
+        var by = {}, out = [];
+        catalogApps.forEach(function (x) {
+            var m = movedInfo(x);
+            if (!m || m.done || !state(x).installed) return;
+            if (!by[m.url]) { by[m.url] = { url: m.url, fingerprint: m.fingerprint, domain: m.domain, source: m.source, apps: [] }; out.push(by[m.url]); }
+            by[m.url].apps.push(x);
         });
         return out;
+    }
+    function names(list) { var n = list.map(function (x) { return x.name; }); return n.length < 3 ? n.join(' and ') : n.slice(0, -1).join(', ') + ' and ' + n[n.length - 1]; }
+    function addMoved(url, fingerprint, label) {
+        offerSource({ url: url, fingerprint: fingerprint, moved: true, name: label }, function () {});
+    }
+    function heldElsewhere(x, v) {
+        if (!v || !v.packageId || !installed.hasOwnProperty(v.packageId)) return '';
+        var from = sourceOfPkg(v.packageId);
+        return from === x.source ? '' : from === 'official' ? 'the official catalog' : sourceName(from, true) || from + ' (a source no longer on this TV)';
     }
 
     function visible(all) {
         return all.filter(function (x) {
+            if (srcFilter !== 'all' && x.source !== srcFilter) return false;
             if (x.adult && !settings.showAdult) return false;
             if (x.needsHead && !settings.showNeedsHead) return false;
             return true;
@@ -636,7 +847,10 @@
             claims = {};
             Object.keys(installed).forEach(function (p) {
                 var first = null, exact = null;
+                // Only the source the package came from claims it (#82): its updates come from there.
+                var from = sourceOfPkg(p);
                 catalogApps.forEach(function (x) {
+                    if (x.source !== from) return;
                     x.variants.forEach(function (v) {
                         if (v.packageId !== p) return;
                         if (!first) first = x;
@@ -693,7 +907,7 @@
     function self() {
         var info = selfInfo(), pkg = info ? info.packageId : '', app = info && info.id ? String(info.id).split('.').pop() : '', byName = null;
         for (var i = 0; i < catalogApps.length; i++)
-            for (var j = 0; j < catalogApps[i].variants.length; j++) {
+            for (var j = 0; j < catalogApps[i].variants.length && catalogApps[i].source === 'official'; j++) {
                 var v = catalogApps[i].variants[j];
                 if (pkg && v.packageId === pkg) return catalogApps[i];
                 if (app && v.appId && String(v.appId).split('.').pop() === app && /TV-Store/i.test(catalogApps[i].name)) byName = byName || catalogApps[i];
@@ -753,7 +967,7 @@
     function badge(cls, text) { return '<span class="badge ' + cls + '">' + esc(text) + '</span>'; }
     function subline(x) { return x.variants.length > 1 ? x.variants.length + ' variants' : (x.variants[0].version ? 'v' + x.variants[0].version : x.variants[0].file); }
     function cardBadges(x) {
-        var st = state(x), b = '';
+        var st = state(x), b = srcBadge(x);
         if (st.installed) b += st.update ? badge('b-warn', 'Update') : badge('b-ok', 'Installed');
         if (tooNew(x)) b += badge('b-warn', 'Needs Tizen ' + lowestTizen(x));
         if (x.adult) b += badge('b-warn', '18+');
@@ -763,7 +977,7 @@
         return b;
     }
     function pinBadges(x, i) {
-        var vs = variantState(x, i), v = x.variants[i], b = '';
+        var vs = variantState(x, i), v = x.variants[i], b = srcBadge(x);
         if (vs.installed) b += vs.update ? badge('b-warn', 'Update to v' + vs.latest) : badge('b-ok', 'Installed' + (vs.version ? ' · v' + vs.version : ''));
         else if (vs.other) b += badge('b-mute', 'Other build on the TV');
         else if (v.version) b += badge('b-mute', 'v' + v.version);
@@ -804,7 +1018,7 @@
 
     function selCard(x) {
         if (!x) return '<div class="selcard" id="selcard"><div class="selbody"><div class="eyebrow">Selected</div><div class="selname">Pick an app</div></div></div>';
-        var st = state(x), b = '';
+        var st = state(x), b = srcBadge(x);
         if (st.installed) b += st.update ? badge('b-warn', 'Update to v' + st.latest) : badge('b-ok', 'Installed' + (st.version ? ' · v' + st.version : ''));
         if (x.variants.length > 1) b += badge('b-mute', x.variants.length + ' variants');
         else if (x.variants[0].version && !st.installed) b += badge('b-mute', 'v' + x.variants[0].version);
@@ -817,6 +1031,15 @@
             + '<div class="selok">Press OK<svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="#2DD4BF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9 12l2 2 4-4"/></svg></div></div>';
     }
 
+    // From (#82): one chip per source, when the TV has more than the official catalog.
+    function srcChips() {
+        if (!sourcesOn()) return '';
+        var list = [['all', 'All sources'], ['official', 'Official']];
+        sources.forEach(function (s) { if (s.manifest && s.enabled !== false) list.push([s.repositoryId, s.name || s.repositoryId]); });
+        return '<div class="chips srcchips"><span class="clabel">From</span>' + list.map(function (o) {
+            return '<span class="chip f' + (srcFilter === o[0] ? ' on' : '') + '" tabindex="0" data-k="src:' + esc(o[0]) + '" data-src="' + esc(o[0]) + '">' + esc(o[1]) + '</span>';
+        }).join('') + '</div>';
+    }
     function card(x, where) {
         return '<div class="card f' + (x.needsHead || tooNew(x) ? ' dim' : '') + '" tabindex="0" data-k="card:' + where + ':' + esc(x.key) + '" data-app="' + esc(x.key) + '">'
             + tile(x, 68) + '<div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(subline(x)) + '</div><div class="badges">' + cardBadges(x) + '</div></div>';
@@ -876,6 +1099,12 @@
             if (own && latest && newer(latest, own)) { selfLatest = latest; selfText = 'TV-Store v' + latest + ' is out (this is v' + own + '). This copy was installed under another package id by Apps2Samsung, so update it from Apps2Samsung (On the TV, Update) rather than from here.'; }
         }
         h += selfResultHtml();
+        movedGroups().forEach(function (g) {
+            if (movedSeen.indexOf(g.url) >= 0) return;
+            h += '<div class="notice row" style="margin:0 0 26px"><span>' + esc(names(g.apps) + (g.apps.length === 1 ? ' has' : ' have') + ' moved to ' + (g.source ? '\u2018' + g.source.name + '\u2019' : 'the developer\u2019s own repository at ' + g.domain) + '. The official catalog stops updating ' + (g.apps.length === 1 ? 'it' : 'them') + ' soon. ' + (g.source ? 'Take the updates from there to keep getting them.' : 'Add that repository to keep getting updates.')) + '</span>'
+                + '<button class="btn f" data-k="movedadd:' + esc(g.url) + '" data-act="movedadd" data-url="' + esc(g.url) + '" data-fp="' + esc(g.fingerprint) + '" data-name="' + esc(g.apps[0].name) + '">' + (g.source ? 'Take updates from there' : 'Add source') + '</button>'
+                + '<button class="btn f" data-k="movedlater:' + esc(g.url) + '" data-act="movedlater" data-url="' + esc(g.url) + '">Not now</button></div>';
+        });
         if (selfLatest && settings.hideSelfNotice !== selfLatest)
             h += '<div class="notice row" style="margin:0 0 26px"><span>' + esc(selfText) + '</span><button class="btn f" data-k="dismissself" data-act="dismissself" data-v="' + esc(selfLatest) + '">Got it</button></div>';
 
@@ -885,6 +1114,7 @@
             var cats = CATEGORY_ORDER.filter(function (c) { return apps.some(function (x) { return x.category === c; }); });
             h += '<div class="chips"><span class="chip f' + (chip === 'all' ? ' on' : '') + '" tabindex="0" data-k="chip:all" data-chip="all">All</span>'
                 + cats.map(function (c) { return '<span class="chip f' + (chip === c ? ' on' : '') + '" tabindex="0" data-k="chip:' + c + '" data-chip="' + c + '">' + esc(catName(c)) + '</span>'; }).join('') + '</div>';
+            h += srcChips();
             if (chip === 'all') {
                 var pinnedNow = pinned();
                 if (pinnedNow.length) h += '<div class="sect"><div class="shead"><span class="t">Pinned</span><span class="n">' + pinnedNow.length + '</span></div>'
@@ -903,14 +1133,14 @@
             h += found.length ? section('search', 'Results for “' + query + '”', found, true, false)
                 : '<div class="empty">Nothing in the catalog matches “' + esc(query) + '”.</div>';
         }
-        if (!apps.length) h += '<div class="empty">No apps to show. The gear at the top has the Settings.</div>';
+        if (!apps.length) h += srcFilter !== 'all' && !query ? '<div class="empty">' + esc(sourceName(srcFilter) + ' has no apps to show here.') + '</div>' : '<div class="empty">No apps to show. The gear at the top has the Settings.</div>';
         pageEl.innerHTML = h;
     }
 
     // ---- On the TV (C6) -----------------------------------------------------------------------------
     function tvRow(x) {
         var st = state(x), v = x.variants[st.variant];
-        var mt = st.update ? 'v' + st.version + ' installed · v' + st.latest + ' in the catalog' : 'v' + (st.version || v.version) + (x.variants.length > 1 ? ' · ' + (st.known ? v.label : 'variant not known') : '');
+        var mt = st.update ? 'v' + st.version + ' installed · v' + st.latest + ' in ' + (x.source === 'official' ? 'the catalog' : x.sourceName) : 'v' + (st.version || v.version) + (x.variants.length > 1 ? ' · ' + (st.known ? v.label : 'variant not known') : '') + (sourcesOn() ? ' · ' + x.sourceName : '');
         return '<div class="lrow f" tabindex="0" data-k="tv:' + esc(x.key) + '" data-app="' + esc(x.key) + '">' + tile(x, 66)
             + '<div class="txt"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(mt) + '</div></div>'
             + (st.update ? badge('b-warn', 'Update') : badge('b-ok', 'Up to date')) + CHEV + '</div>';
@@ -939,14 +1169,17 @@
         var st = state(x), v = x.variants[st.variant];
         var h = '<div class="panel" id="tvpanel"><div class="phead">' + tile(x, 96, v.icon) + '<div style="min-width:0"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(catName(x.category) + (v.appId ? ' · ' + v.appId : '')) + '</div></div></div>'
             + '<div class="table kv" style="margin-top:0"><div class="trow"><span class="k">Installed</span><span class="v">v' + esc(st.version) + '</span></div>'
-            + '<div class="trow"><span class="k">In the catalog</span><span class="v"' + (st.update ? ' style="color:#F0A020"' : '') + '>v' + esc(st.latest || v.version) + '</span></div>'
+            + (sourcesOn() ? '<div class="trow"><span class="k">Source</span><span class="v">' + esc(x.sourceName) + '</span></div>' : '')
+            + '<div class="trow"><span class="k">' + (x.source === 'official' ? 'In the catalog' : 'In ' + esc(x.sourceName)) + '</span><span class="v"' + (st.update ? ' style="color:#F0A020"' : '') + '>v' + esc(st.latest || v.version) + '</span></div>'
             + (x.variants.length > 1 ? '<div class="trow"><span class="k">Variant</span><span class="v">' + esc(st.known ? v.label + (st.byPin ? ' · pinned' : '') : 'Not known: the builds share one package') + '</span></div>' : '') + '</div>'
             + '<div class="btns" style="margin-top:18px">';
         if (st.update && st.known && !v.needsHead && fits(v) && (!isSelf(x) || selfCan(x)) && armed() && !signPlan(v).missing) h += '<button class="btn primary grow f" data-k="tvupd" data-act="tvupd">Update</button>';
         else h += '<button class="btn grow f" data-k="tvsheet" data-act="tvsheet">Details</button>';
         if (v.appId) h += '<button class="btn f" data-k="tvopen" data-act="tvopen">Open</button>';
         h += '</div>';
-        if (st.update && isSelf(x)) h += '<div class="hint" style="text-align:left">' + esc(selfCan(x) ? SELF_TRY : SELF_HOW) + '</div>';
+        var mvp = movedInfo(x);
+        if (mvp && !mvp.done) h += '<div class="hint" style="text-align:left">' + esc(x.name + ' moved to ' + (mvp.source ? '\u2018' + mvp.source.name + '\u2019' : mvp.domain) + '. Open Details to keep getting its updates.') + '</div>';
+        else if (st.update && isSelf(x)) h += '<div class="hint" style="text-align:left">' + esc(selfCan(x) ? SELF_TRY : SELF_HOW) + '</div>';
         else if (st.update && v.needsHead) h += '<div class="hint" style="text-align:left">' + esc(x.name + ' ' + v.needsHead + ': update it with Apps2Samsung on a phone or PC.') + '</div>';
         else if (!st.known && x.variants.length > 1) h += '<div class="hint" style="text-align:left">' + esc('TV-Store cannot tell which build of ' + x.name + ' this is: the builds share one package. Open Details, pick your build and pin it; the pinned build is the one that gets updated.') + '</div>';
         return h + '</div>';
@@ -963,7 +1196,7 @@
         sheet = s; renderSheet(true);
     }
     function closeSheet(then) {
-        sheet = null; confirmingAdult = false; certSel = null; certConfirm = false; certError = null;
+        sheet = null; confirmingAdult = false; certSel = null; certConfirm = false; certError = null; srcSel = null; srcConfirm = false; srcError = null;
         sheetEl.className = 'sheet'; sheetEl.innerHTML = ''; appEl.className = 'app';
         if (then) return then();
         renderPage(); focusKey(returnFocus) || focusFirst();
@@ -982,6 +1215,7 @@
         if (sheet.mode === 'settings') sheetEl.innerHTML = settingsHtml();
         else if (sheet.mode === 'job') sheetEl.innerHTML = job && job.finished && job.ok ? doneHtml() : jobHtml();
         else if (sheet.mode === 'upload') sheetEl.innerHTML = uploadHtml();
+        else if (sheet.mode === 'source') sheetEl.innerHTML = sourceHtml();
         else sheetEl.innerHTML = appHtml();
         if (!(keep && focusKey(keep))) {
             var d = sheetEl.querySelector('[data-default]') || sheetEl.querySelector('.f:not([disabled])');
@@ -992,7 +1226,7 @@
     function appHtml() {
         var x = sheet.app, st = state(x), v = x.variants[sheet.v];
         // The developer's name is a link: OK shows every app by them (#29, Apps2Samsung #906).
-        var h = '<div class="shd">' + tile(x, 88, v.icon) + '<div style="min-width:0"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(catName(x.category))
+        var h = '<div class="shd">' + tile(x, 88, v.icon) + '<div style="min-width:0"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(catName(x.category)) + (sourcesOn() || x.source !== 'official' ? esc(' · from ' + (x.source === 'official' ? 'the official catalog' : x.sourceName)) : '')
             + (x.author ? ' · <span class="by f" tabindex="0" data-k="author" data-act="author" title="All apps by ' + esc(x.author) + '">by ' + esc(x.author) + ' ›</span>' : '') + '</div></div></div>';
         if (x.description) h += '<div class="sdesc">' + esc(x.description) + '</div>';
         var b = '';
@@ -1019,6 +1253,10 @@
         }
 
         var label = st.installed && st.known && st.variant === sheet.v ? (st.update ? 'Update to v' + v.version : 'Reinstall') : (st.installed ? 'Install this variant' : 'Install on this TV');
+        // The same package came from another source (#82): installing this copy moves the app here,
+        // and the button says so; that press is the explicit yes the service wants.
+        var elsewhere = heldElsewhere(x, v);
+        if (elsewhere) label = 'Install from ' + x.sourceName + ' instead';
         var me = isSelf(x) && !selfCan(x), plan = signPlan(v);
         if (!me && fits(v) && !v.needsHead && armed()) h += signWithHtml(v, plan);
         if (me) h += '<div class="notice">' + SELF_HOW + '</div>';
@@ -1027,6 +1265,12 @@
         else if (v.needsHead) h += '<div class="notice">' + esc(x.name + ' ' + v.needsHead + ', which this TV cannot do yet. Install it with Apps2Samsung on a phone or PC.') + '</div>';
         else if (!armed()) h += '<div class="notice">Not armed yet. Open this TV’s Toolbox in Apps2Samsung 3.0 or newer on your phone or PC and press Arm TV-Store once; after that every install runs here.</div>';
         else if (plan.missing) h += '<div class="notice">' + esc(missingLevelText(x.name, plan)) + '</div>';
+        if (elsewhere && !me) h += '<div class="notice">' + esc(x.name + ' on this TV (v' + installed[v.packageId] + ') came from ' + elsewhere + '. Installing this copy from ' + x.sourceName + ' replaces it, and its updates come from ' + x.sourceName + ' from then on.') + '</div>';
+        var mv = movedInfo(x);
+        if (mv && !mv.done) h += '<div class="notice row"><span>' + esc('The developer moved ' + x.name + ' to ' + (mv.source ? '\u2018' + mv.source.name + '\u2019' : 'their own repository at ' + mv.domain) + '. The official catalog stops updating it soon. ' + (st.installed ? (mv.source ? 'Take its updates from there.' : 'Add that repository to keep getting updates.') : 'Add that repository to install it from there.')) + '</span>'
+            + '<button class="btn f" data-k="movedadd" data-act="movedadd" data-url="' + esc(mv.url) + '" data-fp="' + esc(mv.fingerprint) + '" data-name="' + esc(x.name) + '">' + (mv.source ? 'Take updates from there' : 'Add source') + '</button></div>';
+        else if (mv && mv.done) h += '<div class="notice info">' + esc(x.name + ' moved to \u2018' + mv.source.name + '\u2019; its updates come from there now.') + '</div>';
+        if (x.source !== 'official') h += '<div class="notice info">' + esc('From ' + x.sourceName + ', an independent repository you added. Its signature says the files come from its publisher; Apps2Samsung has not reviewed them.') + '</div>';
         var can = !v.needsHead && fits(v) && !me && armed() && !plan.missing && !(job && job.running);
         h += '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="install" data-act="install"' + (can ? (x.variants.length > 1 ? '' : ' data-default') : ' disabled') + '>'
             + esc(me ? (st.update ? 'Update' : 'Reinstall') + ' from a phone or PC' : !fits(v) ? 'Needs Tizen ' + v.tizen + ' or newer' : v.needsHead ? 'Install from a phone or PC' : plan.missing ? 'Needs a ' + levelName(plan.level) + ' certificate' : job && job.running ? 'Another install is running' : label) + '</button>';
@@ -1160,7 +1404,7 @@
         var certList = (ready && ready.certificates ? ready.certificates.map(function (c) { return c.name + (c.level === 'partner' || c.level === 'public' ? ' (' + levelName(c.level) + ')' : ''); }) : (ready && ready.certNames) || []);
         var certText = !armed() ? 'not yet' : ready.certCount > 1 ? ready.certCount + ' handed over: ' + certList.join(', ') : 'handed over' + (certList[0] ? ': ' + certList[0] : '');
         var certs = certsBlock();
-        h += certs + '<div class="table kv">' + (certs ? '' : '<div class="trow"><span class="k">Signing certificate' + (ready && ready.certCount > 1 ? 's' : '') + '</span><span class="v">' + esc(certText) + '</span></div>')
+        h += certs + sourcesBlock() + '<div class="table kv">' + (certs ? '' : '<div class="trow"><span class="k">Signing certificate' + (ready && ready.certCount > 1 ? 's' : '') + '</span><span class="v">' + esc(certText) + '</span></div>')
             + '<div class="trow"><span class="k">Catalog</span><span class="v">' + esc(catalogApps.length + ' apps, signature checked') + '</span></div>'
             + '<div class="trow"><span class="k">TV-Store</span><span class="v">v' + VERSION + (ready && ready.node ? ' · Node ' + esc(ready.node) : '') + '</span></div>'
             + '<div class="trow"><span class="k">This TV</span><span class="v">' + esc((device ? device + ' · ' : '') + (tvTizen ? 'Tizen ' + tvTizen : 'Tizen version not known')) + '</span></div></div>';
@@ -1192,7 +1436,9 @@
         // installed: whether the TV lists the package, so the service can read a bare [118, -12] from
         // a 2018 set (no reason text) as "another certificate" (#44); replace: remove that copy first.
         var onTv = !!(v.packageId && installed.hasOwnProperty(v.packageId));
-        var req = v.upload ? { upload: v.upload, token: uploadToken, tizen: tvTizen, installed: onTv, replace: replace } : { url: v.url, file: v.file, appId: v.appId, packageId: v.packageId, name: x.name, tizen: tvTizen, installed: onTv, replace: replace };
+        var req = v.upload ? { upload: v.upload, token: uploadToken, tizen: tvTizen, installed: onTv, replace: replace } : { url: v.url, file: v.file, appId: v.appId, packageId: v.packageId, name: x.name, tizen: tvTizen, installed: onTv, replace: replace, source: x.source || 'official' };
+        // Another source's copy of an installed package (#82): only from the sheet that said so.
+        if (!v.upload && opts && opts.switchSource) req.switchSource = true;
         // Sign with (#50): the choice made on the TV; the service takes the catalog's and the manifest's word otherwise.
         if (certChoiceOf(v)) req.certLevel = certChoiceOf(v);
         if (isSelf(x)) { req.selfUpdate = true; req.fromVersion = VERSION; req.toVersion = v.version || ''; }
@@ -1207,6 +1453,7 @@
                 if (err || !res.ok) { me.error = err ? err.message : res.error; me.code = err ? null : (res.code || null); renderHeader(); if (sheet && sheet.mode === 'job') renderSheet(true); queue = []; return; }
                 me.ok = true; me.step = 4; me.certificate = (res.result && res.result.certificate) || ''; me.level = (res.result && res.result.level) || '';
                 if (v.packageId) { installed[v.packageId] = v.version; claims = null; rememberVariant(v); }
+                if (v.packageId && ready) { ready.sourceOf = ready.sourceOf || {}; if (v.upload) delete ready.sourceOf[v.packageId]; else ready.sourceOf[v.packageId] = (res.result && res.result.source) || x.source || 'official'; }
                 if (v.appId) appIds[v.appId] = true;
                 // The service now remembers the profile this package took; the next sheet should say so.
                 xhr('GET', '/ping', null, function (e, p) { if (!e && p && p.ok) ready = p; }, null, 5000);
@@ -1282,6 +1529,8 @@
         if ((k = el.getAttribute('data-chip'))) { chip = k; renderPage(); focusKey('chip:' + k) || focusFirst(); return; }
         if ((k = el.getAttribute('data-opt'))) { toggle(k); return; }
         if ((k = el.getAttribute('data-certrow'))) { selectCert(k); return; }
+        if ((k = el.getAttribute('data-srcrow'))) { selectSource(k); return; }
+        if ((k = el.getAttribute('data-src'))) { srcFilter = k; chip = 'all'; apps = visible(catalogApps); renderPage(); focusKey('src:' + k) || focusFirst(); return; }
         if ((k = el.getAttribute('data-var'))) { sheet.v = parseInt(k, 10); renderSheet(); return; }
         if ((k = el.getAttribute('data-cert'))) { chooseCert(sheet.mode === 'upload' ? uploadApp(upload).variants[0] : sheet.app.variants[sheet.v], k); renderSheet(); focusKey('cert:' + k); return; }
         if ((k = el.getAttribute('data-app'))) { var x = byKey(k), vi = el.getAttribute('data-vi'); if (x) openApp(x, vi != null ? parseInt(vi, 10) : null); return; }
@@ -1294,17 +1543,27 @@
             case 'selfack': selfResult = null; xhr('POST', '/selfupdate/ack', { version: VERSION }, function () {}); renderPage(); focusFirst(); return;
             case 'dismissself': settings.hideSelfNotice = el.getAttribute('data-v') || ''; saveSettings(); renderPage(); focusFirst(); return;
             case 'allvars': sheet.all = true; renderSheet(); focusKey('var:' + sheet.v); return;
-            case 'install': if (!el.disabled) startInstall(sheet.app, sheet.v); return;
+            case 'install': if (!el.disabled) startInstall(sheet.app, sheet.v, { switchSource: !!heldElsewhere(sheet.app, sheet.app.variants[sheet.v]) }); return;
             case 'open': var s = state(sheet.app); launch(sheet.app.variants[s.variant].appId); return;
             case 'openjob': launch(job.v.appId); return;
             case 'close': closeSheet(); return;
-            case 'retryjob': startInstall(job.app, job.vIdx); return;
-            case 'replacejob': startInstall(job.app, job.vIdx, { replace: true }); return;
+            case 'retryjob': startInstall(job.app, job.vIdx, { switchSource: !!heldElsewhere(job.app, job.v) }); return;
+            case 'replacejob': startInstall(job.app, job.vIdx, { replace: true, switchSource: !!heldElsewhere(job.app, job.v) }); return;
             case 'adultyes': setSetting('showAdult', true); return;
             case 'adultno': confirmingAdult = false; renderSheet(); focusKey('opt:showAdult'); return;
             case 'certdefault': certAction('/cert/default', function (id) { renderSheet(); focusKey('certrow:' + id); }); return;
             case 'certremove': certConfirm = true; renderSheet(); focusKey('certremoveno'); return;
             case 'certremoveno': certConfirm = false; renderSheet(); focusKey('certremove'); return;
+            case 'srcyes': answerOffer(true); return;
+            case 'movedadd': var mu = el.getAttribute('data-url'), mf = el.getAttribute('data-fp'), mn = el.getAttribute('data-name');
+                if (sheet) closeSheet(function () { renderPage(); addMoved(mu, mf, mn); }); else addMoved(mu, mf, mn); return;
+            case 'movedlater': movedSeen.push(el.getAttribute('data-url')); try { window.localStorage.setItem(MOVED_SEEN_KEY, JSON.stringify(movedSeen)); } catch (e) {} renderPage(); focusFirst(); return;
+            case 'srcno': answerOffer(false); return;
+            case 'srctoggle': var cur = null; ((ready && ready.sources) || []).forEach(function (t) { if (t.repositoryId === srcSel) cur = t; });
+                sourceAction('/sources/enable', { enabled: !!(cur && cur.enabled === false) }, function (id) { renderSheet(); focusKey('srcrow:' + id); }); return;
+            case 'srcremove': srcConfirm = true; renderSheet(); focusKey('srcremoveno'); return;
+            case 'srcremoveno': srcConfirm = false; renderSheet(); focusKey('srcremove'); return;
+            case 'srcremoveyes': sourceAction('/sources/remove', {}, function () { srcSel = null; renderSheet(); focus(focusables()[0]); }); return;
             case 'certremoveyes': certAction('/cert/remove', function () { certSel = null; renderSheet(); focus(focusables()[0]); }); return;
             case 'tvupd': startInstall(tvSel, state(tvSel).variant); return;
             case 'tvsheet': openApp(tvSel); return;
@@ -1397,6 +1656,8 @@
     function back() {
         if (sheet) {
             if (sheet.mode === 'settings' && confirmingAdult) { confirmingAdult = false; renderSheet(); focusKey('opt:showAdult'); return; }
+            if (sheet.mode === 'source') { answerOffer(false); return; }
+            if (sheet.mode === 'settings' && srcSel) { var sid = srcSel; if (srcConfirm) { srcConfirm = false; renderSheet(); focusKey('srcremove'); return; } srcSel = null; renderSheet(); focusKey('srcrow:' + sid); return; }
             if (sheet.mode === 'settings' && certSel) { var id = certSel; if (certConfirm) { certConfirm = false; renderSheet(); focusKey('certremove'); return; } certSel = null; renderSheet(); focusKey('certrow:' + id); return; }
             closeSheet(); return;
         }
@@ -1445,6 +1706,21 @@
                     });
                 })();
             });
+        },
+        // Send sources to TV (#82, Apps2Samsung#1018): [{ url, repositoryId, fingerprint, name?,
+        // publicKeyPem? }], the signed repositories the user approved in Apps2Samsung. Each one is
+        // checked by the service and shown on the TV for a yes or no; the promise resolves once all
+        // are answered: { ok, results: [{ url, repositoryId, added, name?, error? }] }. /ping's
+        // sources (A2SStore.status()) says what the TV holds at any time.
+        addSources: function (list) {
+            return new Promise(function (resolve) {
+                list = Array.isArray(list) ? list : list ? [list] : [];
+                var results = [], left = list.length;
+                if (!left) return resolve({ ok: true, results: [] });
+                list.forEach(function (src, i) {
+                    offerSource(src && typeof src === 'object' ? src : {}, function (r) { results[i] = r; if (--left === 0) resolve({ ok: true, results: results }); });
+                });
+            });
         }
     };
 
@@ -1453,6 +1729,7 @@
     // for a file sent from a phone or PC (#30) and shows it once, when no sheet is open.
     setInterval(function () {
         if (loading || problem) return;
+        nextOffer();
         if (!armed()) xhr('GET', '/ping', null, function (err, res) { if (!err) setReady(res); });
         refreshRelay();
         xhr('GET', '/uploads', null, function (err, res) {
@@ -1473,12 +1750,20 @@
         readInstalled(function (map) {
             setInstalled(map);
             xhr('GET', '/catalog', null, function (err, cat) {
-                loading = false;
-                if (err) { problem = { title: 'The catalog did not load', short: 'No catalog', text: err.message + '.' }; renderPage(); focusFirst(); return; }
+                if (err) { loading = false; problem = { title: 'The catalog did not load', short: 'No catalog', text: err.message + '.' }; renderPage(); focusFirst(); return; }
                 var community = (cat.providers || []).filter(function (p) { return p.catalog && p.catalog.categories; })[0];
                 window.__categories = community ? community.catalog.categories : {};
-                catalogApps = build(cat); apps = visible(catalogApps); claims = null;
-                renderPage(); focusFirst();
+                officialCat = cat;
+                loading = false; rebuild(); renderPage(); focusFirst();
+                // The independent repositories (#82) after the official catalog, which shows meanwhile:
+                // a slow one takes up to a minute. One that fails says so in Settings and drops out,
+                // and none at all leaves the store as it was.
+                loadSources(false, function () {
+                    var at = document.activeElement && document.activeElement.getAttribute('data-k');
+                    rebuild();
+                    if (!sheet) { renderPage(); focusKey(at) || focusFirst(); } else renderHeader();
+                    nextOffer();
+                });
             });
         });
     });

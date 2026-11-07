@@ -25,6 +25,8 @@ jobs:
           node --expose-gc test/stream-sign.test.js
           node test/bundle.test.js
           node test/catalog.test.js
+          node test/repos.test.js
+          node test/sources.test.js
           node test/sdb-errors.test.js
           node test/manifest.test.js
           node test/refusal.test.js
