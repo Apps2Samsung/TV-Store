@@ -14,6 +14,7 @@
  */
 'use strict';
 var crypto = require('crypto');
+var pkgid = require('./pkgid.js');
 
 var MAX_AGE_MS = 7 * 24 * 3600 * 1000;   // the workflow re-signs at least twice a day
 
@@ -49,7 +50,7 @@ function verify(buf, publicKeyPem, now) {
     if ((now || Date.now()) - at > MAX_AGE_MS) throw new Error('the signed catalog is from ' + catalog.generatedAt + ', more than 7 days old: check the TV’s clock, or the Apps2Samsung catalog workflow');
 
     var s = scan(catalog);
-    return { catalog: catalog, payload: payload, index: s.index, levels: s.levels, icons: s.icons, moved: s.moved };
+    return { catalog: catalog, payload: payload, index: s.index, levels: s.levels, icons: s.icons, moved: s.moved, keys: s.keys, files: s.files };
 }
 
 // One walk over providers -> releases -> assets for the lookups the install and the icons need:
@@ -61,15 +62,20 @@ function verify(buf, publicKeyPem, now) {
 //           (#66); an icon without a hash is not listed, so it is never fetched;
 //   moved:  package id -> { url, fingerprint } for every community package whose manifest says it
 //           moved to an independent repository (moved_to, #82), copied onto each of its files in
-//           catalog.json; the package id from the entry, else from its release asset.
+//           catalog.json; the package id from the entry, else from its release asset;
+//   keys:   download URL -> the catalog entry the file belongs to, which a package id rename is
+//           derived from (#84, pkgid.js): a community package's repo and file, else the provider's
+//           GitHub owner/name and the asset's name; none when neither is known;
+//   files:  download URL -> the release asset's name (a repository's key is its URL and this, #84).
 var MOVED_URL = /^https:\/\/[^\s\/@:]+(?::\d+)?\/\S*[.]signed$/, FINGERPRINT = /^[0-9a-f]{64}$/;
 function scan(catalog) {
-    var index = {}, levels = {}, icons = {}, moved = {};
+    var index = {}, levels = {}, icons = {}, moved = {}, keys = {}, files = {};
     (catalog.providers || []).forEach(function (p) {
-        var byFile = {}, assetByName = {};
+        var byFile = {}, assetByName = {}, repoOf = {}, community = !!(p.catalog && p.catalog.apps), own = pkgid.githubRepo(p.url);
         (p.releases || []).forEach(function (r) { (r.assets || []).forEach(function (a) { if (a.name && !assetByName[a.name]) assetByName[a.name] = a; }); });
         ((p.catalog && p.catalog.apps) || []).forEach(function (e) {
             if (e.file && String(e.cert_level || '').toLowerCase() === 'partner') byFile[e.file] = true;
+            if (e.file && typeof e.repo === 'string' && e.repo.trim() && !repoOf[e.file]) repoOf[e.file] = e.repo.trim();
             var m = e.moved_to, pkg = e.package_id || (assetByName[e.file] && assetByName[e.file].package_id);
             if (pkg && m && typeof m.url === 'string' && MOVED_URL.test(m.url) && typeof m.fingerprint === 'string' && FINGERPRINT.test(m.fingerprint)) moved[pkg] = { url: m.url, fingerprint: m.fingerprint, name: e.group || e.name || pkg };
         });
@@ -80,12 +86,15 @@ function scan(catalog) {
                 var m = /^sha256:([0-9a-fA-F]{64})$/.exec(a.digest || '');
                 index[a.browser_download_url] = m ? m[1].toLowerCase() : null;
                 if (all || byFile[a.name]) levels[a.browser_download_url] = 'partner';
+                if (a.name) files[a.browser_download_url] = a.name;
+                var k = pkgid.key(community ? repoOf[a.name] : own, a.name);
+                if (k) keys[a.browser_download_url] = k;
                 var im = /^sha256:([0-9a-fA-F]{64})$/.exec(a.icon_digest || '');
                 if (im && typeof a.icon === 'string' && /^https?:\/\//.test(a.icon)) icons[im[1].toLowerCase()] = a.icon;
             });
         });
     });
-    return { index: index, levels: levels, icons: icons, moved: moved };
+    return { index: index, levels: levels, icons: icons, moved: moved, keys: keys, files: files };
 }
 function index(catalog) { return scan(catalog).index; }
 function levels(catalog) { return scan(catalog).levels; }

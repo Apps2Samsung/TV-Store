@@ -20,6 +20,12 @@ function text(xml, tag) {
     var m = new RegExp('<' + tag + '\\b[^>]*>([^<]*)<\\/' + tag + '>', 'i').exec(xml);
     return m ? m[1].trim() : '';
 }
+// Every text of a tag, once each: a <name> per language in a .wgt, a <label> per language in a .tpk.
+function texts(xml, tag) {
+    var re = new RegExp('<' + tag + '\\b[^>]*>([^<]*)<\\/' + tag + '>', 'gi'), out = [], m;
+    while ((m = re.exec(xml)) !== null) { var v = m[1].trim(); if (v && out.indexOf(v) < 0) out.push(v); }
+    return out;
+}
 
 // Privileges a Partner certificate grants and a Public one does not (#50): Tizen's partner level,
 // which on a TV is a VPN, killing other apps or reading their certificates, the system manager,
@@ -48,18 +54,19 @@ function privileges(kind, xml) {
 }
 function needsPartner(privs) { return (privs || []).some(function (p) { return PARTNER_PRIVILEGES.indexOf(p) >= 0; }); }
 
-// The ids in a manifest's XML: { kind, appId, packageId, version, name, requiredVersion,
-// privileges, partner }. Missing ones are ''; partner: a privilege needs a Partner certificate.
+// The ids in a manifest's XML: { kind, appId, packageId, version, name, names, requiredVersion,
+// privileges, partner }. Missing ones are ''; names: every name it gives, per language (#84);
+// partner: a privilege needs a Partner certificate.
 function parse(kind, xml) {
     var privs = privileges(kind, xml), partner = needsPartner(privs);
     if (kind === 'wgt') {
         var pkg = attr(xml, 'tizen:application', 'package');
-        return { kind: kind, appId: attr(xml, 'tizen:application', 'id'), packageId: pkg, version: attr(xml, 'widget', 'version'), name: text(xml, 'name'),
+        return { kind: kind, appId: attr(xml, 'tizen:application', 'id'), packageId: pkg, version: attr(xml, 'widget', 'version'), name: text(xml, 'name'), names: texts(xml, 'name'),
                  requiredVersion: attr(xml, 'tizen:application', 'required_version'), privileges: privs, partner: partner };
     }
     var p = attr(xml, 'manifest', 'package');
     var appId = attr(xml, 'ui-application', 'appid') || attr(xml, 'service-application', 'appid') || attr(xml, 'widget-application', 'appid') || attr(xml, 'watch-application', 'appid');
-    return { kind: kind, appId: appId, packageId: p, version: attr(xml, 'manifest', 'version'), name: text(xml, 'label'),
+    return { kind: kind, appId: appId, packageId: p, version: attr(xml, 'manifest', 'version'), name: text(xml, 'label'), names: texts(xml, 'label'),
              requiredVersion: attr(xml, 'manifest', 'api-version'), privileges: privs, partner: partner };
 }
 
