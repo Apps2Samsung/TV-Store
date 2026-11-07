@@ -69,8 +69,19 @@ var ic = cat.icons({ providers: [
 if (JSON.stringify(ic) !== JSON.stringify((function () { var o = {}; o[ih] = 'https://apps2samsung.com/catalog/icons/' + ih + '.png'; return o; })())) fail('icons: ' + JSON.stringify(ic));
 if (JSON.stringify(r.icons) !== '{}') fail('a catalog without icons verifies with an empty icon map');
 if (cat.sha256(Buf.from('package bytes', 'utf8')) !== hash) fail('sha256 helper');
+// moved_to (#82): package id -> { url, fingerprint } for a community package that moved, from the
+// entry's package_id or its release asset's; a bad URL or fingerprint is not listed.
+var fp = new Array(65).join('a');
+var mv = cat.scan({ providers: [{ id: 'tizen-community', catalog: { apps: [
+        { file: 'a.wgt', name: 'A', package_id: 'PkgA', moved_to: { url: 'https://o.github.io/t/repository.json.signed', fingerprint: fp } },
+        { file: 'b.wgt', name: 'B', moved_to: { url: 'https://o.github.io/t/repository.json.signed', fingerprint: fp } },
+        { file: 'c.wgt', name: 'C', package_id: 'PkgC', moved_to: { url: 'http://o.github.io/t/repository.json.signed', fingerprint: fp } },
+        { file: 'd.wgt', name: 'D', package_id: 'PkgD', moved_to: { url: 'https://o.github.io/t/repository.json.signed', fingerprint: 'AB' } },
+        { file: 'e.wgt', name: 'E', package_id: 'PkgE' }] },
+    releases: [{ assets: [{ name: 'b.wgt', browser_download_url: 'u/b', package_id: 'PkgB' }] }] }] }).moved;
+if (JSON.stringify(Object.keys(mv).sort()) !== '["PkgA","PkgB"]' || mv.PkgA.fingerprint !== fp || mv.PkgB.name !== 'B') fail('moved: ' + JSON.stringify(mv));
 // The shipped key parses: verifying anything with it answers false instead of throwing.
 if (crypto.createVerify('RSA-SHA256').update('x').verify(shipped, 'AAAA', 'base64') !== false) fail('shipped key');
 
 console.log('PASS');
-console.log('  signed catalog verifies; tampered, foreign-key, unsigned and stale ones are refused; cert_level per file and per provider');
+console.log('  signed catalog verifies; tampered, foreign-key, unsigned and stale ones are refused; cert_level per file and per provider; moved_to per package');

@@ -49,7 +49,7 @@ function verify(buf, publicKeyPem, now) {
     if ((now || Date.now()) - at > MAX_AGE_MS) throw new Error('the signed catalog is from ' + catalog.generatedAt + ', more than 7 days old: check the TV’s clock, or the Apps2Samsung catalog workflow');
 
     var s = scan(catalog);
-    return { catalog: catalog, payload: payload, index: s.index, levels: s.levels, icons: s.icons };
+    return { catalog: catalog, payload: payload, index: s.index, levels: s.levels, icons: s.icons, moved: s.moved };
 }
 
 // One walk over providers -> releases -> assets for the lookups the install and the icons need:
@@ -58,12 +58,21 @@ function verify(buf, publicKeyPem, now) {
 //           (#50): cert_level on a community package (copied onto each of its files in catalog.json,
 //           matched to the release asset by file name) or on a provider (every file of it);
 //   icons:  lower-case hex SHA-256 -> icon URL, for every file that names an icon with its hash
-//           (#66); an icon without a hash is not listed, so it is never fetched.
+//           (#66); an icon without a hash is not listed, so it is never fetched;
+//   moved:  package id -> { url, fingerprint } for every community package whose manifest says it
+//           moved to an independent repository (moved_to, #82), copied onto each of its files in
+//           catalog.json; the package id from the entry, else from its release asset.
+var MOVED_URL = /^https:\/\/[^\s\/@:]+(?::\d+)?\/\S*[.]signed$/, FINGERPRINT = /^[0-9a-f]{64}$/;
 function scan(catalog) {
-    var index = {}, levels = {}, icons = {};
+    var index = {}, levels = {}, icons = {}, moved = {};
     (catalog.providers || []).forEach(function (p) {
-        var byFile = {};
-        ((p.catalog && p.catalog.apps) || []).forEach(function (e) { if (e.file && String(e.cert_level || '').toLowerCase() === 'partner') byFile[e.file] = true; });
+        var byFile = {}, assetByName = {};
+        (p.releases || []).forEach(function (r) { (r.assets || []).forEach(function (a) { if (a.name && !assetByName[a.name]) assetByName[a.name] = a; }); });
+        ((p.catalog && p.catalog.apps) || []).forEach(function (e) {
+            if (e.file && String(e.cert_level || '').toLowerCase() === 'partner') byFile[e.file] = true;
+            var m = e.moved_to, pkg = e.package_id || (assetByName[e.file] && assetByName[e.file].package_id);
+            if (pkg && m && typeof m.url === 'string' && MOVED_URL.test(m.url) && typeof m.fingerprint === 'string' && FINGERPRINT.test(m.fingerprint)) moved[pkg] = { url: m.url, fingerprint: m.fingerprint, name: e.group || e.name || pkg };
+        });
         var all = String(p.cert_level || '').toLowerCase() === 'partner';
         (p.releases || []).forEach(function (r) {
             (r.assets || []).forEach(function (a) {
@@ -76,7 +85,7 @@ function scan(catalog) {
             });
         });
     });
-    return { index: index, levels: levels, icons: icons };
+    return { index: index, levels: levels, icons: icons, moved: moved };
 }
 function index(catalog) { return scan(catalog).index; }
 function levels(catalog) { return scan(catalog).levels; }

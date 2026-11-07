@@ -40,7 +40,10 @@ var FILES = {
 function asset(p, name, pkg, version, digestOf) {
     return { name: name, browser_download_url: 'https://dl.test' + p, size: FILES[p].length, digest: 'sha256:' + sha(digestOf || FILES[p]), package_version: version, package_id: pkg, app_id: pkg + '.App', required_version: '3.0' };
 }
-var OFFICIAL = sign({ schemaVersion: 1, generatedAt: iso(60000), providers: [{ id: 'shared', ok: true, releases: [{ assets: [asset('/official/Shared.wgt', 'Shared.wgt', 'SrcShared1', '1.0.0')] }] }] });
+// The official catalog says Shared moved to the good repository (moved_to, on its catalog.json entry).
+var OFFICIAL = sign({ schemaVersion: 1, generatedAt: iso(60000), providers: [{ id: 'shared', ok: true,
+    catalog: { apps: [{ file: 'Shared.wgt', name: 'Shared', package_id: 'SrcShared1', moved_to: { url: 'https://repo.test/good/repository.json.signed', fingerprint: FP } }] },
+    releases: [{ assets: [asset('/official/Shared.wgt', 'Shared.wgt', 'SrcShared1', '1.0.0')] }] }] });
 function repo(id, name, msAgo) {
     return { schemaVersion: 1, repository: { id: id, name: name, maintainer: 'Test' }, generatedAt: iso(msAgo), providers: [
         { id: 'shared', category: 'media', url: 'https://api.github.test/repos/t/shared/releases', releases: [{ tag_name: 'v2', assets: [asset('/good/Shared.wgt', 'Shared.wgt', 'SrcShared1', '2.0.0')] }] },
@@ -222,11 +225,36 @@ step('turn off, on, remove', function (go) {
         });
     });
 });
+step('moved_to: the official catalog vouches, the installed app follows', function (go) {
+    var moved = { url: 'https://repo.test/good/repository.json.signed', fingerprint: FP, moved: true };
+    call('POST', '/sources/check', moved, function (e, c, j) {
+        if (!j.ok || j.source.repositoryId !== 'org.example.good' || JSON.stringify(j.source.movedFrom) !== '["SrcShared1"]') fail('check a moved source, id from the manifest: ' + JSON.stringify(j));
+        call('POST', '/sources/check', { url: moved.url, fingerprint: OTHER_FP, moved: true }, function (e, c, j) {
+            if (j.ok || j.code !== 'NOT_MOVED') fail('a key the official catalog does not name: ' + JSON.stringify(j));
+            call('POST', '/sources/check', { url: 'https://repo.test/flaky/repository.json.signed', fingerprint: FP, moved: true }, function (e, c, j) {
+                if (j.ok || j.code !== 'NOT_MOVED') fail('a URL the official catalog does not name: ' + JSON.stringify(j));
+                call('POST', '/sources/check', { url: moved.url, fingerprint: FP }, function (e, c, j) {
+                    if (j.ok || j.code !== 'BAD_SOURCE') fail('without moved, a source needs its repositoryId: ' + JSON.stringify(j));
+                    call('POST', '/sources/add', moved, function (e, c, j) {
+                        if (c !== 403) fail('a moved source without the token');
+                        call('POST', '/sources/add', { url: moved.url, fingerprint: FP, moved: true, token: token() }, function (e, c, j) {
+                            if (!j.ok || JSON.stringify(j.source.adopted) !== '["SrcShared1"]' || j.sourceOf.SrcShared1 !== 'org.example.good') fail('add a moved source: ' + JSON.stringify(j));
+                            install({ url: 'https://dl.test/good/Shared.wgt', file: 'Shared.wgt', appId: 'SrcShared1.App', packageId: 'SrcShared1', name: 'Shared', source: 'org.example.good', installed: true }, function (j, n) {
+                                if (!j.ok || n !== 1) fail('the moved app updates from its new source without a switch: ' + JSON.stringify(j));
+                                go();
+                            });
+                        });
+                    });
+                });
+            });
+        });
+    });
+});
 step('kept across a restart', function (go) {
     child.kill(); child = null;
     setTimeout(function () {
         start(function (p) {
-            if (p.sources.length !== 1 || p.sources[0].repositoryId !== 'org.example.flaky' || p.sources[0].enabled !== false || p.sourceOf.SrcOnly001 !== 'org.example.good') fail('after a restart: ' + JSON.stringify([p.sources, p.sourceOf]));
+            if (p.sources.length !== 2 || p.sources[0].repositoryId !== 'org.example.flaky' || p.sources[0].enabled !== false || p.sources[1].repositoryId !== 'org.example.good' || p.sourceOf.SrcOnly001 !== 'org.example.good' || p.sourceOf.SrcShared1 !== 'org.example.good') fail('after a restart: ' + JSON.stringify([p.sources, p.sourceOf]));
             go();
         });
     }, 300);

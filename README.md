@@ -217,11 +217,14 @@ then **Add source** or **Don't add**. A source that does not check out is shown 
 **Close** is offered.
 
 There is no way to type a repository address on the TV. The TV cannot validate HTTPS, so it has no
-safe way to get a key by itself: a key fetched over an unchecked connection could be anyone's.
-So a repository's key reaches the TV only as what Apps2Samsung approved. Apps2Samsung hands over the
-fingerprint (and may hand over the key itself). When only the fingerprint comes along, the service
+safe way to decide on a key by itself: a key fetched over an unchecked connection could be anyone's.
+So what the TV trusts is the **fingerprint**, and a fingerprint reaches the TV only from somewhere
+that vouches for it: Apps2Samsung, where the user approved it, or the signed official catalog (a
+moved app, below). The key itself may come along (`publicKeyPem`); when it does not, the service
 fetches `repository.pem` next to the manifest and keeps it only when its SHA-256 is that
-fingerprint, which no swapped file can be. From then on that key is pinned on the TV. A publisher
+fingerprint, which no swapped file can be. Either way the key is pinned on the TV from then on.
+Fetching is the normal path, since the official catalog's `moved_to` carries a fingerprint and no
+key. A publisher
 who changes keys needs a new approval in Apps2Samsung and a new **Send sources to TV**; until then
 the source stops loading, because its signature no longer matches the pinned key, and Settings says
 so.
@@ -266,6 +269,26 @@ plays no part: TV-Store signs every package with your certificate, as always.
 - `required_version` and the "Needs Tizen X" badge, Partner certificates (`cert_level`), 18+
   (`adult`) and root apps (`flags: ["root"]`) work for repository apps as for official ones.
 
+### Apps that moved out of the official catalog
+
+When an app leaves the official catalog for its developer's own repository, its manifest in
+tizen-community-packages gets `moved_to: { url, fingerprint }` for a notice period (see
+[Moving an app out of the official catalog](https://github.com/Apps2Samsung/tizen-community-packages/blob/main/docs/repositories.md#moving-an-app-out-of-the-official-catalog)).
+TV-Store reads it from the signed catalog:
+
+- While such an app is on the TV and still updates from the official catalog, the store shows a
+  banner: "*App* has moved to the developer's own repository at *domain*", with **Add source** and
+  **Not now** (remembered per repository). The app sheet says the same with the same button, and On
+  the TV points there.
+- **Add source** opens the usual confirmation, marked "Named by the official catalog". The signed
+  catalog vouches for the key here instead of an approval in Apps2Samsung, and the repository id is
+  read from the manifest (`moved_to` carries none). The service checks that the URL and fingerprint
+  are what the official catalog names for some package (`NOT_MOVED` otherwise).
+- Once added, every installed app the official catalog says moved there, that the repository
+  lists, and that came from the official catalog takes its updates from the repository from then
+  on, without a reinstall. When the repository is on the TV already, the button reads **Take updates
+  from there** and does only that.
+
 ### Settings, Sources
 
 Settings lists **Official** (always there, cannot be removed) and every repository on the TV: its
@@ -285,7 +308,7 @@ A2SStore.addSources([
     repositoryId: 'io.github.owner.tizen',                          // repository.id, pinned
     fingerprint: '<64 hex: SHA-256 of the DER public key>',         // as the user approved it
     name: "Owner's Tizen apps",                                     // optional, shown until checked
-    publicKeyPem: '-----BEGIN PUBLIC KEY-----…' }                   // optional; must match the fingerprint
+    publicKeyPem: '-----BEGIN PUBLIC KEY-----…' }                   // optional; must match the fingerprint (saves a fetch)
 ])
 // -> Promise of { ok: true, results: [{ url, repositoryId, added: true|false, name?, error? }] }
 ```
@@ -302,7 +325,10 @@ The service's own routes, for this TV only: `GET /sources`, `GET /sources/catalo
 source with its verified manifest or its error), `POST /sources/check` (verify without keeping),
 and `POST /sources/add`, `/sources/enable { repositoryId, enabled }`, `/sources/remove {
 repositoryId }`, which need the page's token, like an upload, because every app on the TV can reach
-port 8077. `POST /install` takes `source` (`official` when left out) and `switchSource: true`. The
+port 8077. `POST /install` takes `source` (`official` when left out) and `switchSource: true`.
+`POST /sources/check` and `/sources/add` take `{ url, fingerprint, moved: true }` without a
+`repositoryId` for a source the official catalog names in `moved_to`; `/sources/add` then answers
+which packages it moved over (`source.adopted`) and the new `sourceOf`. The
 sources are kept in `.a2s-sources.json` in the service's data folder.
 
 ## Settings
@@ -436,7 +462,7 @@ node --expose-gc test/stream-sign.test.js  # the file-to-file signer on a 24 MB 
 node test/bundle.test.js    # the bundled service starts however the platform loads it
 node test/catalog.test.js   # the signed catalog: signature, age, hashes, icons
 node test/repos.test.js     # independent repositories (#82): every spec test vector for its reason, repository id, swapped key, URL rules
-node test/sources.test.js   # sources in the service: check and add with the token, a broken source next to a working one, install per source, no silent switch, rollback, off and remove, kept across a restart
+node test/sources.test.js   # sources in the service: check and add with the token, a broken source next to a working one, install per source, no silent switch, rollback, off and remove, moved_to vouched by the official catalog, kept across a restart
 node test/icons.test.js     # app icons: served only with the catalog's hash, cached and hashed again, one download per hash, pruned
 node test/manifest.test.js  # the ids and privileges of a .wgt / .tpk from its manifest
 node test/upload.test.js    # send a file to the service, see it wait, token gate, discard

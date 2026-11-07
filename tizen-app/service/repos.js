@@ -227,15 +227,17 @@ function verify(buf, o) {
 
 // ---- sources as Apps2Samsung hands them over ------------------------------------------------------
 // { url, repositoryId, fingerprint, name?, publicKeyPem? } checked and cleaned up: { source } or
-// { error }. The URL is the one of repository.json.signed, over HTTPS, at a public name.
-function normalizeSource(s) {
+// { error }. The URL is the one of repository.json.signed, over HTTPS, at a public name. With
+// o.idFromManifest (a source the official catalog names in moved_to, which carries no id) the
+// repositoryId may be left out: the caller reads it from the verified manifest.
+function normalizeSource(s, o) {
     if (!isObj(s)) return { error: 'a source must be { url, repositoryId, fingerprint }' };
     var u = String(s.url || '').trim();
     if (!/^https:\/\//i.test(u)) return { error: 'the source URL must start with https://' };
     var bad = urlProblem(u);
     if (bad) return { error: 'the source URL ' + bad };
     var id = String(s.repositoryId || s.id || '').trim();
-    if (!str(id, RE.repoId, 128)) return { error: 'repositoryId must be a reverse-DNS id like io.github.owner.tizen' };
+    if (!(id === '' && o && o.idFromManifest) && !str(id, RE.repoId, 128)) return { error: 'repositoryId must be a reverse-DNS id like io.github.owner.tizen' };
     if (id === 'official') return { error: 'repositoryId official is taken' };
     var fp = String(s.fingerprint || '').trim().toLowerCase().replace(/^sha256:/, '').replace(/:/g, '');
     if (!RE.fingerprint.test(fp)) return { error: 'fingerprint must be 64 hex characters (SHA-256 of the public key)' };

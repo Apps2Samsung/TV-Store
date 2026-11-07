@@ -54,6 +54,10 @@
  * remembers it per package; none remembered is the official catalog): its updates come only from
  * there, and the same package from another source is a separate card whose install says it moves
  * the app. Settings, Sources lists them with their state, turns them off or removes them.
+ * An app the official catalog says moved to its developer's own repository (moved_to: { url,
+ * fingerprint }) gets a banner while it is installed, and its sheet a notice, both with Add source:
+ * the same confirmation, with the key vouched for by the signed official catalog instead of
+ * Apps2Samsung, after which the app's updates come from that repository.
  *
  * Navigation is spatial: every focusable element carries the class `f`, and an arrow key moves to
  * the nearest one in that direction (inside the sheet while it is open). Scrolling follows the
@@ -458,7 +462,7 @@
     }
     function sourceHtml() {
         var o = offer, src = (o && o.src) || {}, c = o && o.check;
-        var h = '<div class="shd"><div style="min-width:0"><div class="nm">' + esc(c ? c.name : src.name || 'A new source') + '</div><div class="mt">' + esc('Sent from Apps2Samsung' + (c ? ' · ' + c.domain : '')) + '</div></div></div>';
+        var h = '<div class="shd"><div style="min-width:0"><div class="nm">' + esc(c ? c.name : src.moved ? 'Where ' + (src.name || 'the app') + ' moved' : src.name || 'A new source') + '</div><div class="mt">' + esc((src.moved ? 'Named by the official catalog' : 'Sent from Apps2Samsung') + (c ? ' · ' + c.domain : '')) + '</div></div></div>';
         if (!c && !o.error) return h + '<div class="waiting" style="margin-top:22px"><span class="spin"></span>Checking the source and its signature…</div>'
             + '<div class="sfoot"><div class="btns"><button class="btn grow f" data-k="srcno" data-act="srcno" data-default>Don’t add</button></div></div>';
         if (o.error) return h + '<div class="notice bad">' + esc('This source cannot be added: ' + o.error) + '</div>'
@@ -469,9 +473,11 @@
             + '<div class="trow"><span class="k">Apps</span><span class="v">' + esc(c.apps + (c.apps === 1 ? ' app' : ' apps') + ', signed ' + whenOf(c.generatedAt)) + '</span></div>'
             + '<div class="trow fprow"><span class="k">Key fingerprint (SHA-256)</span><span class="fpbig">' + esc(c.fingerprint.slice(0, 32).replace(/(.{4})(?=.)/g, '$1 ')) + '<br>' + esc(c.fingerprint.slice(32).replace(/(.{4})(?=.)/g, '$1 ')) + '</span></div></div>';
         if (c.keyChanged) h += '<div class="notice bad">' + esc('This source is on the TV already, with another key. The publisher changed keys: add it only if Apps2Samsung showed you the same new key.') + '</div>';
-        else if (c.known) h += '<div class="notice info">' + esc('This source is on the TV already. Adding it again turns it on and keeps its apps where they are.') + '</div>';
-        h += '<div class="notice">' + esc('Check that the key matches the one Apps2Samsung showed. A valid signature means the apps come from this publisher. Apps2Samsung has not reviewed them.') + '</div>';
-        h += '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="srcyes" data-act="srcyes"' + (o.busy ? ' disabled' : '') + '>' + (o.busy ? 'Adding…' : c.known ? 'Add again' : 'Add source') + '</button>'
+        else if (c.known && !c.movedFrom) h += '<div class="notice info">' + esc('This source is on the TV already. Adding it again turns it on and keeps its apps where they are.') + '</div>';
+        if (c.movedFrom) h += '<div class="notice info">' + esc('The official catalog says ' + (c.movedFrom.length === 1 ? 'an app on its list moved' : c.movedFrom.length + ' apps on its list moved') + ' here, and names this key, so the key is vouched for by the signed catalog. Apps you have from there take their updates from this repository once it is added.') + '</div>'
+            + '<div class="notice">' + esc('A valid signature means the apps come from this publisher. Apps2Samsung does not review independent repositories.') + '</div>';
+        else h += '<div class="notice">' + esc('Check that the key matches the one Apps2Samsung showed. A valid signature means the apps come from this publisher. Apps2Samsung has not reviewed them.') + '</div>';
+        h += '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="srcyes" data-act="srcyes"' + (o.busy ? ' disabled' : '') + '>' + (o.busy ? 'Adding…' : c.known && c.movedFrom ? 'Take updates from there' : c.known ? 'Add again' : 'Add source') + '</button>'
             + '<button class="btn f" data-k="srcno" data-act="srcno" data-default>Don’t add</button></div><div class="hint">RETURN does not add it.</div></div>';
         return h;
     }
@@ -489,7 +495,7 @@
             b.token = uploadToken;
             xhr('POST', '/sources/add', b, function (err, res) {
                 if (err || !res || !res.ok) { o.busy = false; o.check = null; o.error = err ? err.message : (res && res.error) || 'no answer from the service'; renderSheet(true); return; }
-                if (ready) ready.sources = res.sources || [];
+                if (ready) { ready.sources = res.sources || []; if (res.sourceOf) ready.sourceOf = res.sourceOf; }
                 loadSources(false, function () { rebuild(); finish({ url: o.src.url, repositoryId: o.src.repositoryId, added: true, name: res.source && res.source.name }); });
             });
         });
@@ -699,6 +705,8 @@
                     var a = byFile[e.file]; if (!a) return;
                     var v = variant(e.variant, e.file, a.browser_download_url, e.version || a.package_version, e.app_id || a.app_id, e.package_id || a.package_id, e.required_version || a.required_version, e.cert_level || p.cert_level, iconOf(a));
                     var x = app('c:' + (e.group || e.name), e.group || e.name, e.category, e.description, ownerOf(e.repo));
+                    var mt = e.moved_to;
+                    if (!src && mt && /^https:\/\/[^\s\/@:]+(?::\d+)?\/\S*[.]signed$/.test(mt.url || '') && /^[0-9a-f]{64}$/.test(mt.fingerprint || '')) v.movedTo = x.movedTo = { url: mt.url, fingerprint: mt.fingerprint };
                     x.variants.push(v);
                     if (v.icon && !x.icon) x.icon = v.icon;
                     if (v.certLevel === 'partner') x.partner = true;
@@ -777,6 +785,32 @@
     function sourceOfPkg(pkg) { var m = ready && ready.sourceOf; return (m && m[pkg]) || 'official'; }
     function srcBadge(x) { return sourcesOn() ? badge(x.source === 'official' ? 'b-mute' : 'b-src', x.sourceName || sourceName(x.source)) : ''; }
     // The package of build v is on the TV, from another source than app x: that source's name, else ''.
+    // moved_to (#82): where an official app moved, and what is left to do about it: { url, fingerprint,
+    // domain, source (the repository when the TV has it), done (its updates come from there already) }.
+    function hostOf(u) { var m = /^https?:\/\/([^\/:?#]+)/i.exec(String(u || '')); return m ? m[1].toLowerCase() : ''; }
+    function movedInfo(x) {
+        if (!x || !x.movedTo || x.source !== 'official') return null;
+        var m = x.movedTo, src = null, v = x.variants[0];
+        ((ready && ready.sources) || []).forEach(function (t) { if (t.url === m.url && t.fingerprint === m.fingerprint && t.enabled !== false) src = t; });
+        return { url: m.url, fingerprint: m.fingerprint, domain: hostOf(m.url), source: src, done: !!(src && v.packageId && sourceOfPkg(v.packageId) === src.repositoryId) };
+    }
+    var MOVED_SEEN_KEY = 'a2s.tvstore.movedseen';
+    var movedSeen = (function () { try { var a = JSON.parse(window.localStorage.getItem(MOVED_SEEN_KEY)); return Array.isArray(a) ? a : []; } catch (e) { return []; } })();
+    // Installed official apps that moved and still update from the official catalog, by repository URL.
+    function movedGroups() {
+        var by = {}, out = [];
+        catalogApps.forEach(function (x) {
+            var m = movedInfo(x);
+            if (!m || m.done || !state(x).installed) return;
+            if (!by[m.url]) { by[m.url] = { url: m.url, fingerprint: m.fingerprint, domain: m.domain, source: m.source, apps: [] }; out.push(by[m.url]); }
+            by[m.url].apps.push(x);
+        });
+        return out;
+    }
+    function names(list) { var n = list.map(function (x) { return x.name; }); return n.length < 3 ? n.join(' and ') : n.slice(0, -1).join(', ') + ' and ' + n[n.length - 1]; }
+    function addMoved(url, fingerprint, label) {
+        offerSource({ url: url, fingerprint: fingerprint, moved: true, name: label }, function () {});
+    }
     function heldElsewhere(x, v) {
         if (!v || !v.packageId || !installed.hasOwnProperty(v.packageId)) return '';
         var from = sourceOfPkg(v.packageId);
@@ -1065,6 +1099,12 @@
             if (own && latest && newer(latest, own)) { selfLatest = latest; selfText = 'TV-Store v' + latest + ' is out (this is v' + own + '). This copy was installed under another package id by Apps2Samsung, so update it from Apps2Samsung (On the TV, Update) rather than from here.'; }
         }
         h += selfResultHtml();
+        movedGroups().forEach(function (g) {
+            if (movedSeen.indexOf(g.url) >= 0) return;
+            h += '<div class="notice row" style="margin:0 0 26px"><span>' + esc(names(g.apps) + (g.apps.length === 1 ? ' has' : ' have') + ' moved to ' + (g.source ? '\u2018' + g.source.name + '\u2019' : 'the developer\u2019s own repository at ' + g.domain) + '. The official catalog stops updating ' + (g.apps.length === 1 ? 'it' : 'them') + ' soon. ' + (g.source ? 'Take the updates from there to keep getting them.' : 'Add that repository to keep getting updates.')) + '</span>'
+                + '<button class="btn f" data-k="movedadd:' + esc(g.url) + '" data-act="movedadd" data-url="' + esc(g.url) + '" data-fp="' + esc(g.fingerprint) + '" data-name="' + esc(g.apps[0].name) + '">' + (g.source ? 'Take updates from there' : 'Add source') + '</button>'
+                + '<button class="btn f" data-k="movedlater:' + esc(g.url) + '" data-act="movedlater" data-url="' + esc(g.url) + '">Not now</button></div>';
+        });
         if (selfLatest && settings.hideSelfNotice !== selfLatest)
             h += '<div class="notice row" style="margin:0 0 26px"><span>' + esc(selfText) + '</span><button class="btn f" data-k="dismissself" data-act="dismissself" data-v="' + esc(selfLatest) + '">Got it</button></div>';
 
@@ -1137,7 +1177,9 @@
         else h += '<button class="btn grow f" data-k="tvsheet" data-act="tvsheet">Details</button>';
         if (v.appId) h += '<button class="btn f" data-k="tvopen" data-act="tvopen">Open</button>';
         h += '</div>';
-        if (st.update && isSelf(x)) h += '<div class="hint" style="text-align:left">' + esc(selfCan(x) ? SELF_TRY : SELF_HOW) + '</div>';
+        var mvp = movedInfo(x);
+        if (mvp && !mvp.done) h += '<div class="hint" style="text-align:left">' + esc(x.name + ' moved to ' + (mvp.source ? '\u2018' + mvp.source.name + '\u2019' : mvp.domain) + '. Open Details to keep getting its updates.') + '</div>';
+        else if (st.update && isSelf(x)) h += '<div class="hint" style="text-align:left">' + esc(selfCan(x) ? SELF_TRY : SELF_HOW) + '</div>';
         else if (st.update && v.needsHead) h += '<div class="hint" style="text-align:left">' + esc(x.name + ' ' + v.needsHead + ': update it with Apps2Samsung on a phone or PC.') + '</div>';
         else if (!st.known && x.variants.length > 1) h += '<div class="hint" style="text-align:left">' + esc('TV-Store cannot tell which build of ' + x.name + ' this is: the builds share one package. Open Details, pick your build and pin it; the pinned build is the one that gets updated.') + '</div>';
         return h + '</div>';
@@ -1224,6 +1266,10 @@
         else if (!armed()) h += '<div class="notice">Not armed yet. Open this TV’s Toolbox in Apps2Samsung 3.0 or newer on your phone or PC and press Arm TV-Store once; after that every install runs here.</div>';
         else if (plan.missing) h += '<div class="notice">' + esc(missingLevelText(x.name, plan)) + '</div>';
         if (elsewhere && !me) h += '<div class="notice">' + esc(x.name + ' on this TV (v' + installed[v.packageId] + ') came from ' + elsewhere + '. Installing this copy from ' + x.sourceName + ' replaces it, and its updates come from ' + x.sourceName + ' from then on.') + '</div>';
+        var mv = movedInfo(x);
+        if (mv && !mv.done) h += '<div class="notice row"><span>' + esc('The developer moved ' + x.name + ' to ' + (mv.source ? '\u2018' + mv.source.name + '\u2019' : 'their own repository at ' + mv.domain) + '. The official catalog stops updating it soon. ' + (st.installed ? (mv.source ? 'Take its updates from there.' : 'Add that repository to keep getting updates.') : 'Add that repository to install it from there.')) + '</span>'
+            + '<button class="btn f" data-k="movedadd" data-act="movedadd" data-url="' + esc(mv.url) + '" data-fp="' + esc(mv.fingerprint) + '" data-name="' + esc(x.name) + '">' + (mv.source ? 'Take updates from there' : 'Add source') + '</button></div>';
+        else if (mv && mv.done) h += '<div class="notice info">' + esc(x.name + ' moved to \u2018' + mv.source.name + '\u2019; its updates come from there now.') + '</div>';
         if (x.source !== 'official') h += '<div class="notice info">' + esc('From ' + x.sourceName + ', an independent repository you added. Its signature says the files come from its publisher; Apps2Samsung has not reviewed them.') + '</div>';
         var can = !v.needsHead && fits(v) && !me && armed() && !plan.missing && !(job && job.running);
         h += '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="install" data-act="install"' + (can ? (x.variants.length > 1 ? '' : ' data-default') : ' disabled') + '>'
@@ -1509,6 +1555,9 @@
             case 'certremove': certConfirm = true; renderSheet(); focusKey('certremoveno'); return;
             case 'certremoveno': certConfirm = false; renderSheet(); focusKey('certremove'); return;
             case 'srcyes': answerOffer(true); return;
+            case 'movedadd': var mu = el.getAttribute('data-url'), mf = el.getAttribute('data-fp'), mn = el.getAttribute('data-name');
+                if (sheet) closeSheet(function () { renderPage(); addMoved(mu, mf, mn); }); else addMoved(mu, mf, mn); return;
+            case 'movedlater': movedSeen.push(el.getAttribute('data-url')); try { window.localStorage.setItem(MOVED_SEEN_KEY, JSON.stringify(movedSeen)); } catch (e) {} renderPage(); focusFirst(); return;
             case 'srcno': answerOffer(false); return;
             case 'srctoggle': var cur = null; ((ready && ready.sources) || []).forEach(function (t) { if (t.repositoryId === srcSel) cur = t; });
                 sourceAction('/sources/enable', { enabled: !!(cur && cur.enabled === false) }, function (id) { renderSheet(); focusKey('srcrow:' + id); }); return;

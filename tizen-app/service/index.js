@@ -975,20 +975,55 @@ function installedFrom(entry) {
 
 // Settings and Apps2Samsung's Send sources to TV, both through the page (POST /sources/...):
 // check one without keeping it, add it with the page's token, turn it off or on, remove it.
+// { moved: true } is a source the signed official catalog names in moved_to (#82): its URL and
+// fingerprint must be what the catalog says for some package, which stands in for the approval in
+// Apps2Samsung, and its repository id comes from the manifest itself (moved_to carries none).
 function checkSource(b, cb) {
-    var n = repos.normalizeSource(b);
+    var moved = !!(b && b.moved === true);
+    var n = repos.normalizeSource(b, { idFromManifest: moved });
     if (n.error) return cb(coded('BAD_SOURCE', n.error));
-    var s = n.source, had = sourceById(s.repositoryId);
-    if (had && had.fingerprint === s.fingerprint) s.lastGeneratedAt = had.lastGeneratedAt;
-    fetchSource(s, function (err, v) {
-        if (err) { var e = coded('SOURCE_REFUSED', err.message); e.reason = err.reason || null; return cb(e); }
-        cb(null, s, v, had);
+    var s = n.source;
+    function go(vouched) {
+        var had = s.repositoryId ? sourceById(s.repositoryId) : null;
+        if (had && had.fingerprint === s.fingerprint) s.lastGeneratedAt = had.lastGeneratedAt;
+        fetchSource(s, function (err, v) {
+            if (err) { var e = coded('SOURCE_REFUSED', err.message); e.reason = err.reason || null; return cb(e); }
+            if (!s.repositoryId) {
+                s.repositoryId = v.repository.id;
+                had = sourceById(s.repositoryId);
+                if (had && had.fingerprint === s.fingerprint && had.lastGeneratedAt && Date.parse(v.generatedAt) < Date.parse(had.lastGeneratedAt)) {
+                    var r = coded('SOURCE_REFUSED', 'the repository is from ' + v.generatedAt + ', older than the one already accepted (' + had.lastGeneratedAt + '): refused as a rollback'); r.reason = 'rollback'; return cb(r);
+                }
+            }
+            v.vouched = vouched;
+            cb(null, s, v, had);
+        });
+    }
+    if (!moved) return go(null);
+    withCatalog(function (err, cat) {
+        if (err) return cb(coded('SOURCE_REFUSED', 'the official catalog did not load, so it cannot vouch for this source: ' + err.message));
+        var pkgs = movedPackages(cat, s);
+        if (!pkgs.length) return cb(coded('NOT_MOVED', 'the official catalog names no app that moved to this repository with this key'));
+        go(pkgs);
     });
+}
+// The package ids the official catalog says moved to source s (same URL and key).
+function movedPackages(cat, s) {
+    var out = [], m = (cat && cat.moved) || {};
+    for (var pkg in m) if (m.hasOwnProperty(pkg) && m[pkg].url === s.url && m[pkg].fingerprint === s.fingerprint) out.push(pkg);
+    return out;
 }
 function describe(s, v, had) {
     var r = v.repository;
     return { url: s.url, repositoryId: s.repositoryId, fingerprint: s.fingerprint, domain: repos.hostOf(s.url), name: r.name, maintainer: r.maintainer, description: r.description || '', homepage: r.homepage || '',
-             generatedAt: v.generatedAt, apps: v.manifest.providers.length, files: Object.keys(v.index).length, known: !!had, keyChanged: !!(had && had.fingerprint !== s.fingerprint) };
+             generatedAt: v.generatedAt, apps: v.manifest.providers.length, files: Object.keys(v.index).length, known: !!(had && had.enabled !== false), keyChanged: !!(had && had.fingerprint !== s.fingerprint),
+             movedFrom: v.vouched || null };
+}
+// The package ids a verified repository lists.
+function packagesIn(v) {
+    var out = {};
+    v.manifest.providers.forEach(function (p) { p.releases.forEach(function (r) { r.assets.forEach(function (a) { if (a.package_id) out[a.package_id] = true; }); }); });
+    return out;
 }
 function addSource(b, cb) {
     checkSource(b, function (err, s, v, had) {
@@ -1000,8 +1035,21 @@ function addSource(b, cb) {
         if (had) SOURCES[SOURCES.indexOf(had)] = s; else SOURCES.push(s);
         SOURCE_STATE[s.repositoryId] = { at: Date.now(), verified: v };
         saveSources();
-        log('sources: ' + (had ? (had.fingerprint !== s.fingerprint ? 'updated (new key) ' : 'updated ') : 'added ') + s.name + ' (' + s.repositoryId + ', ' + repos.hostOf(s.url) + ', key ' + s.fingerprint.slice(0, 16) + '…), confirmed on the TV; ' + Object.keys(v.index).length + ' files');
-        cb(null, describe(s, v, had));
+        log('sources: ' + (had ? (had.fingerprint !== s.fingerprint ? 'updated (new key) ' : 'updated ') : 'added ') + s.name + ' (' + s.repositoryId + ', ' + repos.hostOf(s.url) + ', key ' + s.fingerprint.slice(0, 16) + '…), '
+            + (v.vouched ? 'named by the official catalog as where ' + v.vouched.join(', ') + ' moved, ' : '') + 'confirmed on the TV; ' + Object.keys(v.index).length + ' files');
+        // Moved apps (#82): their updates come from the new repository from now on, for each package the
+        // official catalog says moved there, that it lists, and that came from the official catalog.
+        var adopted = [];
+        if (v.vouched) {
+            var listed = packagesIn(v), m = sourceOfPackage();
+            v.vouched.forEach(function (pkg) {
+                if (!listed[pkg] || (m[pkg] && m[pkg] !== 'official')) return;
+                rememberSource(pkg, s.repositoryId); adopted.push(pkg);
+            });
+            if (adopted.length) log('sources: updates of ' + adopted.join(', ') + ' come from ' + s.name + ' now (moved there, says the official catalog)');
+        }
+        var d = describe(s, v, had); d.adopted = adopted;
+        cb(null, d);
     });
 }
 function pageToken(b) { return String((b && b.token) || '') === UPLOAD_TOKEN; }
@@ -1131,7 +1179,7 @@ http.createServer(function (req, res) {
     if (route === '/sources/add' && req.method === 'POST') return body(req, function (err, b) {
         if (err) return json(res, 400, { ok: false, error: 'need { url, repositoryId, fingerprint, token }' });
         if (!pageToken(b)) { log('sources: refused an add without the token'); return json(res, 403, { ok: false, error: 'only the TV-Store screen may add a source', code: 'NO_TOKEN' }); }
-        addSource(b, function (err, d) { if (err) return json(res, 200, { ok: false, error: err.message, code: err.code, reason: err.reason || null }); json(res, 200, { ok: true, source: d, sources: SOURCES.map(publicSource) }); });
+        addSource(b, function (err, d) { if (err) return json(res, 200, { ok: false, error: err.message, code: err.code, reason: err.reason || null }); json(res, 200, { ok: true, source: d, sources: SOURCES.map(publicSource), sourceOf: sourceOfPackage() }); });
     });
     if ((route === '/sources/remove' || route === '/sources/enable') && req.method === 'POST') return body(req, function (err, b) {
         var s = !err && b ? sourceById(String(b.repositoryId || '')) : null;
