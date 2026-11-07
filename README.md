@@ -195,6 +195,48 @@ network like the log; the install is not: only the TV-Store screen can start it,
 service writes into the app's private data folder at every start, where no other app on the TV
 can read it. The TV must be armed first.
 
+If the TV already has a different app under the file's package id, the screen says so ("Already on
+your TV: …"). A file sent this way has no catalog entry to derive another id from, so installing
+it replaces that app.
+
+## A fork that kept another app's package id
+
+Forks often keep upstream's package id: tacplayer ships the official Jellyfin id `AprZAARz4r`.
+Installing one used to replace the app with that id, and its data (#84). Now, before signing,
+the service reads the package's `config.xml` id and `<name>`, and the page tells it which apps the
+TV has (package id and names, from `tizen.application.getAppsInfo`):
+
+- **Not on the TV, or the same name** (case and spaces aside): installs under its own id, as before.
+  The same name means the same app, so updates and variants of one group are not renamed.
+- **A different app has the id, `.wgt`:** installs as a separate app under an id of its own. The
+  done screen says "Installed as a separate app, because Jellyfin already uses this id."
+- **A different app has the id, `.tpk`:** native code can hardcode its own paths, so it is not
+  renamed. The install stops with "Already on your TV: …", and the screen offers **Cancel** or
+  **Replace it**.
+
+**The new id is the same in every client** (Apps2Samsung#1028), so an app renamed by TV-Store is
+found and updated by Apps2Samsung, and the other way round. It is the first 10 characters of
+`base62(sha256("a2s-pkgid-v1:" + key))`, one character per byte (`byte % 62`, alphabet
+`0-9A-Za-z`). The key names the catalog entry, so it does not change between versions:
+
+| Where the file comes from | key |
+|---|---|
+| Official catalog, community package | the entry's `repo`, `/`, its `file`: `sfsdffesfsfg-cloud/tacplayer/tacplayer.wgt` → `ln9ooxgrYz` |
+| Official catalog, provider of its own | `owner/name` from its GitHub releases URL, `/`, the asset's name: `jeppevinkel/jellyfin-tizen-builds/Jellyfin.wgt` → `NlEuwl5oL0` |
+| Independent repository | the repository's URL (the `repository.json.signed` one it was added under), `/`, the asset's name |
+
+The rewrite is what Apps2Samsung's `PackageIdRewriter` does. The old id is replaced as a whole
+token in `config.xml` (the application id and package, and the service components' ids) and in
+every text file of the package (`.js`, `.html`, `.json` and the like, for an app that launches its
+own service by id). Signatures are dropped, and the package is then signed like every install.
+
+Once renamed, updates land on that copy. The service finds it by the derived id, so a copy
+Apps2Samsung renamed counts too, and another build of the same app goes to the same tile. Each
+rename is kept in the data folder (`.a2s-package-renames.json`: original and new package and
+application id, the key, the source). The page gets every catalog file's derived id from
+`GET /pkgids`. With those, the Installed badge, the update check, Open and the certificate the app
+was signed with all follow the renamed copy. The package's own id on the TV stays with the other app.
+
 ## Independent repositories (sources)
 
 Developers can publish their own **signed repository** of Tizen apps, Cydia-style, without going
@@ -430,6 +472,7 @@ The header counts what the switches hide ("12 apps · 3 hidden").
 - `tizen-app/service/signer.js`: the package signer
 - `tizen-app/service/catalog.js` + `catalog-key.js`: the signed catalog check and its public key
 - `tizen-app/service/repos.js`: independent repositories (#82): every rule of the spec with its reason code, key size and fingerprint from the DER, the sources Apps2Samsung hands over
+- `tizen-app/service/pkgid.js`: another app's package id (#84): the id derived from a catalog entry, when to rename, the rewrite of the package
 - `tizen-app/service/icons.js`: app icons, fetched like a package, kept only with the catalog's hash, cached, served at `/icon/<sha256>` (#66)
 - `tizen-app/service/compat.js`: buffers that work on the TV's Node 4.4.3
 - `tizen-app/service/manifest.js`: the ids, the required Tizen version and the privileges a package carries in its own manifest
@@ -476,6 +519,8 @@ node test/relay.test.js     # the on-TV sdb relay: a session survives the hop, a
 node test/relay-settings.test.js  # relay settings over /settings: validation, restart only on change, status; GET /relay for the LAN
 node test/certs.test.js     # signing profiles: payload shapes, merge, order, levels, expiry and DUIDs from the DER, default and remove on the TV (#78)
 node test/selfupdate.test.js  # TV-Store updating itself (#41): refused without the switch, the marker, reported after the installer stops the service
+node test/pkgid.test.js     # another app's package id (#84): the derived id against values computed apart, catalog keys, when to rename, whole-token rewrite
+node test/rename.test.js    # a fork installed beside the app whose id it kept, its update on that copy, a .tpk refused until Replace, an older page as before
 ```
 
 Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching the version in

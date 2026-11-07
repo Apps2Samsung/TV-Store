@@ -27,6 +27,7 @@ var wascmd = require('./wascmd.js');
 var iconsMod = require('./icons.js');
 var selfupdate = require('./selfupdate.js');
 var repos = require('./repos.js');
+var pkgid = require('./pkgid.js');
 
 var PORT = 8077;
 // sdbd's port; a test points the service at a fake sdbd (test/install.test.js).
@@ -531,21 +532,35 @@ function install(entry, cb) {
         var want = cat.index[downloadUrl];
         if (!want) return cb(coded('NO_HASH', 'the catalog has no hash for this file, so the TV cannot check it; install it from Apps2Samsung on a phone or PC'));
         // An installed app updates from the source it came from (#82). Another source's copy of the
-        // same package replaces it only when the person at the TV said so.
-        var from = installedFrom(entry);
-        if (from && from !== cat.id && entry.switchSource !== true) {
-            log('install: ' + entry.packageId + ' came from ' + sourceLabel(from) + ', not from ' + cat.label + '; not switching without a yes on the TV');
-            return cb(coded('SOURCE_SWITCH', (entry.name || entry.packageId) + ' on this TV came from ' + sourceLabel(from) + '. Installing this copy from ' + cat.label + ' replaces it, and its updates then come from there. Confirm that on the TV first.'));
+        // same package replaces it only when the person at the TV said so. Checked once the package
+        // says where it goes on this TV: another app's id is no replace when the package gets its own (#84).
+        function sourceSwitch() {
+            var from = installedFrom(entry);
+            if (from && from !== cat.id && entry.switchSource !== true) {
+                log('install: ' + entry.packageId + ' came from ' + sourceLabel(from) + ', not from ' + cat.label + '; not switching without a yes on the TV');
+                return coded('SOURCE_SWITCH', (entry.name || entry.packageId) + ' on this TV came from ' + sourceLabel(from) + '. Installing this copy from ' + cat.label + ' replaces it, and its updates then come from there. Confirm that on the TV first.');
+            }
+            if (from && from !== cat.id) log('install: moving ' + entry.packageId + ' from ' + sourceLabel(from) + ' to ' + cat.label + ', confirmed on the TV');
+            return null;
         }
-        if (from && from !== cat.id) log('install: moving ' + entry.packageId + ' from ' + sourceLabel(from) + ' to ' + cat.label + ', confirmed on the TV');
+        var early = entry.tvApps ? null : sourceSwitch();
+        if (early) return cb(early);
         var done = cb;
-        cb = function (err, r) { if (!err) { rememberSource(entry.packageId, cat.id); if (r) r.source = cat.id; } done(err, r); };
+        cb = function (err, r) {
+            if (!err) {
+                rememberSource(entry.packageId, cat.id);
+                if (entry.renamed) rememberRename(entry, cat.id);
+                if (r) { r.source = cat.id; r.packageId = entry.packageId; r.appId = entry.appId || ''; if (entry.renamed) r.renamed = { from: entry.renamed.from, to: entry.renamed.to, why: entry.renamed.why, other: entry.renamed.other || null }; }
+            }
+            done(err, r);
+        };
         entry.catalogLevel = cat.levels[downloadUrl] || '';
+        entry.key = (cat.keys && cat.keys[downloadUrl]) || '';
         if (!DATA_DIR) return cb(new Error('the service has no folder it can write to'));
         var own = selfGate(entry);
         if (own) return cb(own);
-        var base = path.join(DATA_DIR, 'job-' + Date.now()), inFile = base + '.in.wgt', outFile = base + '.signed.wgt';
-        function clean(err, r) { [inFile, outFile].forEach(function (f) { try { fs.unlinkSync(f); } catch (e) {} }); cb(err, r); }
+        var base = path.join(DATA_DIR, 'job-' + Date.now()), inFile = base + '.in.wgt', outFile = base + '.signed.wgt', renFile = base + '.renamed.wgt';
+        function clean(err, r) { [inFile, outFile, renFile].forEach(function (f) { try { fs.unlinkSync(f); } catch (e) {} }); cb(err, r); }
         log('install: downloading ' + downloadUrl);
         var started = Date.now();
         getToFile(downloadUrl, inFile, function (err, got) {
@@ -560,13 +575,102 @@ function install(entry, cb) {
                 else { entry.requiredVersion = ids.requiredVersion; entry.manifestPartner = !!ids.partner; }
                 var gate = tizenGate(entry);
                 if (gate) return clean(gate);
-                signAndInstall(entry, remoteName, inFile, outFile, clean);
+                placeOnTv(entry, err ? null : ids, inFile, renFile, function (err, file) {
+                    if (err) return clean(err);
+                    var sw = entry.tvApps ? sourceSwitch() : null;
+                    if (sw) return clean(sw);
+                    signAndInstall(entry, remoteName, file, outFile, clean);
+                });
             });
         });
     });
 }
 
 function coded(code, message) { var e = new Error(message); e.code = code; return e; }
+
+// ---- another app's package id (#84) -----------------------------------------------------------------
+// What the page says the TV has, { packageId: [names] } (tizen.application.getAppsInfo), cleaned up;
+// null when it did not say (an older page), which leaves every package on its own id as before.
+function tvAppsOf(v) {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+    var out = {};
+    for (var k in v) {
+        if (!v.hasOwnProperty(k) || !pkgid.isValidId(k)) continue;
+        var names = Array.isArray(v[k]) ? v[k] : [v[k]];
+        out[k] = names.filter(function (n) { return typeof n === 'string'; }).map(function (n) { return n.slice(0, 200); }).slice(0, 20);
+    }
+    return out;
+}
+// The renames made on this TV, oldest first: [{ originalPackageId, newPackageId, originalAppId,
+// newAppId, key, source, file, at }]. Kept so another build of a renamed app lands on its tile, and
+// so the page can tell which catalog entry a renamed app came from. The id itself is derived from
+// the catalog entry, so a rename Apps2Samsung made is found without a record.
+var RENAMES = null, RENAMES_NAME = '.a2s-package-renames.json';
+function renames() {
+    if (RENAMES) return RENAMES;
+    try { RENAMES = JSON.parse(fs.readFileSync(path.join(DATA_DIR, RENAMES_NAME), 'utf8')); } catch (e) { RENAMES = []; }
+    if (!Array.isArray(RENAMES)) RENAMES = [];
+    return RENAMES;
+}
+function rememberRename(entry, source) {
+    var r = entry.renamed, list = renames().filter(function (x) { return x.newPackageId !== r.to; });
+    list.push({ originalPackageId: r.from, newPackageId: r.to, originalAppId: r.fromAppId || '', newAppId: entry.appId || '', key: entry.key || '', source: source || 'official', file: entry.file || '', at: new Date().toISOString() });
+    RENAMES = list;
+    if (DATA_DIR) { try { fs.writeFileSync(path.join(DATA_DIR, RENAMES_NAME), JSON.stringify(list)); } catch (e) { log('install: cannot save the package id rename: ' + e.message); } }
+}
+// Decides where the package at inFile goes on this TV (pkgid.decide) and renames it into renFile
+// when it gets an id of its own; cb(err, the file to sign). entry.packageId and entry.appId are the
+// ones it installs under afterwards, entry.renamed says what changed.
+function placeOnTv(entry, ids, inFile, renFile, cb) {
+    entry.tvApps = tvAppsOf(entry.tvApps);
+    // The package's own ids over what the page took from the catalog.
+    if (ids) { entry.packageId = ids.packageId || entry.packageId; entry.appId = ids.appId || entry.appId; }
+    if (!ids || !entry.tvApps) return cb(null, inFile);
+    var d = pkgid.decide({ kind: ids.kind, packageId: ids.packageId, names: ids.names, key: entry.key, tvApps: entry.tvApps, renames: renames() });
+    var name = ids.name || entry.name || ids.packageId;
+    function onTv(id) { return entry.tvApps.hasOwnProperty(id); }
+    if (d.taken) {
+        if (entry.replaceOther === true) {
+            log('install: ' + ids.packageId + ' is ‘' + d.taken + '’ on this TV, and ' + name + ' replaces it, confirmed on the TV');
+            entry.installed = true;
+            return cb(null, inFile);
+        }
+        log('install: ' + name + ' uses package id ' + ids.packageId + ', which ‘' + d.taken + '’ on this TV has; ' + (ids.kind === 'tpk' ? 'a native app keeps its own id' : 'the catalog names no entry to derive another id from') + ', so not installing without a yes on the TV');
+        return cb(coded('PACKAGE_ID_TAKEN', 'Already on your TV: ' + d.taken + '. Installing ' + name + ' would replace it' + (ids.kind === 'tpk' ? ' (a native app cannot be installed under another id)' : '') + '.'));
+    }
+    if (!d.rename) {
+        if (ids.packageId) entry.installed = onTv(ids.packageId);
+        return cb(null, inFile);
+    }
+    log('install: ' + (d.why === 'collision'
+        ? name + ' uses package id ' + ids.packageId + ', which ‘' + d.other + '’ on this TV already has; installing it as a separate app under ' + d.rename
+        : name + ' is on this TV as ' + d.rename + ' (renamed from ' + ids.packageId + ' when it was installed); updating that copy'));
+    pkgid.rewrite(inFile, renFile, ids.packageId, d.rename, function (err, r) {
+        if (err) { log('install: the rename failed: ' + err.message); return cb(coded('RENAME_FAILED', 'TV-Store could not give ' + name + ' a package id of its own: ' + err.message)); }
+        logv('install: renamed ' + r.from + ' to ' + r.to + ' in ' + r.files.join(', '));
+        manifest.read(renFile, function (err, now) {
+            if (err) return cb(coded('RENAME_FAILED', 'the renamed package does not read back: ' + err.message));
+            entry.renamed = { from: ids.packageId, to: d.rename, why: d.why, other: d.other || null, fromAppId: ids.appId };
+            entry.packageId = now.packageId; entry.appId = now.appId; entry.installed = onTv(now.packageId);
+            cb(null, renFile);
+        });
+    });
+}
+// GET /pkgids: download URL -> the package id a rename gives that file, for every file of the
+// official catalog and of each repository that verified, so the page finds a renamed app (#84).
+function pkgIds(cb) {
+    withCatalog(function (err, cat) {
+        var out = {}, u;
+        if (cat && cat.keys) for (u in cat.keys) if (cat.keys.hasOwnProperty(u)) out[u] = pkgid.derive(cat.keys[u]);
+        withSources(false, function (list) {
+            list.forEach(function (r) {
+                if (!r.verified || !r.verified.files) return;
+                for (var u in r.verified.files) if (r.verified.files.hasOwnProperty(u)) out[u] = pkgid.derive(pkgid.key(r.source.url, r.verified.files[u]));
+            });
+            cb(out);
+        });
+    });
+}
 
 // The page sends the TV's platform version with every install (entry.tizen, "4.0"); the package's
 // own manifest says what it asks for (entry.requiredVersion). A mismatch is refused here with the
@@ -951,7 +1055,9 @@ function trustFor(source, cb) {
     if (!s.enabled) return cb(coded('SOURCE_OFF', '‘' + (s.name || s.repositoryId) + '’ is turned off in Settings, Sources'));
     loadSource(s, false, function (st) {
         if (st.error) return cb(coded('SOURCE_FAILED', '‘' + (s.name || s.repositoryId) + '’ did not load, so nothing is installed from it: ' + st.error.message));
-        cb(null, { id: s.repositoryId, label: '‘' + (s.name || s.repositoryId) + '’', index: st.verified.index, levels: st.verified.levels });
+        var keys = {}, files = st.verified.files || {};
+        for (var u in files) if (files.hasOwnProperty(u)) keys[u] = pkgid.key(s.url, files[u]);
+        cb(null, { id: s.repositoryId, label: '‘' + (s.name || s.repositoryId) + '’', index: st.verified.index, levels: st.verified.levels, keys: keys });
     });
 }
 
@@ -1196,6 +1302,7 @@ http.createServer(function (req, res) {
         saveSources();
         json(res, 200, { ok: true, sources: SOURCES.map(publicSource) });
     });
+    if (route === '/pkgids' && req.method === 'GET') return pkgIds(function (ids) { json(res, 200, { ok: true, ids: ids, renames: renames() }); });
     if (route === '/catalog') return withCatalog(function (err, cat) { if (err) { log('catalog: failed: ' + err.message); return json(res, 502, { ok: false, error: err.message }); } cors(res, 200, 'application/json'); res.end(cat.payload); });
     if (route === '/cert' && req.method === 'POST') return body(req, function (err, b) {
         var incoming = err ? [] : certs.normalize(b);

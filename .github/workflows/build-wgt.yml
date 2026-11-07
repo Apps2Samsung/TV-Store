@@ -57,6 +57,10 @@ jobs:
         run: node test/wascmd.test.js
       - name: TV-Store updating itself, the marker across a stopped service (#41)
         run: node test/selfupdate.test.js
+      - name: Another app's package id, the derived id and the rewrite (#84)
+        run: node test/pkgid.test.js
+      - name: A fork installed beside the app whose id it kept, against the service (#84)
+        run: node test/rename.test.js
       # The TV's own Node: v4.4.3 on a 2019 Tizen 5.0 set (#881). Buffer.from, Buffer.alloc,
       # crypto.sign and friends are newer than that, and only fail there; run every test on it too.
       - uses: actions/setup-node@v4
@@ -85,6 +89,8 @@ jobs:
           node test/sdb-loopback.test.js
           node test/wascmd.test.js
           node test/selfupdate.test.js
+          node test/pkgid.test.js
+          node test/rename.test.js
       - name: Build the .wgt
         run: scripts/build-wgt.sh
       - uses: actions/upload-artifact@v4

@@ -194,7 +194,7 @@ function duplicateProblem(m) {
 // ---- the check ------------------------------------------------------------------------------------
 // buf: the bytes of repository.json.signed. o: { publicKeyPem, fingerprint (approved, required),
 // repositoryId (approved, optional), notBefore (the last accepted generatedAt, optional), now }.
-// Returns { manifest, payload, repository, generatedAt, index, levels, icons } or throws with .reason.
+// Returns { manifest, payload, repository, generatedAt, index, levels, icons, files } or throws with .reason.
 function verify(buf, o) {
     o = o || {};
     var now = o.now || Date.now();
@@ -222,7 +222,7 @@ function verify(buf, o) {
     if (o.notBefore && at < Date.parse(o.notBefore)) throw fail('rollback', 'the repository is from ' + m.generatedAt + ', older than the one already accepted (' + o.notBefore + '): refused as a rollback');
     if ((why = duplicateProblem(m))) throw fail('duplicate', 'the repository is not valid: ' + why);
     var s = catalogTrust.scan(m);
-    return { manifest: m, payload: env.payload, repository: m.repository, generatedAt: m.generatedAt, index: s.index, levels: s.levels, icons: s.icons };
+    return { manifest: m, payload: env.payload, repository: m.repository, generatedAt: m.generatedAt, index: s.index, levels: s.levels, icons: s.icons, files: s.files };
 }
 
 // ---- sources as Apps2Samsung hands them over ------------------------------------------------------
