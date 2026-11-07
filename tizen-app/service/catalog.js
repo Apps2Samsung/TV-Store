@@ -20,17 +20,28 @@ var MAX_AGE_MS = 7 * 24 * 3600 * 1000;   // the workflow re-signs at least twice
 var Buf = require('./compat.js');
 function b64(s) { return Buf.from(s, 'base64'); }
 
-// buf: the bytes of resolved.json.signed. Returns { catalog, payload, index } or throws.
-function verify(buf, publicKeyPem, now) {
+// The .signed envelope, shared with the independent repositories (repos.js): line 1 a base64
+// signature, ending within the first 4096 bytes, then the payload. { sig, payload } or null.
+function envelope(buf) {
     var nl = -1;
     for (var i = 0; i < buf.length && i < 4096; i++) if (buf[i] === 0x0a) { nl = i; break; }
-    if (nl < 0) throw new Error('the catalog is not signed (no signature line)');
-    var sig = b64(buf.slice(0, nl).toString('ascii').trim());
-    var payload = buf.slice(nl + 1);
-
+    if (nl < 0) return null;
+    var line = buf.slice(0, nl).toString('ascii').trim();
+    if (!/^[A-Za-z0-9+\/]+={0,2}$/.test(line)) return null;
+    return { sig: b64(line), payload: buf.slice(nl + 1) };
+}
+function signatureOk(payload, sig, publicKeyPem) {
     var v = crypto.createVerify('RSA-SHA256');
     v.update(payload);
-    if (!v.verify(publicKeyPem, sig)) throw new Error('the catalog signature does not match: not installing from it');
+    try { return v.verify(publicKeyPem, sig); } catch (e) { return false; }
+}
+
+// buf: the bytes of resolved.json.signed. Returns { catalog, payload, index } or throws.
+function verify(buf, publicKeyPem, now) {
+    var env = envelope(buf);
+    if (!env) throw new Error('the catalog is not signed (no signature line)');
+    var payload = env.payload;
+    if (!signatureOk(payload, env.sig, publicKeyPem)) throw new Error('the catalog signature does not match: not installing from it');
 
     var catalog = JSON.parse(payload.toString('utf8'));
     var at = Date.parse(catalog.generatedAt || '');
@@ -73,4 +84,4 @@ function icons(catalog) { return scan(catalog).icons; }
 
 function sha256(buf) { return crypto.createHash('sha256').update(buf).digest('hex'); }
 
-module.exports = { verify: verify, scan: scan, index: index, levels: levels, icons: icons, sha256: sha256, MAX_AGE_MS: MAX_AGE_MS };
+module.exports = { verify: verify, envelope: envelope, signatureOk: signatureOk, scan: scan, index: index, levels: levels, icons: icons, sha256: sha256, MAX_AGE_MS: MAX_AGE_MS };
