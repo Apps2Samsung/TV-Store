@@ -37,6 +37,8 @@ jobs:
           node test/sdb-loopback.test.js
           node test/wascmd.test.js
           node test/selfupdate.test.js
+          node test/pkgid.test.js
+          node test/rename.test.js
       - name: Version in config.xml must match the tag
         run: |
           tag="${GITHUB_REF_NAME#v}"
