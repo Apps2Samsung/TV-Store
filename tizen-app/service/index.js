@@ -658,6 +658,8 @@ function placeOnTv(entry, ids, inFile, renFile, cb) {
 }
 // GET /pkgids: download URL -> the package id a rename gives that file, for every file of the
 // official catalog and of each repository that verified, so the page finds a renamed app (#84).
+// Second: the official catalog's removed apps by package id (#87), renamed ids included, which
+// the page cannot derive itself.
 function pkgIds(cb) {
     withCatalog(function (err, cat) {
         var out = {}, u;
@@ -667,7 +669,7 @@ function pkgIds(cb) {
                 if (!r.verified || !r.verified.files) return;
                 for (var u in r.verified.files) if (r.verified.files.hasOwnProperty(u)) out[u] = pkgid.derive(pkgid.key(r.source.url, r.verified.files[u]));
             });
-            cb(out);
+            cb(out, (cat && cat.removed) || {});
         });
     });
 }
@@ -1302,7 +1304,7 @@ http.createServer(function (req, res) {
         saveSources();
         json(res, 200, { ok: true, sources: SOURCES.map(publicSource) });
     });
-    if (route === '/pkgids' && req.method === 'GET') return pkgIds(function (ids) { json(res, 200, { ok: true, ids: ids, renames: renames() }); });
+    if (route === '/pkgids' && req.method === 'GET') return pkgIds(function (ids, removed) { json(res, 200, { ok: true, ids: ids, renames: renames(), removed: removed }); });
     if (route === '/catalog') return withCatalog(function (err, cat) { if (err) { log('catalog: failed: ' + err.message); return json(res, 502, { ok: false, error: err.message }); } cors(res, 200, 'application/json'); res.end(cat.payload); });
     if (route === '/cert' && req.method === 'POST') return body(req, function (err, b) {
         var incoming = err ? [] : certs.normalize(b);
