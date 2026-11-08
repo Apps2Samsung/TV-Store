@@ -35,6 +35,7 @@ jobs:
           node test/certlevel.test.js
           node test/sdbhosts.test.js
           node test/sdb-loopback.test.js
+          node test/sdb-tunnel.test.js
           node test/wascmd.test.js
           node test/selfupdate.test.js
           node test/pkgid.test.js

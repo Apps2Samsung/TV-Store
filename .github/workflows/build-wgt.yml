@@ -14,7 +14,7 @@ jobs:
           node-version: '20'
       - name: Syntax-check the service and UI
         run: |
-          for f in tizen-app/service/sdb.js tizen-app/service/relay.js tizen-app/service/zip.js tizen-app/service/index.js tizen-app/service/signer.js tizen-app/service/catalog.js tizen-app/service/catalog-key.js tizen-app/service/compat.js tizen-app/service/manifest.js tizen-app/service/refusal.js tizen-app/service/certs.js tizen-app/service/sdbhosts.js tizen-app/service/wascmd.js tizen-app/service/selfupdate.js tizen-app/service/icons.js tizen-app/service/repos.js tizen-app/js/app.js test/fake-sdbd.js test/run.js test/relay.test.js test/relay-settings.test.js test/sign.test.js test/config.test.js test/sdb-errors.test.js test/manifest.test.js test/refusal.test.js test/certs.test.js test/install.test.js test/certlevel.test.js test/sdbhosts.test.js test/sdb-loopback.test.js test/wascmd.test.js test/selfupdate.test.js test/repos.test.js test/sources.test.js; do
+          for f in tizen-app/service/sdb.js tizen-app/service/relay.js tizen-app/service/zip.js tizen-app/service/index.js tizen-app/service/signer.js tizen-app/service/catalog.js tizen-app/service/catalog-key.js tizen-app/service/compat.js tizen-app/service/manifest.js tizen-app/service/refusal.js tizen-app/service/certs.js tizen-app/service/sdbhosts.js tizen-app/service/wascmd.js tizen-app/service/selfupdate.js tizen-app/service/icons.js tizen-app/service/repos.js tizen-app/js/app.js test/fake-sdbd.js test/run.js test/relay.test.js test/relay-settings.test.js test/sign.test.js test/config.test.js test/sdb-errors.test.js test/manifest.test.js test/refusal.test.js test/certs.test.js test/install.test.js test/certlevel.test.js test/sdbhosts.test.js test/sdb-loopback.test.js test/sdb-tunnel.test.js test/wascmd.test.js test/selfupdate.test.js test/repos.test.js test/sources.test.js; do
             node --check "$f"
           done
       - name: config.xml ids (package id is 10 alphanumerics)
@@ -53,6 +53,8 @@ jobs:
         run: node test/sdbhosts.test.js
       - name: Install over loopback (Host PC IP 127.0.0.1) and the HOST_PC_IP advice (#52)
         run: node test/sdb-loopback.test.js
+      - name: Install through another app's sdb tunnel when it holds sdbd (#90)
+        run: node test/sdb-tunnel.test.js
       - name: Install through wascmd from the service, sdbd as the fallback (#57)
         run: node test/wascmd.test.js
       - name: TV-Store updating itself, the marker across a stopped service (#41)
@@ -87,6 +89,7 @@ jobs:
           node test/certlevel.test.js
           node test/sdbhosts.test.js
           node test/sdb-loopback.test.js
+          node test/sdb-tunnel.test.js
           node test/wascmd.test.js
           node test/selfupdate.test.js
           node test/pkgid.test.js

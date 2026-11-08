@@ -46,6 +46,9 @@ function relayPortProblem(n) {
 }
 function parseRelayPort(v, dflt) { var n = parseInt(v, 10); return relayPortProblem(n) ? dflt : n; }
 var RELAY_PORT = parseRelayPort(process.env.A2S_RELAY_PORT, RELAY_PORT_DEFAULT);
+// Another app's sdb tunnel on loopback (#90): Vetro holds sdbd's one connection and shares it on
+// 127.0.0.1:26201 (the port TV-Store's relay defaults to as well). Env override for a test.
+var TUNNEL_PORT = parsePort(process.env.A2S_TUNNEL_PORT, 26201);
 // Signed by the Apps2Samsung catalog workflow; see catalog.js for why the content is checked
 // instead of the connection.
 var CATALOG_URL = process.env.A2S_CATALOG_URL || 'https://apps2samsung.com/catalog/resolved.json.signed';
@@ -271,7 +274,10 @@ function saveRelayCfg() {
 }
 function startRelay(cb) {
     relay.setAllow(RELAY_CFG.allow);
-    relay.start(RELAY_CFG.port, function (err) { if (err) log('relay: not started: ' + err.message); if (cb) cb(err); });
+    relay.start(RELAY_CFG.port, function (err) {
+        if (err) log('relay: not started: ' + err.message + (/EADDRINUSE/.test(err.message) ? '; another app on this TV has the port (Vetro\u2019s sdb tunnel uses ' + TUNNEL_PORT + '), and TV-Store installs through that app\u2019s tunnel when it holds sdbd' : ''));
+        if (cb) cb(err);
+    });
 }
 function relayStatus() {
     var s = relay.status();
@@ -713,19 +719,25 @@ function removeOld(entry, cb) {
 // sdbd on this TV, at the first address that completes the handshake (#26, #52). Developer Mode's
 // Host PC IP lets a connection in only on the address it names, which is either the TV's own LAN IP
 // or 127.0.0.1 (a rooted TV is pinned there), so both are tried and whichever answers is kept and
-// tried first next time (SDB_WORKED). When none gets in, the error says what to change on the TV
-// instead of the socket error.
+// tried first next time (SDB_WORKED). After them, another app's sdb tunnel on 127.0.0.1 (#90): Vetro
+// holds sdbd's one connection for as long as it runs and shares it there, so with Vetro on the TV
+// both direct addresses are dropped and the tunnel is the way in. Not when TV-Store's own relay
+// has that port: the relay only leads back to the same sdbd. When none gets in, the error says what
+// to change on the TV instead of the socket error.
 var SDB_WORKED = null;
-function sdbHosts() { return sdbhosts.order(ownIp(), SDB_WORKED); }
+function tunnelPort() { var s = relay.status(); return s.listening && s.port === TUNNEL_PORT ? 0 : TUNNEL_PORT; }
+function sdbHosts() { return sdbhosts.targets(ownIp(), SDB_WORKED, SDB_PORT, tunnelPort()); }
+function sdbName(t) { return t.tunnel ? t.host + ':' + t.port + ' (another app\u2019s sdb tunnel, as Vetro has)' : t.host; }
 function connectSdb(hosts, cb, i, seen) {
     i = i || 0; seen = seen || [];
-    var c = new sdb.SdbClient(hosts[i], SDB_PORT);
-    c.trace = VERBOSE ? function (m) { logv('sdb ' + hosts[i] + ': ' + m); } : null;
+    var t = hosts[i];
+    var c = new sdb.SdbClient(t.host, t.port);
+    c.trace = VERBOSE ? function (m) { logv('sdb ' + t.host + ':' + t.port + ': ' + m); } : null;
     c.connect(function (err) {
-        if (!err) { SDB_WORKED = hosts[i]; log('install: sdb connected to ' + hosts[i] + ', first frame ' + c.firstFrame); return cb(null, c); }
+        if (!err) { SDB_WORKED = t; log('install: sdb connected to ' + sdbName(t) + ', first frame ' + c.firstFrame); return cb(null, c); }
         c.end();
         log('install: ' + err.message);
-        seen.push({ code: err.code, frame: c.firstFrame });
+        seen.push({ code: err.code, frame: c.firstFrame, tunnel: t.tunnel });
         if (i + 1 < hosts.length) return connectSdb(hosts, cb, i + 1, seen);
         SDB_WORKED = null;   // the remembered address stopped answering; relearn next time
         cb(sdbAdvice(err, seen));
@@ -738,8 +750,10 @@ function connectSdb(hosts, cb, i, seen) {
 // drop on every address means Host PC IP points somewhere else (a phone or PC). Unless a phone or PC
 // is on the developer connection right now: sdbd takes one client at a time (seen on a 2019 Tizen
 // 5.0 set, #73), and drops a second one the same silent way. The relay knows about its own sessions,
-// so with one open the drop is read as that, not as a wrong Host PC IP.
+// so with one open the drop is read as that, not as a wrong Host PC IP. Only the direct attempts
+// count here: a tunnel that is not there, or that cannot reach sdbd either, says nothing new.
 function sdbAdvice(err, seen) {
+    seen = seen.filter(function (s) { return !s.tunnel; });
     var ip = ownIp();
     var either = 'this TV\u2019s own IP' + (ip ? ' (' + ip + ')' : '') + ' or 127.0.0.1';
     if (seen.every(function (s) { return s.code === 'ECONNREFUSED'; }))
