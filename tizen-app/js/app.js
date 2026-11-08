@@ -852,7 +852,7 @@
     // install and stay out of the store's sections and counts; an installed copy gets a row of its
     // own on the On the TV page, and a search for one says it is gone and why. The service matches
     // package ids (its own and the one a rename gave each file, which only it can derive) in /pkgids.
-    var removedIds = {};       // package id -> { name, category, reason, note, since, derived }, from /pkgids
+    var removedIds = {};       // package id -> { name, category, reason, note, since, appIds, derived }, from /pkgids
     var REMOVED_WHY = {
         'unlicensed-content': 'Removed: it ships streams or links to content it has no licence for.',
         'unlicensed-service': 'Removed: it\u2019s a client for a service without a licence for its content.',
@@ -864,13 +864,16 @@
     var REMOVED_KEEPS = 'Your installed copy keeps working, but it won\u2019t get updates.';
     function removedWhy(g) { return REMOVED_WHY.hasOwnProperty(g.reason) ? REMOVED_WHY[g.reason] : 'Removed from the catalog.'; }
     function normName(n) { return String(n || '').replace(/\s+/g, ' ').trim().toLowerCase(); }
-    // A package under the entry's own id is that app only when the TV's name for it fits the entry's
-    // (a fork can share another app's id, #84); no name on either side counts as a fit.
+    // A package under the entry's own id is that app only when the TV has one of the entry's
+    // application ids, or its name for the package fits the entry's (a fork can share another app's
+    // id, #84); no name on either side counts as a fit. The catalog name often differs from the
+    // one in config.xml, so the application id comes first.
     function nameFits(name, list) {
         var a = normName(name);
         if (!a || !list || !list.length) return true;
         return list.some(function (n) { n = normName(n); return !n || n.indexOf(a) >= 0 || a.indexOf(n) >= 0; });
     }
+    function hasAppId(list) { return (list || []).some(function (id) { return appIds.hasOwnProperty(id); }); }
     function appIdOf(pkg) { for (var id in appIds) if (appIds.hasOwnProperty(id) && id.indexOf(pkg + '.') === 0) return id; return ''; }
     function goneEntry(r, pkg) {
         return { key: 'gone:' + (pkg || normName(r.name)), gone: true, pkg: pkg || '', name: r.name, category: r.category || 'other', reason: r.reason || '', note: r.note || '', since: r.since || '', appId: pkg ? appIdOf(pkg) : '' };
@@ -881,7 +884,7 @@
         var out = [];
         Object.keys(installed).forEach(function (p) {
             var r = removedIds.hasOwnProperty(p) ? removedIds[p] : null;
-            if (!r || !r.name || claimOf(p) || !(r.derived || nameFits(r.name, tvNames[p]))) return;
+            if (!r || !r.name || claimOf(p) || !(r.derived || hasAppId(r.appIds) || nameFits(r.name, tvNames[p]))) return;
             out.push(goneEntry(r, p));
         });
         return out.sort(byName);

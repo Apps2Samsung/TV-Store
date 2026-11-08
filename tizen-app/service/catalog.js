@@ -67,7 +67,7 @@ function verify(buf, publicKeyPem, now) {
 //           derived from (#84, pkgid.js): a community package's repo and file, else the provider's
 //           GitHub owner/name and the asset's name; none when neither is known;
 //   files:  download URL -> the release asset's name (a repository's key is its URL and this, #84);
-//   removed: package id -> { name, category, reason, note, since, derived } for every app the
+//   removed: package id -> { name, category, reason, note, since, appIds, derived } for every app the
 //           community catalog took out (catalog.removed, #87), under each of its own package_ids
 //           and under the id a rename gave each of its files (derived: true, pkgid.derive of its
 //           repo and file), so the page can say why an installed copy no longer updates.
@@ -76,7 +76,8 @@ function str(s, max) { return typeof s === 'string' && s.trim() ? s.trim().slice
 function scanRemoved(list, removed) {
     (Array.isArray(list) ? list : []).forEach(function (e) {
         if (!e || typeof e !== 'object' || !str(e.name)) return;
-        var base = { name: str(e.name, 100), category: str(e.category, 40), reason: str(e.reason, 40), note: str(e.note), since: /^\d{4}-\d{2}-\d{2}$/.test(e.since || '') ? e.since : '' };
+        var base = { name: str(e.name, 100), category: str(e.category, 40), reason: str(e.reason, 40), note: str(e.note), since: /^\d{4}-\d{2}-\d{2}$/.test(e.since || '') ? e.since : '',
+            appIds: (Array.isArray(e.app_ids) ? e.app_ids : []).filter(function (id) { return typeof id === 'string' && /^[A-Za-z0-9]+\.[A-Za-z0-9]+$/.test(id); }).slice(0, 20) };
         function put(id, derived) {
             if (typeof id !== 'string' || !pkgid.isValidId(id) || (removed.hasOwnProperty(id) && removed[id].derived)) return;
             var o = {}; for (var k in base) o[k] = base[k];
