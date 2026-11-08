@@ -275,7 +275,7 @@ function saveRelayCfg() {
 function startRelay(cb) {
     relay.setAllow(RELAY_CFG.allow);
     relay.start(RELAY_CFG.port, function (err) {
-        if (err) log('relay: not started: ' + err.message + (/EADDRINUSE/.test(err.message) ? '; another app on this TV has the port (Vetro\u2019s sdb tunnel uses ' + TUNNEL_PORT + '), and TV-Store installs through that app\u2019s tunnel when it holds sdbd' : ''));
+        if (err) log('relay: not started: ' + err.message + (/EADDRINUSE/.test(err.message) ? '; another app on this TV has the port (Vetro\u2019s sdb tunnel uses ' + TUNNEL_PORT + '), and TV-Store installs through that app\u2019s tunnel when it holds sdbd, with Vetro\u2019s \u201cAllow SDB from the local network\u201d on' : ''));
         if (cb) cb(err);
     });
 }
@@ -721,13 +721,15 @@ function removeOld(entry, cb) {
 // or 127.0.0.1 (a rooted TV is pinned there), so both are tried and whichever answers is kept and
 // tried first next time (SDB_WORKED). After them, another app's sdb tunnel on 127.0.0.1 (#90): Vetro
 // holds sdbd's one connection for as long as it runs and shares it there, so with Vetro on the TV
-// both direct addresses are dropped and the tunnel is the way in. Not when TV-Store's own relay
-// has that port: the relay only leads back to the same sdbd. When none gets in, the error says what
-// to change on the TV instead of the socket error.
+// both direct addresses are dropped and the tunnel is the way in. The TV keeps one app out of another
+// app's port on loopback (EHOSTUNREACH on an S95F), so the tunnel is tried on the TV's own LAN IP as
+// well, which Vetro lets in with its "Allow SDB from the local network" switch on. Not when TV-Store's
+// own relay has that port: the relay only leads back to the same sdbd. When none gets in, the error
+// says what to change on the TV instead of the socket error.
 var SDB_WORKED = null;
 function tunnelPort() { var s = relay.status(); return s.listening && s.port === TUNNEL_PORT ? 0 : TUNNEL_PORT; }
 function sdbHosts() { return sdbhosts.targets(ownIp(), SDB_WORKED, SDB_PORT, tunnelPort()); }
-function sdbName(t) { return t.tunnel ? t.host + ':' + t.port + ' (another app\u2019s sdb tunnel, as Vetro has)' : t.host; }
+function sdbName(t) { return t.tunnel ? t.host + ':' + t.port + ' (another app\u2019s sdb tunnel, as Vetro has' + (t.host === sdbhosts.LOOPBACK ? '' : ', through this TV\u2019s own IP') + ')' : t.host; }
 function connectSdb(hosts, cb, i, seen) {
     i = i || 0; seen = seen || [];
     var t = hosts[i];
@@ -737,7 +739,7 @@ function connectSdb(hosts, cb, i, seen) {
         if (!err) { SDB_WORKED = t; log('install: sdb connected to ' + sdbName(t) + ', first frame ' + c.firstFrame); return cb(null, c); }
         c.end();
         log('install: ' + err.message);
-        seen.push({ code: err.code, frame: c.firstFrame, tunnel: t.tunnel });
+        seen.push({ host: t.host, code: err.code, frame: c.firstFrame, tunnel: t.tunnel });
         if (i + 1 < hosts.length) return connectSdb(hosts, cb, i + 1, seen);
         SDB_WORKED = null;   // the remembered address stopped answering; relearn next time
         cb(sdbAdvice(err, seen));
@@ -751,8 +753,11 @@ function connectSdb(hosts, cb, i, seen) {
 // is on the developer connection right now: sdbd takes one client at a time (seen on a 2019 Tizen
 // 5.0 set, #73), and drops a second one the same silent way. The relay knows about its own sessions,
 // so with one open the drop is read as that, not as a wrong Host PC IP. Only the direct attempts
-// count here: a tunnel that is not there, or that cannot reach sdbd either, says nothing new.
+// count here: a tunnel that is not there, or that cannot reach sdbd either, says nothing new. Except
+// when the TV kept TV-Store out of the tunnel's port on loopback (#90): then another app (Vetro)
+// listens there and holds sdbd, and the drops say that, not a wrong Host PC IP.
 function sdbAdvice(err, seen) {
+    var held = sdbhosts.heldByApp(seen);
     seen = seen.filter(function (s) { return !s.tunnel; });
     var ip = ownIp();
     var either = 'this TV\u2019s own IP' + (ip ? ' (' + ip + ')' : '') + ' or 127.0.0.1';
@@ -762,6 +767,10 @@ function sdbAdvice(err, seen) {
     var busy = relayStatus().sessions;
     if (dropped && busy > 0)
         return coded('SDB_BUSY', 'The TV\u2019s developer connection is in use: a phone or PC is connected to this TV through the relay (' + busy + (busy === 1 ? ' session' : ' sessions') + '), and the TV takes one connection at a time. Close Apps2Samsung there, or wait until it is done, and try again.');
+    if (dropped && held && held.lanBlocked)
+        return coded('APP_HOLDS_SDB', 'Another app on this TV, most likely Vetro, holds the TV\u2019s developer connection, and the TV does not let TV-Store into that app\u2019s sdb tunnel. Until that app lets other apps on the TV in, install from a phone or PC: turn on Vetro\u2019s \u201cAllow SDB from the local network\u201d and connect Apps2Samsung to ' + (ip || 'this TV') + ':' + TUNNEL_PORT + '.');
+    if (dropped && held)
+        return coded('APP_HOLDS_SDB', 'Another app on this TV, most likely Vetro, holds the TV\u2019s developer connection, and TV-Store can only reach it through that app\u2019s sdb tunnel on this TV\u2019s own IP. In Vetro, turn on \u201cAllow SDB from the local network\u201d and try again. Host PC IP stays at 127.0.0.1.');
     if (dropped)
         return coded('HOST_PC_IP', 'The TV turned the install away. In Developer Mode (Apps, then 1 2 3 4 5), Host PC IP must be ' + either + ', not a phone or PC. Change it, restart the TV and try again.');
     return err;

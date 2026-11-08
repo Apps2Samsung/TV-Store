@@ -405,10 +405,14 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
   connection to `sdbd` open and shares it through an sdb tunnel on `127.0.0.1:26201`, the port
   this relay uses too (#90). `sdbd` takes one client at a time, so with Vetro on the TV every
   direct connection is turned away and this switch cannot start ("Another app on this TV already
-  uses port 26201"); closing the Vetro app does not free it. TV-Store then installs
-  through Vetro's tunnel: after the TV's own IP and `127.0.0.1:26101` it tries `127.0.0.1:26201`,
-  and keeps to it for the next installs. A phone or PC reaches the TV through Vetro's own SDB
-  access switch the same way.
+  uses port 26201"); closing the Vetro app does not free it. Vetro opens that connection once and
+  keeps it, so it is never free for long. TV-Store then installs through Vetro's tunnel: after the
+  TV's own IP and `127.0.0.1:26101` it tries `127.0.0.1:26201`, then the TV's own IP on 26201, and
+  keeps to the one that worked for the next installs. On an S95F (Tizen 9) the TV keeps one app out
+  of another app's port on loopback (`EHOSTUNREACH`), so the way in is the TV's own IP, which Vetro
+  only lets in with its "Allow SDB from the local network" switch on (0.3.25). Without it the install
+  stops with `APP_HOLDS_SDB` and says to turn that switch on, instead of blaming Host PC IP. A phone
+  or PC reaches the TV through the same switch.
 
   The sdb protocol cannot tell a phone or PC why its connection died, so through a relay every
   failure looks like "connection reset" (#58). The relay therefore works out what happened to each
@@ -554,4 +558,4 @@ and the release workflow then replaces that asset with the one it builds from th
 | First real install from the TV | done, 2019 Tizen 5.0 set (0.3.4) |
 | Tizen 3.0 and 4.0 sets (2017, 2018) | untested |
 | Tizen 10 sets (2025) | done, retail set (0.3.9) |
-| Host PC IP `127.0.0.1`: TV-Store installs over loopback, Apps2Samsung through the relay | built and proven against a fake `sdbd` (0.3.14); the relay says why a connection failed and `GET /relay` tells Apps2Samsung (0.3.15, #58); proven on a 2019 Tizen 5.0 set: a catalog install over `127.0.0.1:26101` and `sdb` from a PC through port 26201 (0.3.19). That set's `sdbd` takes one client at a time, so an install while a PC holds a relay session stops with `SDB_BUSY` instead of blaming Host PC IP (0.3.20, #73). With Vetro holding `sdbd`, installs go through its sdb tunnel on `127.0.0.1:26201` (0.3.24, #90); proven against a fake `sdbd` and Vetro's own tunnel code, untested on a TV |
+| Host PC IP `127.0.0.1`: TV-Store installs over loopback, Apps2Samsung through the relay | built and proven against a fake `sdbd` (0.3.14); the relay says why a connection failed and `GET /relay` tells Apps2Samsung (0.3.15, #58); proven on a 2019 Tizen 5.0 set: a catalog install over `127.0.0.1:26101` and `sdb` from a PC through port 26201 (0.3.19). That set's `sdbd` takes one client at a time, so an install while a PC holds a relay session stops with `SDB_BUSY` instead of blaming Host PC IP (0.3.20, #73). With Vetro holding `sdbd`, installs go through its sdb tunnel (0.3.24, #90); on an S95F the TV kept TV-Store out of `127.0.0.1:26201` (`EHOSTUNREACH`), so 0.3.25 also tries the TV's own IP on 26201 (Vetro's "Allow SDB from the local network" on) and says `APP_HOLDS_SDB` instead of `HOST_PC_IP`; proven against a fake `sdbd`, untested on a TV |
