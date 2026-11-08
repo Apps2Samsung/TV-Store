@@ -400,10 +400,12 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
   settings, so `/ping` reports it (`relay: { enabled, listening, port, sessions, allow, error,
   served, failures, lastFailure }`).
 
-  Vetro (a TV manager) keeps its own connection to `sdbd` open for as long as it runs and shares
-  it through an sdb tunnel on `127.0.0.1:26201`, the port this relay uses too (#90). `sdbd` takes
-  one client at a time, so with Vetro on the TV every direct connection is turned away and this
-  switch cannot start ("Another app on this TV already uses port 26201"). TV-Store then installs
+  Vetro (a TV manager) runs a background service that starts with the TV and restarts itself
+  (`on-boot`, `auto-restart`), whether or not the Vetro app is open. That service keeps its own
+  connection to `sdbd` open and shares it through an sdb tunnel on `127.0.0.1:26201`, the port
+  this relay uses too (#90). `sdbd` takes one client at a time, so with Vetro on the TV every
+  direct connection is turned away and this switch cannot start ("Another app on this TV already
+  uses port 26201"); closing the Vetro app does not free it. TV-Store then installs
   through Vetro's tunnel: after the TV's own IP and `127.0.0.1:26101` it tries `127.0.0.1:26201`,
   and keeps to it for the next installs. A phone or PC reaches the TV through Vetro's own SDB
   access switch the same way.

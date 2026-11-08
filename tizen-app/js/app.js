@@ -246,7 +246,7 @@
         if (!r.enabled) return flip;
         // Another app has the port (#90): Vetro's sdb tunnel sits on 26201 too, and turning it off and on
         // will not free it. Installs from this TV go through that app's tunnel instead.
-        if (r.error && /EADDRINUSE/.test(r.error)) return flip + '<div class="notice bad">' + esc('Another app on this TV already uses port ' + (r.configuredPort || 26201) + ' (Vetro\u2019s sdb tunnel does), so the relay cannot start. TV-Store still installs: it goes through that app\u2019s tunnel. For Apps2Samsung on a phone or PC, turn on that app\u2019s own SDB access instead, or close the app and turn this off and on again.') + '</div>';
+        if (r.error && /EADDRINUSE/.test(r.error)) return flip + '<div class="notice bad">' + esc('Another app on this TV already uses port ' + (r.configuredPort || 26201) + ' (Vetro\u2019s sdb tunnel does), so the relay cannot start. TV-Store still installs: it goes through that app\u2019s tunnel. That app runs in the background even when it is closed, so the port stays taken; for Apps2Samsung on a phone or PC, turn on that app\u2019s own SDB access instead.') + '</div>';
         if (r.error) return flip + '<div class="notice bad">' + esc('The relay could not start: ' + r.error + '. Turn it off and on again; if that does not help, restart TV-Store.') + '</div>';
         if (!r.listening) return flip + '<div class="notice">' + esc('The relay is starting…') + '</div>';
         return flip + '<div class="notice info">' + esc('Once: on the TV open Apps, type 1 2 3 4 5, set Host PC IP to 127.0.0.1 and restart the TV. From then on Apps2Samsung 3.2 or newer finds ' + relayAddress() + ' by itself'
