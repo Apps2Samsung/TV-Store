@@ -80,6 +80,23 @@ var mv = cat.scan({ providers: [{ id: 'tizen-community', catalog: { apps: [
         { file: 'e.wgt', name: 'E', package_id: 'PkgE' }] },
     releases: [{ assets: [{ name: 'b.wgt', browser_download_url: 'u/b', package_id: 'PkgB' }] }] }] }).moved;
 if (JSON.stringify(Object.keys(mv).sort()) !== '["PkgA","PkgB"]' || mv.PkgA.fingerprint !== fp || mv.PkgB.name !== 'B') fail('moved: ' + JSON.stringify(mv));
+// removed (#87): package id -> why, for every app the community catalog took out, under each of
+// its own package_ids and under the id a rename gave each of its files (only the service can
+// derive that one); bad ids are skipped, an entry without repo or files gets no derived id.
+var pkgid = require('../tizen-app/service/pkgid.js');
+var rm = cat.scan({ providers: [{ id: 'tizen-community', catalog: { apps: [{ file: 'live.wgt', name: 'Live' }], removed: [
+        { name: 'Bisnor', repo: 'nikan48g/Bisnor', category: 'streaming', reason: 'unlicensed-content', note: 'Gets its streams from unlicensed film servers.', files: ['Bisnor.wgt'], since: '2026-11-08', package_ids: ['BisnorTV01', 'bad id', 7] },
+        { name: 'NoFiles', reason: 'takedown', package_ids: ['NoFiles01'], since: 'yesterday' },
+        { name: 'NoRepo', reason: 'superseded', files: ['NoRepo.wgt'] },
+        { reason: 'takedown', package_ids: ['Nameless1'] },
+        'junk'
+    ] }, releases: [] }] }).removed;
+var bisRenamed = pkgid.derive('nikan48g/Bisnor/Bisnor.wgt');
+if (JSON.stringify(Object.keys(rm).sort()) !== JSON.stringify(['BisnorTV01', 'NoFiles01', bisRenamed].sort())) fail('removed ids: ' + JSON.stringify(Object.keys(rm)));
+if (rm.BisnorTV01.derived !== false || rm[bisRenamed].derived !== true) fail('removed: derived flags');
+if (rm.BisnorTV01.reason !== 'unlicensed-content' || rm.BisnorTV01.note !== 'Gets its streams from unlicensed film servers.' || rm.BisnorTV01.since !== '2026-11-08' || rm.BisnorTV01.category !== 'streaming' || rm[bisRenamed].name !== 'Bisnor') fail('removed entry: ' + JSON.stringify(rm.BisnorTV01));
+if (rm.NoFiles01.since !== '' || rm.NoFiles01.note !== '') fail('removed: a bad date and no note come out empty');
+if (JSON.stringify(r.removed) !== '{}') fail('a catalog without removed verifies with an empty removed map');
 // The shipped key parses: verifying anything with it answers false instead of throwing.
 if (crypto.createVerify('RSA-SHA256').update('x').verify(shipped, 'AAAA', 'base64') !== false) fail('shipped key');
 

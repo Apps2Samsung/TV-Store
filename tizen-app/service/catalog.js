@@ -50,7 +50,7 @@ function verify(buf, publicKeyPem, now) {
     if ((now || Date.now()) - at > MAX_AGE_MS) throw new Error('the signed catalog is from ' + catalog.generatedAt + ', more than 7 days old: check the TV’s clock, or the Apps2Samsung catalog workflow');
 
     var s = scan(catalog);
-    return { catalog: catalog, payload: payload, index: s.index, levels: s.levels, icons: s.icons, moved: s.moved, keys: s.keys, files: s.files };
+    return { catalog: catalog, payload: payload, index: s.index, levels: s.levels, icons: s.icons, moved: s.moved, keys: s.keys, files: s.files, removed: s.removed };
 }
 
 // One walk over providers -> releases -> assets for the lookups the install and the icons need:
@@ -66,11 +66,31 @@ function verify(buf, publicKeyPem, now) {
 //   keys:   download URL -> the catalog entry the file belongs to, which a package id rename is
 //           derived from (#84, pkgid.js): a community package's repo and file, else the provider's
 //           GitHub owner/name and the asset's name; none when neither is known;
-//   files:  download URL -> the release asset's name (a repository's key is its URL and this, #84).
+//   files:  download URL -> the release asset's name (a repository's key is its URL and this, #84);
+//   removed: package id -> { name, category, reason, note, since, derived } for every app the
+//           community catalog took out (catalog.removed, #87), under each of its own package_ids
+//           and under the id a rename gave each of its files (derived: true, pkgid.derive of its
+//           repo and file), so the page can say why an installed copy no longer updates.
 var MOVED_URL = /^https:\/\/[^\s\/@:]+(?::\d+)?\/\S*[.]signed$/, FINGERPRINT = /^[0-9a-f]{64}$/;
+function str(s, max) { return typeof s === 'string' && s.trim() ? s.trim().slice(0, max || 200) : ''; }
+function scanRemoved(list, removed) {
+    (Array.isArray(list) ? list : []).forEach(function (e) {
+        if (!e || typeof e !== 'object' || !str(e.name)) return;
+        var base = { name: str(e.name, 100), category: str(e.category, 40), reason: str(e.reason, 40), note: str(e.note), since: /^\d{4}-\d{2}-\d{2}$/.test(e.since || '') ? e.since : '' };
+        function put(id, derived) {
+            if (typeof id !== 'string' || !pkgid.isValidId(id) || (removed.hasOwnProperty(id) && removed[id].derived)) return;
+            var o = {}; for (var k in base) o[k] = base[k];
+            o.derived = derived; removed[id] = o;
+        }
+        (Array.isArray(e.package_ids) ? e.package_ids : []).forEach(function (id) { put(id, false); });
+        var repo = str(e.repo);
+        (Array.isArray(e.files) ? e.files : []).forEach(function (f) { var k = pkgid.key(repo, str(f)); if (k) put(pkgid.derive(k), true); });
+    });
+}
 function scan(catalog) {
-    var index = {}, levels = {}, icons = {}, moved = {}, keys = {}, files = {};
+    var index = {}, levels = {}, icons = {}, moved = {}, keys = {}, files = {}, removed = {};
     (catalog.providers || []).forEach(function (p) {
+        if (p.catalog) scanRemoved(p.catalog.removed, removed);
         var byFile = {}, assetByName = {}, repoOf = {}, community = !!(p.catalog && p.catalog.apps), own = pkgid.githubRepo(p.url);
         (p.releases || []).forEach(function (r) { (r.assets || []).forEach(function (a) { if (a.name && !assetByName[a.name]) assetByName[a.name] = a; }); });
         ((p.catalog && p.catalog.apps) || []).forEach(function (e) {
@@ -94,7 +114,7 @@ function scan(catalog) {
             });
         });
     });
-    return { index: index, levels: levels, icons: icons, moved: moved, keys: keys, files: files };
+    return { index: index, levels: levels, icons: icons, moved: moved, keys: keys, files: files, removed: removed };
 }
 function index(catalog) { return scan(catalog).index; }
 function levels(catalog) { return scan(catalog).levels; }

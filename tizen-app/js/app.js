@@ -784,6 +784,7 @@
             // The rename ids follow the sources: a repository's files have them too (#84).
             xhr('GET', '/pkgids', null, function (err, res) {
                 if (!err && res && res.ok && res.ids) { pkgIds = res.ids; claims = null; }
+                if (!err && res && res.ok && res.removed && typeof res.removed === 'object') removedIds = res.removed;
                 if (cb) cb();
             }, null, 30000);
         }, null, 120000);
@@ -845,6 +846,64 @@
     function names(list) { var n = list.map(function (x) { return x.name; }); return n.length < 3 ? n.join(' and ') : n.slice(0, -1).join(', ') + ' and ' + n[n.length - 1]; }
     function addMoved(url, fingerprint, label) {
         offerSource({ url: url, fingerprint: fingerprint, moved: true, name: label }, function () {});
+    }
+
+    // Apps the community catalog took out (#87): catalog.removed in the official catalog. They never
+    // install and stay out of the store's sections and counts; an installed copy gets a row of its
+    // own on the On the TV page, and a search for one says it is gone and why. The service matches
+    // package ids (its own and the one a rename gave each file, which only it can derive) in /pkgids.
+    var removedIds = {};       // package id -> { name, category, reason, note, since, derived }, from /pkgids
+    var REMOVED_WHY = {
+        'unlicensed-content': 'Removed: it ships streams or links to content it has no licence for.',
+        'unlicensed-service': 'Removed: it\u2019s a client for a service without a licence for its content.',
+        'unlicensed-game-data': 'Removed: it ships game data it may not redistribute.',
+        'takedown': 'Removed after a copyright (DMCA) notice.',
+        'superseded': 'Removed: replaced by another app in the catalog.',
+        'upstream-gone': 'Removed: the developer took the project down.'
+    };
+    var REMOVED_KEEPS = 'Your installed copy keeps working, but it won\u2019t get updates.';
+    function removedWhy(g) { return REMOVED_WHY.hasOwnProperty(g.reason) ? REMOVED_WHY[g.reason] : 'Removed from the catalog.'; }
+    function normName(n) { return String(n || '').replace(/\s+/g, ' ').trim().toLowerCase(); }
+    // A package under the entry's own id is that app only when the TV's name for it fits the entry's
+    // (a fork can share another app's id, #84); no name on either side counts as a fit.
+    function nameFits(name, list) {
+        var a = normName(name);
+        if (!a || !list || !list.length) return true;
+        return list.some(function (n) { n = normName(n); return !n || n.indexOf(a) >= 0 || a.indexOf(n) >= 0; });
+    }
+    function appIdOf(pkg) { for (var id in appIds) if (appIds.hasOwnProperty(id) && id.indexOf(pkg + '.') === 0) return id; return ''; }
+    function goneEntry(r, pkg) {
+        return { key: 'gone:' + (pkg || normName(r.name)), gone: true, pkg: pkg || '', name: r.name, category: r.category || 'other', reason: r.reason || '', note: r.note || '', since: r.since || '', appId: pkg ? appIdOf(pkg) : '' };
+    }
+    function byName(a, b) { return normName(a.name) < normName(b.name) ? -1 : normName(a.name) > normName(b.name) ? 1 : 0; }
+    // Removed apps on this TV: an installed package with a removed id that no catalog app claims.
+    function goneOnTv() {
+        var out = [];
+        Object.keys(installed).forEach(function (p) {
+            var r = removedIds.hasOwnProperty(p) ? removedIds[p] : null;
+            if (!r || !r.name || claimOf(p) || !(r.derived || nameFits(r.name, tvNames[p]))) return;
+            out.push(goneEntry(r, p));
+        });
+        return out.sort(byName);
+    }
+    // Every removed entry of the official catalog, one per name; the installed copy's when the TV has it.
+    function goneAll() {
+        var out = [], seen = {}, tv = goneOnTv();
+        tv.forEach(function (g) { seen[normName(g.name)] = true; out.push(g); });
+        ((officialCat && officialCat.providers) || []).forEach(function (p) {
+            ((p.catalog && Array.isArray(p.catalog.removed)) ? p.catalog.removed : []).forEach(function (e) {
+                if (!e || typeof e.name !== 'string' || !normName(e.name) || seen[normName(e.name)]) return;
+                seen[normName(e.name)] = true;
+                out.push(goneEntry({ name: e.name.trim(), category: typeof e.category === 'string' ? e.category : '', reason: typeof e.reason === 'string' ? e.reason : '', note: typeof e.note === 'string' ? e.note : '', since: /^\d{4}-\d{2}-\d{2}$/.test(e.since || '') ? e.since : '' }, ''));
+            });
+        });
+        return out;
+    }
+    function goneByKey(k) { var l = goneAll(); for (var i = 0; i < l.length; i++) if (l[i].key === k) return l[i]; return null; }
+    // Search: removed entries by name, only where the official catalog is in view.
+    function goneMatches(q) {
+        if (srcFilter !== 'all' && srcFilter !== 'official') return [];
+        return goneAll().filter(function (g) { return normName(g.name).indexOf(q) >= 0; }).sort(byName);
     }
     function heldElsewhere(x, v) {
         var p = tvPkg(v);
@@ -1166,14 +1225,48 @@
             // Name, description or developer (the heads match the author too since Apps2Samsung #906).
             var q = query.toLowerCase();
             var found = apps.filter(function (x) { return x.name.toLowerCase().indexOf(q) >= 0 || (x.description || '').toLowerCase().indexOf(q) >= 0 || (x.author || '').toLowerCase().indexOf(q) >= 0; });
+            // Apps the catalog took out (#87) answer too, after the results, without an install.
+            var gq = goneMatches(q);
             h += found.length ? section('search', 'Results for “' + query + '”', found, true, false)
-                : '<div class="empty">Nothing in the catalog matches “' + esc(query) + '”.</div>';
+                : gq.length ? '' : '<div class="empty">Nothing in the catalog matches “' + esc(query) + '”.</div>';
+            if (gq.length) h += '<div class="sect grid"><div class="shead"><span class="t">No longer in the catalog</span><span class="n">' + gq.length + '</span></div>'
+                + '<div class="strip"><div class="cards">' + gq.map(goneCard).join('') + '</div></div></div>';
         }
         if (!apps.length) h += srcFilter !== 'all' && !query ? '<div class="empty">' + esc(sourceName(srcFilter) + ' has no apps to show here.') + '</div>' : '<div class="empty">No apps to show. The gear at the top has the Settings.</div>';
         pageEl.innerHTML = h;
     }
 
+    function goneCard(g) {
+        return '<div class="card f dim" tabindex="0" data-k="card:gone:' + esc(g.key) + '" data-gone="' + esc(g.key) + '">'
+            + tile(g, 68) + '<div class="nm">' + esc(g.name) + '</div><div class="mt">' + esc(g.pkg ? 'On this TV' : catName(g.category)) + '</div><div class="badges">' + badge('b-warn', 'Removed') + '</div></div>';
+    }
+
     // ---- On the TV (C6) -----------------------------------------------------------------------------
+    function goneRow(g) {
+        return '<div class="lrow f" tabindex="0" data-k="tv:' + esc(g.key) + '" data-gone="' + esc(g.key) + '">' + tile(g, 66)
+            + '<div class="txt"><div class="nm">' + esc(g.name) + '</div><div class="mt">' + esc((installed[g.pkg] ? 'v' + installed[g.pkg] + ' · ' : '') + 'no more updates') + '</div></div>'
+            + badge('b-warn', 'Removed') + CHEV + '</div>';
+    }
+    function gonePanel(g) {
+        var h = '<div class="panel" id="tvpanel"><div class="phead">' + tile(g, 96) + '<div style="min-width:0"><div class="nm">' + esc(g.name) + '</div><div class="mt">' + esc(catName(g.category) + (g.appId ? ' · ' + g.appId : '')) + '</div></div></div>'
+            + '<div class="table kv" style="margin-top:0"><div class="trow"><span class="k">Installed</span><span class="v">' + esc(installed[g.pkg] ? 'v' + installed[g.pkg] : 'Yes') + '</span></div>'
+            + '<div class="trow"><span class="k">In the catalog</span><span class="v" style="color:#F0A020">' + esc(g.since ? 'Removed on ' + g.since : 'Removed') + '</span></div></div>'
+            + '<div class="btns" style="margin-top:18px"><button class="btn grow f" data-k="gonesheet" data-act="gonesheet">Details</button>'
+            + (g.appId ? '<button class="btn f" data-k="goneopen" data-act="goneopen">Open</button>' : '') + '</div>'
+            + '<div class="hint" style="text-align:left">' + esc(removedWhy(g)) + '</div>';
+        return h + '</div>';
+    }
+    function goneHtml() {
+        var g = sheet.entry;
+        var h = '<div class="shd">' + tile(g, 88) + '<div style="min-width:0"><div class="nm">' + esc(g.name) + '</div><div class="mt">' + esc(catName(g.category) + (g.since ? ' · removed from the catalog on ' + g.since : ' · removed from the catalog')) + '</div></div></div>';
+        h += '<div class="badges">' + badge('b-warn', 'Removed') + (g.pkg ? badge('b-ok', 'On this TV' + (installed[g.pkg] ? ' · v' + installed[g.pkg] : '')) : '') + '</div>';
+        h += '<div class="notice">' + esc(removedWhy(g)) + '</div>';
+        if (g.note) h += '<div class="sdesc">' + esc(g.note) + '</div>';
+        if (g.pkg) h += '<div class="notice info">' + esc(REMOVED_KEEPS) + '</div>';
+        h += '<div class="sfoot"><div class="btns">' + (g.appId ? '<button class="btn primary grow f" data-k="goneopen" data-act="goneopen" data-default>Open</button><button class="btn f" data-k="close" data-act="close">Back</button>'
+            : '<button class="btn grow f" data-k="close" data-act="close" data-default>Back</button>') + '</div><div class="hint">RETURN goes back.</div></div>';
+        return h;
+    }
     function tvRow(x) {
         var st = state(x), v = x.variants[st.variant];
         var mt = st.update ? 'v' + st.version + ' installed · v' + st.latest + ' in ' + (x.source === 'official' ? 'the catalog' : x.sourceName) : 'v' + (st.version || v.version) + (x.variants.length > 1 ? ' · ' + (st.known ? v.label : 'variant not known') : '') + (sourcesOn() ? ' · ' + x.sourceName : '');
@@ -1184,24 +1277,28 @@
 
     function renderTv() {
         var all = onTv(), ups = all.filter(function (x) { return state(x).update; }), ok = all.filter(function (x) { return !state(x).update; });
+        var gone = goneOnTv();
+        if (tvSel && tvSel.gone) tvSel = gone.filter(function (g) { return g.key === tvSel.key; })[0] || null;
         // TV-Store itself updates from a head (#41); an app that needs a certificate level this TV lacks waits too (#50).
         var doable = ups.filter(function (x) { return !isSelf(x) && !signPlan(x.variants[state(x).variant]).missing; });
-        if (!tvSel || all.indexOf(tvSel) < 0) tvSel = ups[0] || ok[0] || null;
+        if (!tvSel || (!tvSel.gone && all.indexOf(tvSel) < 0)) tvSel = ups[0] || ok[0] || gone[0] || null;
         var h = '<div class="tvtop"><div><h1>Your apps</h1><p>' + (all.length
             ? all.length + (all.length === 1 ? ' catalog app is' : ' catalog apps are') + ' on this TV. ' + (ups.length ? (ups.length === 1 ? 'One has' : ups.length + ' have') + ' a newer version in the catalog.' : 'All up to date.')
-            : 'No apps from the catalog on this TV yet.') + '</p></div>';
+            : 'No apps from the catalog on this TV yet.') + (gone.length ? ' ' + (gone.length === 1 ? 'One app here was' : gone.length + ' apps here were') + ' removed from the catalog.' : '') + '</p></div>';
         if (doable.length && armed()) h += '<button class="btn primary f" data-k="updall" data-act="updall">' + (doable.length === 1 ? 'Update ' + esc(doable[0].name) : doable.length === 2 ? 'Update both' : 'Update all ' + doable.length) + '</button>';
         h += '</div>';
-        if (!all.length) { pageEl.innerHTML = h + '<div class="empty">Install something from the store and it shows up here, with its updates.</div>'; return; }
+        if (!all.length && !gone.length) { pageEl.innerHTML = h + '<div class="empty">Install something from the store and it shows up here, with its updates.</div>'; return; }
         h += '<div class="tvcols"><div class="tvlist">';
         if (ups.length) h += '<div class="glabel warn">Updates<span class="n">' + ups.length + '</span></div><div class="group">' + ups.map(tvRow).join('') + '</div>';
         if (ok.length) h += '<div class="glabel">Up to date<span class="n">' + ok.length + '</span></div><div class="group">' + ok.map(tvRow).join('') + '</div>';
+        if (gone.length) h += '<div class="glabel warn">Removed from the catalog<span class="n">' + gone.length + '</span></div><div class="group">' + gone.map(goneRow).join('') + '</div>';
         h += '</div><div class="tvpanel"><div class="glabel">Selected</div>' + tvPanel(tvSel) + '</div></div>';
         pageEl.innerHTML = h;
     }
 
     function tvPanel(x) {
         if (!x) return '';
+        if (x.gone) return gonePanel(x);
         var st = state(x), v = x.variants[st.variant];
         var h = '<div class="panel" id="tvpanel"><div class="phead">' + tile(x, 96, v.icon) + '<div style="min-width:0"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(catName(x.category) + (v.appId ? ' · ' + v.appId : '')) + '</div></div></div>'
             + '<div class="table kv" style="margin-top:0"><div class="trow"><span class="k">Installed</span><span class="v">v' + esc(st.version) + '</span></div>'
@@ -1252,6 +1349,7 @@
         else if (sheet.mode === 'job') sheetEl.innerHTML = job && job.finished && job.ok ? doneHtml() : jobHtml();
         else if (sheet.mode === 'upload') sheetEl.innerHTML = uploadHtml();
         else if (sheet.mode === 'source') sheetEl.innerHTML = sourceHtml();
+        else if (sheet.mode === 'gone') sheetEl.innerHTML = goneHtml();
         else sheetEl.innerHTML = appHtml();
         if (!(keep && focusKey(keep))) {
             var d = sheetEl.querySelector('[data-default]') || sheetEl.querySelector('.f:not([disabled])');
@@ -1584,6 +1682,7 @@
         if ((k = el.getAttribute('data-src'))) { srcFilter = k; chip = 'all'; apps = visible(catalogApps); renderPage(); focusKey('src:' + k) || focusFirst(); return; }
         if ((k = el.getAttribute('data-var'))) { sheet.v = parseInt(k, 10); renderSheet(); return; }
         if ((k = el.getAttribute('data-cert'))) { chooseCert(sheet.mode === 'upload' ? uploadApp(upload).variants[0] : sheet.app.variants[sheet.v], k); renderSheet(); focusKey('cert:' + k); return; }
+        if ((k = el.getAttribute('data-gone'))) { var g = goneByKey(k); if (g) openSheet({ mode: 'gone', entry: g }); return; }
         if ((k = el.getAttribute('data-app'))) { var x = byKey(k), vi = el.getAttribute('data-vi'); if (x) openApp(x, vi != null ? parseInt(vi, 10) : null); return; }
         switch (act) {
             case 'upinstall': if (!el.disabled) installUpload(); return;
@@ -1619,6 +1718,8 @@
             case 'certremoveyes': certAction('/cert/remove', function () { certSel = null; renderSheet(); focus(focusables()[0]); }); return;
             case 'tvupd': startInstall(tvSel, state(tvSel).variant); return;
             case 'tvsheet': openApp(tvSel); return;
+            case 'gonesheet': if (tvSel && tvSel.gone) openSheet({ mode: 'gone', entry: tvSel }); return;
+            case 'goneopen': var ge = sheet && sheet.mode === 'gone' ? sheet.entry : tvSel; if (ge && ge.appId) launch(ge.appId); return;
             case 'tvopen': launch(tvAppId(tvSel.variants[state(tvSel).variant])); return;
             case 'updall':
                 queue = updates().filter(function (x) { var st = state(x), v = x.variants[st.variant]; return st.known && !v.needsHead && !isSelf(x) && !signPlan(v).missing; });
@@ -1656,6 +1757,10 @@
         if (el.getAttribute && el.getAttribute('data-app') && view === 'tv' && !sheet) {
             var y = byKey(el.getAttribute('data-app'));
             if (y && y !== tvSel) { tvSel = y; var tp = $('tvpanel'); if (tp) tp.outerHTML = tvPanel(y); }
+        }
+        if (el.getAttribute && el.getAttribute('data-gone') && view === 'tv' && !sheet) {
+            var gk = el.getAttribute('data-gone');
+            if (!tvSel || tvSel.key !== gk) { var gs = goneOnTv().filter(function (g) { return g.key === gk; })[0]; if (gs) { tvSel = gs; var gp = $('tvpanel'); if (gp) gp.outerHTML = tvPanel(gs); } }
         }
     }
     // Scroll whatever clips the element so that it shows: a row of cards sideways, the page and the
