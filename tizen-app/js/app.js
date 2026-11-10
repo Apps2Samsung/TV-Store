@@ -73,7 +73,7 @@
     var BASE = 'http://127.0.0.1:8077';
     var KOFI = 'https://ko-fi.com/patrickst';
     var VERSION = '0.3.25';
-    var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13, RETURN: 10009, ESC: 27, BACK: 8 };
+    var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13, RETURN: 10009, ESC: 27, BACK: 8, IME_DONE: 65376, IME_CANCEL: 65385 };
 
     // What the manifest providers are called; resolved.json carries only their ids.
     var PROVIDERS = {
@@ -1678,7 +1678,7 @@
 
     function activate(el) {
         if (!el) return;
-        if (el === searchEl) return;
+        if (el === searchEl) { startTyping(); return; }
         var id = el.id, act = el.getAttribute('data-act'), k;
         if (id === 'tabInstall') { view = 'install'; renderPage(); focusFirst(); return; }
         if (id === 'tabTv') { view = 'tv'; renderPage(); focusFirst(); return; }
@@ -1832,8 +1832,26 @@
         try { tizen.application.getCurrentApplication().exit(); } catch (x) {}
     }
 
+    // The search box stays read-only while the remote moves over it: the TV opens its keyboard for any
+    // text field that takes focus, so passing the box on the way to Settings popped the keyboard up.
+    // OK on the box makes it editable and opens the keyboard; Done, Cancel or Back closes it again.
+    function typing() { return document.activeElement === searchEl && !searchEl.readOnly; }
+    function startTyping() {
+        searchEl.blur();
+        searchEl.readOnly = false;
+        searchEl.focus();   // focus again now that it is editable, so the keyboard opens
+        try { var n = searchEl.value.length; searchEl.setSelectionRange(n, n); } catch (x) {}
+    }
+    function stopTyping() {
+        searchEl.readOnly = true;
+        if (document.activeElement === searchEl) { searchEl.blur(); searchEl.focus(); }   // closes the keyboard, keeps the focus ring
+    }
+    searchEl.readOnly = true;
+    searchEl.addEventListener('blur', function () { if (!searchEl.readOnly) searchEl.readOnly = true; });
+
     document.addEventListener('keydown', function (e) {
-        var k = e.keyCode, inInput = document.activeElement === searchEl;
+        var k = e.keyCode, inInput = typing();
+        if (inInput && (k === KEY.ENTER || k === KEY.IME_DONE || k === KEY.IME_CANCEL || k === KEY.RETURN || k === KEY.ESC)) { e.preventDefault(); stopTyping(); return; }
         if (k === KEY.RETURN || k === KEY.ESC || (k === KEY.BACK && !inInput)) { e.preventDefault(); back(); return; }
         if (inInput && (k === KEY.LEFT || k === KEY.RIGHT) && searchEl.value) return;   // the caret
         if (k === KEY.LEFT) { e.preventDefault(); move('left'); }
