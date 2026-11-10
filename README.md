@@ -545,6 +545,15 @@ Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching 
 start as a draft with the `.wgt` from the build workflow attached: publishing it creates the tag,
 and the release workflow then replaces that asset with the one it builds from the tag.
 
+## Categories
+
+The community catalog decides the categories: its `categories` (`{ id: name }`, in the order the
+store shows them) and `category_colors` (`{ id: "#RRGGBB" }`, the tile colour). A category can
+be added, renamed or dropped there without a new TV-Store. An app whose category the catalog
+does not list goes under "Other", and so does every app when the catalog names none of its own;
+a catalog without `categories` keeps the seven built-in ones, and a category without a colour
+gets one from the built-in palette. Both fields come through Apps2Samsung's `resolved.json`.
+
 ## When the service stops
 
 The TV can stop TV-Store's background service while TV-Store stays open, as when the TV goes to
@@ -563,7 +572,7 @@ Only when that start fails too does the page say "The TV-Store service stopped".
 | Signing on the TV | done, identical output to the Apps2Samsung signer |
 | The service starting again after the TV slept with TV-Store open | built (0.3.26): `auto-restart` in `config.xml`, and the page starts it again on waking or after three missed checks; untested on a TV |
 | Arming from Apps2Samsung (phone, PC, CLI) | done |
-| The screens above | built (0.3.4); pins, developer search, your own .wgt or .tpk (0.3.10); finds itself under a renamed package id and sends you to Apps2Samsung to update it (0.3.11); Public or Partner certificate per app (0.3.13); the sdb relay switch (0.3.14); the relay's failure reasons under it (0.3.15); app icons from the signed catalog, hash-checked and cached by the service, once the Apps2Samsung snapshot publishes them (0.3.19, #66); Settings scrolls with the focus now that it is taller than the screen (0.3.20, #74); every signing certificate listed in Settings with its level, fingerprint, expiry and whether it covers this TV, a default to pick and a profile to remove (0.3.21, #78); the search box opens the keyboard only on OK (0.3.26) |
+| The screens above | built (0.3.4); pins, developer search, your own .wgt or .tpk (0.3.10); finds itself under a renamed package id and sends you to Apps2Samsung to update it (0.3.11); Public or Partner certificate per app (0.3.13); the sdb relay switch (0.3.14); the relay's failure reasons under it (0.3.15); app icons from the signed catalog, hash-checked and cached by the service, once the Apps2Samsung snapshot publishes them (0.3.19, #66); Settings scrolls with the focus now that it is taller than the screen (0.3.20, #74); every signing certificate listed in Settings with its level, fingerprint, expiry and whether it covers this TV, a default to pick and a profile to remove (0.3.21, #78); the search box opens the keyboard only on OK (0.3.26); categories, their order, names and tile colours from the community catalog |
 | Independent repositories (#82) | built (0.3.21): verified per source against the spec's test vectors, sources from Apps2Samsung confirmed on the TV, every app labelled with its source, updates only from it; proven against local HTTPS stand-ins and a fake `sdbd`. Waits for Apps2Samsung's **Send sources to TV** (Apps2Samsung#1018) and a real repository for the test on a TV |
 | A fork that kept another app's package id (#84) | built (0.3.22): a `.wgt` goes on beside the other app under the id derived from its catalog entry (the scheme of Apps2Samsung#1028), a `.tpk` asks before replacing; proven against local HTTPS stand-ins and a fake `sdbd`, untested on a TV |
 | Apps removed from the community catalog (#87) | built (0.3.23): an installed copy that no catalog app claims gets a row under "Removed from the catalog" on the On the TV page with the reason, and search answers with "No longer in the catalog"; matched by the entry's own package ids (with its app ids or name) and by the rename id of each file; waits on Apps2Samsung carrying `catalog.removed` into `resolved.json`; untested on a TV |
