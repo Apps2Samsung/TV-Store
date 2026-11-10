@@ -19,7 +19,9 @@
     <tizen:privilege name="http://tizen.org/privilege/filesystem.write"/>
     <!-- productinfo: the DUID, to show whether each signing certificate covers this TV (#78). -->
     <tizen:privilege name="http://developer.samsung.com/privilege/productinfo"/>
-    <tizen:service id="A2STVStore.sdbservice">
+    <!-- auto-restart: the TV starts the service again when it dies, as after a sleep with TV-Store open.
+         Not on-boot: nothing needs the service while TV-Store is closed. -->
+    <tizen:service id="A2STVStore.sdbservice" auto-restart="true">
         <tizen:content src="service/index.js"/>
         <tizen:name>TV-Store service</tizen:name>
         <tizen:description>Downloads, signs and installs catalog packages via sdbd on this TV</tizen:description>

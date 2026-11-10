@@ -545,6 +545,15 @@ Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching 
 start as a draft with the `.wgt` from the build workflow attached: publishing it creates the tag,
 and the release workflow then replaces that asset with the one it builds from the tag.
 
+## When the service stops
+
+The TV can stop TV-Store's background service while TV-Store stays open, as when the TV goes to
+sleep with the store on screen: the page came back and every action failed. `config.xml` asks the
+platform to restart the service (`auto-restart`, not `on-boot`: nothing needs it while TV-Store is
+closed), and the page starts it again itself, the way it does at start-up, when the TV wakes it up
+and the service does not answer, or when the service misses three checks in a row (about 9 s).
+Only when that start fails too does the page say "The TV-Store service stopped".
+
 ## Status
 
 | Piece | State |
@@ -552,6 +561,7 @@ and the release workflow then replaces that asset with the one it builds from th
 | Install through the TV's own `sdbd` | proven on a retail set |
 | Install through `wascmd` from the service, no Host PC IP (#57) | built against a fake `wascmd`, falls back to `sdbd` (0.3.16); its usage text in the log and a replace that stops with a reason when `sdbd` is out of reach (0.3.17); two Tizen 9 sets refuse the run with `EACCES` and the start-up probe took their service down (#67, #68), so nothing starts before the first install, the kernel is asked first, a run that died is remembered and Settings has a switch (0.3.18); a Tizen 5.0 set lets the service start it and the fork still takes the service down before anything is installed (0.3.19). Refused or fatal on every retail set tried, so off by default and opt-in through Settings (0.3.20); `sdbd` is the path that installs |
 | Signing on the TV | done, identical output to the Apps2Samsung signer |
+| The service starting again after the TV slept with TV-Store open | built (0.3.26): `auto-restart` in `config.xml`, and the page starts it again on waking or after three missed checks; untested on a TV |
 | Arming from Apps2Samsung (phone, PC, CLI) | done |
 | The screens above | built (0.3.4); pins, developer search, your own .wgt or .tpk (0.3.10); finds itself under a renamed package id and sends you to Apps2Samsung to update it (0.3.11); Public or Partner certificate per app (0.3.13); the sdb relay switch (0.3.14); the relay's failure reasons under it (0.3.15); app icons from the signed catalog, hash-checked and cached by the service, once the Apps2Samsung snapshot publishes them (0.3.19, #66); Settings scrolls with the focus now that it is taller than the screen (0.3.20, #74); every signing certificate listed in Settings with its level, fingerprint, expiry and whether it covers this TV, a default to pick and a profile to remove (0.3.21, #78); the search box opens the keyboard only on OK (0.3.26) |
 | Independent repositories (#82) | built (0.3.21): verified per source against the spec's test vectors, sources from Apps2Samsung confirmed on the TV, every app labelled with its source, updates only from it; proven against local HTTPS stand-ins and a fake `sdbd`. Waits for Apps2Samsung's **Send sources to TV** (Apps2Samsung#1018) and a real repository for the test on a TV |
