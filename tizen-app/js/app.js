@@ -1911,17 +1911,38 @@
     // store by itself (an arm from an older head never touches this page's API). The same tick asks
     // for a file sent from a phone or PC (#30) and shows it once, when no sheet is open.
     setInterval(function () {
-        if (loading || problem) return;
+        if (loading || problem || reviving) return;
         nextOffer();
         if (!armed()) xhr('GET', '/ping', null, function (err, res) { if (!err) setReady(res); });
         refreshRelay();
         xhr('GET', '/uploads', null, function (err, res) {
-            if (err || !res) return;
+            if (err || !res) { if (++missed >= 3) revive(); return; }
+            missed = 0;
             var was = upload; upload = res.pending || null;
             if (upload && upload.id !== seenUpload && !sheet) { seenUpload = upload.id; openSheet({ mode: 'upload' }); return; }
             if (sheet && sheet.mode === 'upload' && (!!was !== !!upload || (was && upload && was.id !== upload.id))) renderSheet(true);
         }, null, 2500);
     }, 3000);
+
+    // The service can die while TV-Store stays open: a TV put to sleep with the store on screen came
+    // back with the page but no service, and every action failed. When the TV wakes the page up, or
+    // the service misses three ticks in a row, start it again the way boot does. config.xml asks the
+    // platform to restart it too (auto-restart); this covers the TVs that do not.
+    var missed = 0, reviving = false;
+    function revive() {
+        if (reviving || loading || problem) return;
+        reviving = true; missed = 0;
+        startService(function (err, ping) {
+            reviving = false;
+            if (err) { problem = { title: 'The TV-Store service stopped', short: 'Service stopped', text: err.message + ' Close TV-Store and open it again; if it keeps happening, reinstall it from Apps2Samsung.' }; if (sheet) closeSheet(); renderPage(); focusFirst(); return; }
+            withUploadToken(function () {});
+            setReady(ping); syncVerbose();
+        });
+    }
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden || loading || problem || reviving) return;
+        xhr('GET', '/ping', null, function (err, res) { if (err || !res) revive(); else setReady(res); }, null, 2500);
+    });
 
     // ---- boot -------------------------------------------------------------------------------------
     renderHeader(); renderFoot(); renderPage(); readDevice();
