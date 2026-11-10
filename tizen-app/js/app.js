@@ -85,8 +85,14 @@
         'jellyfin-avplay-smarthub': { name: 'Jellyfin AVPlay (Smart Hub)', category: 'media', description: 'Jellyfin AVPlay build with Smart Hub preview rows.' },
         'jellyfin-legacy': { name: 'Jellyfin (legacy builds)', category: 'media', description: 'Older Jellyfin builds for servers on 10.8 to 10.10 and for older sets.' }
     };
+    // The categories: the community catalog says which there are, in which order, what they are
+    // called and their tile colour (its "categories" and "category_colors"), so one can be added,
+    // renamed or dropped there without a TV-Store release. These are the fallback for a catalog
+    // that says nothing, and the colours for one that names no colour for a category it knows.
     var CATEGORY_ORDER = ['media', 'iptv', 'streaming', 'games', 'casting', 'tools', 'other'];
     var CATEGORY_NAMES = { media: 'Media servers & players', iptv: 'IPTV & Live TV', streaming: 'Streaming', games: 'Games & emulators', casting: 'Casting & cameras', tools: 'Tools & system', other: 'Other' };
+    var CATEGORY_COLORS = { media: '#2B59FF', iptv: '#E8590C', streaming: '#D6336C', games: '#7048E8', casting: '#0CA678', tools: '#5C677D', other: '#868E96' };
+    var PALETTE = ['#2B59FF', '#E8590C', '#D6336C', '#7048E8', '#0CA678', '#5C677D', '#868E96'];
     var HEAD_ONLY = /tvapp|immitv|camerapip|camera-pip/i;   // the heads' injectors, keyed by file name
     var NO_HASH = 'has no published hash, so the TV cannot check the download';
 
@@ -699,7 +705,7 @@
         function app(key, name, category, description, author) {
             if (src) key = 'r:' + src.id + ':' + key;
             if (!byKey[key]) {
-                byKey[key] = { key: key, name: name, category: CATEGORY_NAMES[category] ? category : 'other', description: description || '', author: author || '',
+                byKey[key] = { key: key, name: name, category: knownCategory(category), description: description || '', author: author || '',
                                variants: [], needsHead: null, adult: false, root: false, partner: false, icon: '', source: sid, sourceName: src ? src.name : 'Official' };
                 out.push(byKey[key]);
             }
@@ -879,7 +885,7 @@
     function hasAppId(list) { return (list || []).some(function (id) { return appIds.hasOwnProperty(id); }); }
     function appIdOf(pkg) { for (var id in appIds) if (appIds.hasOwnProperty(id) && id.indexOf(pkg + '.') === 0) return id; return ''; }
     function goneEntry(r, pkg) {
-        return { key: 'gone:' + (pkg || normName(r.name)), gone: true, pkg: pkg || '', name: r.name, category: r.category || 'other', reason: r.reason || '', note: r.note || '', since: r.since || '', appId: pkg ? appIdOf(pkg) : '' };
+        return { key: 'gone:' + (pkg || normName(r.name)), gone: true, pkg: pkg || '', name: r.name, category: knownCategory(r.category), reason: r.reason || '', note: r.note || '', since: r.since || '', appId: pkg ? appIdOf(pkg) : '' };
     }
     function byName(a, b) { return normName(a.name) < normName(b.name) ? -1 : normName(a.name) > normName(b.name) ? 1 : 0; }
     // Removed apps on this TV: an installed package with a removed id that no catalog app claims.
@@ -1051,19 +1057,42 @@
 
     // ---- small builders ---------------------------------------------------------------------------
     function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
-    function catName(id) { return (window.__categories && window.__categories[id]) || CATEGORY_NAMES[id] || id; }
-    var TILES = ['media', 'iptv', 'streaming', 'games', 'casting', 'tools', 'other'];
+    function catName(id) { return CATEGORY_NAMES[knownCategory(id)]; }
+    function knownCategory(id) { return typeof id === 'string' && CATEGORY_NAMES.hasOwnProperty(id) ? id : 'other'; }
+    function hashOf(text) { var h = 0; for (var i = 0; i < text.length; i++) h = (Math.imul(h, 31) + text.charCodeAt(i)) >>> 0; return h; }
+    // Takes the categories from the community catalog: { id: name } in display order, and
+    // { id: "#RRGGBB" }. Ids and colours that do not look right are skipped, "other" is always
+    // there (last, unless the catalog places it), and a catalog without categories keeps the
+    // built-in ones. A category without a colour gets one from the palette by its id.
+    function applyCategories(catalog) {
+        var names = catalog && catalog.categories, colors = (catalog && catalog.category_colors) || {}, order = [], map = {};
+        if (names && typeof names === 'object') for (var id in names) {
+            if (!names.hasOwnProperty(id) || !/^[a-z0-9][a-z0-9_-]{0,31}$/.test(id) || map.hasOwnProperty(id)) continue;
+            var n = typeof names[id] === 'string' ? names[id].trim() : '';
+            if (!n) continue;
+            order.push(id); map[id] = n.slice(0, 60);
+        }
+        if (!order.length) return;
+        if (!map.hasOwnProperty('other')) { order.push('other'); map.other = 'Other'; }
+        var col = {};
+        order.forEach(function (c) {
+            var v = colors.hasOwnProperty(c) && typeof colors[c] === 'string' ? colors[c].trim() : '';
+            col[c] = /^#[0-9A-Fa-f]{6}$/.test(v) ? v : CATEGORY_COLORS[c] || PALETTE[hashOf(c) % PALETTE.length];
+        });
+        CATEGORY_ORDER = order; CATEGORY_NAMES = map; CATEGORY_COLORS = col;
+    }
     // The app's tile: its icon from the service when the catalog names one (#66), the first letter
     // on the category colour until it is there, or for good when the service has none to show.
     // The letter stays underneath: the icon only covers it once it has loaded, and a failed load
     // takes the image out again.
     function tile(x, size, icon) {
-        var m = String(x.name || '').match(/[A-Za-z0-9]/), cls = 't-other';
-        if (TILES.indexOf(x.category) >= 0 && x.category !== 'other') cls = 't-' + x.category;
-        else if (x.name) { var h = 0; for (var i = 0; i < x.name.length; i++) h = (Math.imul(h, 31) + x.name.charCodeAt(i)) >>> 0; cls = 't-' + TILES[h % TILES.length]; }
+        // Its category's colour; an app under "other" gets one from the palette by its name, so the
+        // same app always looks the same.
+        var m = String(x.name || '').match(/[A-Za-z0-9]/), c = knownCategory(x.category);
+        var bg = c !== 'other' ? CATEGORY_COLORS[c] : x.name ? PALETTE[hashOf(String(x.name)) % PALETTE.length] : CATEGORY_COLORS.other;
         icon = icon || x.icon;
         var img = icon ? '<img class="ic" alt="" src="' + esc(BASE + '/icon/' + icon) + '" onload="this.parentNode.className+=\' has\'" onerror="if(this.parentNode)this.parentNode.removeChild(this)">' : '';
-        return '<div class="tile s' + size + ' ' + cls + '">' + img + '<span class="lt">' + esc(m ? m[0].toUpperCase() : '?') + '</span></div>';
+        return '<div class="tile s' + size + '" style="background:' + bg + '">' + img + '<span class="lt">' + esc(m ? m[0].toUpperCase() : '?') + '</span></div>';
     }
     function badge(cls, text) { return '<span class="badge ' + cls + '">' + esc(text) + '</span>'; }
     function subline(x) { return x.variants.length > 1 ? x.variants.length + ' variants' : (x.variants[0].version ? 'v' + x.variants[0].version : x.variants[0].file); }
@@ -1956,7 +1985,7 @@
             xhr('GET', '/catalog', null, function (err, cat) {
                 if (err) { loading = false; problem = { title: 'The catalog did not load', short: 'No catalog', text: err.message + '.' }; renderPage(); focusFirst(); return; }
                 var community = (cat.providers || []).filter(function (p) { return p.catalog && p.catalog.categories; })[0];
-                window.__categories = community ? community.catalog.categories : {};
+                if (community) applyCategories(community.catalog);
                 officialCat = cat;
                 loading = false; rebuild(); renderPage(); focusFirst();
                 // The independent repositories (#82) after the official catalog, which shows meanwhile:
