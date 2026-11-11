@@ -166,6 +166,17 @@
         if (n >= 0) pins.splice(n, 1); else pins.push({ key: x.key, file: x.variants[i].file });
         savePins();
     }
+    // Vetro (#102), a TV manager for rooted sets: while it is on the TV it leads the Pinned row, and OK
+    // there opens it. It cannot be unpinned; it leaves the row when it leaves the TV. Its own
+    // "Get apps" opens TV-Store the other way round.
+    var VETRO_PKG = 'vetrotvapp', VETRO_APP = 'vetrotvapp.app';
+    function vetroOnTv() { return installed.hasOwnProperty(VETRO_PKG); }
+    function vetroCard() {
+        return '<div class="card f vetro" tabindex="0" data-k="card:vetro" data-act="vetro">'
+            + '<div class="tile s68" style="background:#7C3AED"><span class="lt">V</span></div>'
+            + '<div class="nm">Vetro</div><div class="mt">Opens Vetro</div><div class="badges">' + badge('b-root', 'Needs root') + '</div></div>';
+    }
+
     // The pinned builds that are in the store now: [{ app, v }]. A pin whose app or build left the
     // catalog (or is hidden by Settings) stays stored and comes back with it.
     function pinned() {
@@ -1246,9 +1257,10 @@
                 + cats.map(function (c) { return '<span class="chip f' + (chip === c ? ' on' : '') + '" tabindex="0" data-k="chip:' + c + '" data-chip="' + c + '">' + esc(catName(c)) + '</span>'; }).join('') + '</div>';
             h += srcChips();
             if (chip === 'all') {
-                var pinnedNow = pinned();
-                if (pinnedNow.length) h += '<div class="sect"><div class="shead"><span class="t">Pinned</span><span class="n">' + pinnedNow.length + '</span></div>'
-                    + '<div class="strip"><div class="cards">' + pinnedNow.map(function (p) { return pinCard(p.app, p.v); }).join('') + '</div></div></div>';
+                var pinnedNow = pinned(), vetro = vetroOnTv();
+                if (pinnedNow.length || vetro) h += '<div class="sect"><div class="shead"><span class="t">Pinned</span><span class="n">' + (pinnedNow.length + (vetro ? 1 : 0)) + '</span>'
+                    + '<span class="hintline">Pin an app from its page, or from On the TV</span></div>'
+                    + '<div class="strip"><div class="cards">' + (vetro ? vetroCard() : '') + pinnedNow.map(function (p) { return pinCard(p.app, p.v); }).join('') + '</div></div></div>';
                 cats.forEach(function (c) {
                     var list = apps.filter(function (x) { return x.category === c; });
                     h += section(c, catName(c), list, false, list.length > 6);
@@ -1307,7 +1319,7 @@
         var mt = st.update ? 'v' + st.version + ' installed · v' + st.latest + ' in ' + (x.source === 'official' ? 'the catalog' : x.sourceName) : 'v' + (st.version || v.version) + (x.variants.length > 1 ? ' · ' + (st.known ? v.label : 'variant not known') : '') + (sourcesOn() ? ' · ' + x.sourceName : '');
         return '<div class="lrow f" tabindex="0" data-k="tv:' + esc(x.key) + '" data-app="' + esc(x.key) + '">' + tile(x, 66)
             + '<div class="txt"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(mt) + '</div></div>'
-            + (st.update ? badge('b-warn', 'Update') : badge('b-ok', 'Up to date')) + CHEV + '</div>';
+            + (isPinned(x, st.variant) ? badge('b-pin', 'Pinned') : '') + (st.update ? badge('b-warn', 'Update') : badge('b-ok', 'Up to date')) + CHEV + '</div>';
     }
 
     function renderTv() {
@@ -1344,6 +1356,8 @@
         if (st.update && st.known && !v.needsHead && fits(v) && (!isSelf(x) || selfCan(x)) && armed() && !signPlan(v).missing) h += '<button class="btn primary grow f" data-k="tvupd" data-act="tvupd">Update</button>';
         else h += '<button class="btn grow f" data-k="tvsheet" data-act="tvsheet">Details</button>';
         if (v.appId) h += '<button class="btn f" data-k="tvopen" data-act="tvopen">Open</button>';
+        // Pin (#102): the build on the TV goes to the Pinned row on the home screen too.
+        h += '<button class="btn f" data-k="tvpin" data-act="tvpin">' + (isPinned(x, st.variant) ? 'Unpin' : 'Pin') + '</button>';
         h += '</div>';
         var mvp = movedInfo(x);
         if (mvp && !mvp.done) h += '<div class="hint" style="text-align:left">' + esc(x.name + ' moved to ' + (mvp.source ? '\u2018' + mvp.source.name + '\u2019' : mvp.domain) + '. Open Details to keep getting its updates.') + '</div>';
@@ -1758,6 +1772,8 @@
             case 'gonesheet': if (tvSel && tvSel.gone) openSheet({ mode: 'gone', entry: tvSel }); return;
             case 'goneopen': var ge = sheet && sheet.mode === 'gone' ? sheet.entry : tvSel; if (ge && ge.appId) launch(ge.appId); return;
             case 'tvopen': launch(tvAppId(tvSel.variants[state(tvSel).variant])); return;
+            case 'tvpin': togglePin(tvSel, state(tvSel).variant); renderPage(); focusKey('tvpin'); return;
+            case 'vetro': launch(VETRO_APP); return;
             case 'updall':
                 queue = updates().filter(function (x) { var st = state(x), v = x.variants[st.variant]; return st.known && !v.needsHead && !isSelf(x) && !signPlan(v).missing; });
                 if (queue.length) { var first = queue.shift(); startInstall(first, state(first).variant); }
@@ -1973,6 +1989,44 @@
         xhr('GET', '/ping', null, function (err, res) { if (err || !res) revive(); else setReady(res); }, null, 2500);
     });
 
+    // ---- opened on an app by another app (#102) ----------------------------------------------------
+    // Another app on the TV (Vetro's "Get apps", say) can launch TV-Store with an app control whose data
+    // has `app`: a catalog name ("Jellyfin"), a package id or an app id. TV-Store then opens that app's
+    // page, where the user decides; nothing installs by itself. Once per request: the boot reads the
+    // one TV-Store was started with, the appcontrol event a later one while TV-Store is already open.
+    var requestedHandled = null;
+    function requestedApp() {
+        try {
+            var req = tizen.application.getCurrentApplication().getRequestedAppControl();
+            var data = (req && req.appControl && req.appControl.data) || [];
+            for (var i = 0; i < data.length; i++)
+                if (data[i].key === 'app' && data[i].value && data[i].value.length) return String(data[i].value[0]).trim();
+        } catch (e) { /* not started with an app control */ }
+        return null;
+    }
+    function findRequested(want) {
+        var w = want.toLowerCase();
+        var byName = catalogApps.filter(function (x) { return (x.name || '').toLowerCase() === w; });
+        if (byName.length) return byName.filter(function (x) { return x.source === 'official'; })[0] || byName[0];
+        for (var i = 0; i < catalogApps.length; i++) {
+            var vs = catalogApps[i].variants || [];
+            for (var j = 0; j < vs.length; j++)
+                if ((vs[j].packageId && vs[j].packageId.toLowerCase() === w) || (vs[j].appId && vs[j].appId.toLowerCase() === w)) return catalogApps[i];
+        }
+        return null;
+    }
+    function openRequested() {
+        var want = requestedApp();
+        if (!want || want === requestedHandled || loading || problem) return;
+        requestedHandled = want;
+        var x = findRequested(want);
+        if (!x) { try { console.log('[TV-Store] asked to open "' + want + '", which is not in the catalog'); } catch (e) {} return; }
+        if (sheet && sheet.mode === 'job' && job && job.running) return; // an install is on screen: leave it
+        if (sheet) closeSheet();
+        openApp(x);
+    }
+    window.addEventListener('appcontrol', function () { requestedHandled = null; openRequested(); });
+
     // ---- boot -------------------------------------------------------------------------------------
     renderHeader(); renderFoot(); renderPage(); readDevice();
     withUploadToken(function () {});
@@ -1988,6 +2042,7 @@
                 if (community) applyCategories(community.catalog);
                 officialCat = cat;
                 loading = false; rebuild(); renderPage(); focusFirst();
+                openRequested();
                 // The independent repositories (#82) after the official catalog, which shows meanwhile:
                 // a slow one takes up to a minute. One that fails says so in Settings and drops out,
                 // and none at all leaves the store as it was.
@@ -1996,6 +2051,8 @@
                     rebuild();
                     if (!sheet) { renderPage(); focusKey(at) || focusFirst(); } else renderHeader();
                     nextOffer();
+                    // An app from an independent repository is only known now.
+                    if (requestedApp() && requestedApp() !== requestedHandled) openRequested();
                 });
             });
         });
