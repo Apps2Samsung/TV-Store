@@ -199,6 +199,29 @@ If the TV already has a different app under the file's package id, the screen sa
 your TV: …"). A file sent this way has no catalog entry to derive another id from, so installing
 it replaces that app.
 
+## Opening TV-Store from another app
+
+Another app on the TV can send people to TV-Store, for its own "Get apps" button for example. TV-Store's
+app id is `A2STVStore.Store`.
+
+- **Just open it:** `tizen.application.launch('A2STVStore.Store')`.
+- **Open it on one app (#102):** launch it with an app control whose data has `app`: the catalog name
+  (`Jellyfin`), or a package id or app id from the catalog. TV-Store opens that app's page once the
+  catalog has loaded; the user decides there, nothing installs by itself. A name the catalog does not
+  know opens the store as usual. If TV-Store is already open, it switches to that app's page, unless an
+  install is running on screen.
+
+```js
+tizen.application.launchAppControl(
+    new tizen.ApplicationControl('http://tizen.org/appcontrol/operation/default', null, null, null,
+        [new tizen.ApplicationControlData('app', ['Jellyfin'])]),
+    'A2STVStore.Store',
+    function () { /* TV-Store is up */ },
+    function (e) { /* not installed: point people to apps2samsung.com */ });
+```
+
+The key `app` stays; more keys may come. Not yet tried from another app on a TV.
+
 ## A fork that kept another app's package id
 
 Forks often keep upstream's package id: tacplayer ships the official Jellyfin id `AprZAARz4r`.

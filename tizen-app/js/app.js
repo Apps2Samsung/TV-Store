@@ -1973,6 +1973,44 @@
         xhr('GET', '/ping', null, function (err, res) { if (err || !res) revive(); else setReady(res); }, null, 2500);
     });
 
+    // ---- opened on an app by another app (#102) ----------------------------------------------------
+    // Another app on the TV (Vetro's "Get apps", say) can launch TV-Store with an app control whose data
+    // has `app`: a catalog name ("Jellyfin"), a package id or an app id. TV-Store then opens that app's
+    // page, where the user decides; nothing installs by itself. Once per request: the boot reads the
+    // one TV-Store was started with, the appcontrol event a later one while TV-Store is already open.
+    var requestedHandled = null;
+    function requestedApp() {
+        try {
+            var req = tizen.application.getCurrentApplication().getRequestedAppControl();
+            var data = (req && req.appControl && req.appControl.data) || [];
+            for (var i = 0; i < data.length; i++)
+                if (data[i].key === 'app' && data[i].value && data[i].value.length) return String(data[i].value[0]).trim();
+        } catch (e) { /* not started with an app control */ }
+        return null;
+    }
+    function findRequested(want) {
+        var w = want.toLowerCase();
+        var byName = catalogApps.filter(function (x) { return (x.name || '').toLowerCase() === w; });
+        if (byName.length) return byName.filter(function (x) { return x.source === 'official'; })[0] || byName[0];
+        for (var i = 0; i < catalogApps.length; i++) {
+            var vs = catalogApps[i].variants || [];
+            for (var j = 0; j < vs.length; j++)
+                if ((vs[j].packageId && vs[j].packageId.toLowerCase() === w) || (vs[j].appId && vs[j].appId.toLowerCase() === w)) return catalogApps[i];
+        }
+        return null;
+    }
+    function openRequested() {
+        var want = requestedApp();
+        if (!want || want === requestedHandled || loading || problem) return;
+        requestedHandled = want;
+        var x = findRequested(want);
+        if (!x) { try { console.log('[TV-Store] asked to open "' + want + '", which is not in the catalog'); } catch (e) {} return; }
+        if (sheet && sheet.mode === 'job' && job && job.running) return; // an install is on screen: leave it
+        if (sheet) closeSheet();
+        openApp(x);
+    }
+    window.addEventListener('appcontrol', function () { requestedHandled = null; openRequested(); });
+
     // ---- boot -------------------------------------------------------------------------------------
     renderHeader(); renderFoot(); renderPage(); readDevice();
     withUploadToken(function () {});
@@ -1988,6 +2026,7 @@
                 if (community) applyCategories(community.catalog);
                 officialCat = cat;
                 loading = false; rebuild(); renderPage(); focusFirst();
+                openRequested();
                 // The independent repositories (#82) after the official catalog, which shows meanwhile:
                 // a slow one takes up to a minute. One that fails says so in Settings and drops out,
                 // and none at all leaves the store as it was.
@@ -1996,6 +2035,8 @@
                     rebuild();
                     if (!sheet) { renderPage(); focusKey(at) || focusFirst(); } else renderHeader();
                     nextOffer();
+                    // An app from an independent repository is only known now.
+                    if (requestedApp() && requestedApp() !== requestedHandled) openRequested();
                 });
             });
         });
