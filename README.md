@@ -488,6 +488,11 @@ The header counts what the switches hide ("12 apps · 3 hidden").
   **Pinned** row at the top of the store, remembered on the TV. A pinned card shows that build's
   own state: its version, "Installed", or "Update to v…" when the catalog has a newer one; OK
   opens the sheet on that build. **Unpin** takes it off again.
+- **Pin** on the On the TV panel does the same for the build on the TV, and the list marks a pinned
+  app **Pinned** (#102).
+- **Vetro** (#102): while Vetro (`vetrotvapp.app`) is on the TV it leads the Pinned row as a purple
+  "Needs root" card, and OK opens it. It cannot be unpinned; it leaves the row when it leaves the TV.
+  Vetro's own "Get apps" opens TV-Store the other way round (see Opening TV-Store from another app).
 - Apps whose builds share one package id (all Litefin builds are `LitefinApp`) cannot be told
   apart by the TV. TV-Store remembers which file it installed itself; for an app installed from
   a phone or PC, pin the build you have and TV-Store treats that as the installed one, on the
