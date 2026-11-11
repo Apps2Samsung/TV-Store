@@ -581,3 +581,9 @@ Only when that start fails too does the page say "The TV-Store service stopped".
 | Tizen 3.0 and 4.0 sets (2017, 2018) | untested |
 | Tizen 10 sets (2025) | done, retail set (0.3.9) |
 | Host PC IP `127.0.0.1`: TV-Store installs over loopback, Apps2Samsung through the relay | built and proven against a fake `sdbd` (0.3.14); the relay says why a connection failed and `GET /relay` tells Apps2Samsung (0.3.15, #58); proven on a 2019 Tizen 5.0 set: a catalog install over `127.0.0.1:26101` and `sdb` from a PC through port 26201 (0.3.19). That set's `sdbd` takes one client at a time, so an install while a PC holds a relay session stops with `SDB_BUSY` instead of blaming Host PC IP (0.3.20, #73). With Vetro holding `sdbd`, installs go through its sdb tunnel (0.3.24, #90); on an S95F the TV kept TV-Store out of `127.0.0.1:26201` (`EHOSTUNREACH`), so 0.3.25 also tries the TV's own IP on 26201 (Vetro's "Allow SDB from the local network" on) and says `APP_HOLDS_SDB` instead of `HOST_PC_IP`; proven against a fake `sdbd`, untested on a TV |
+
+## License
+
+TV-Store is released under the [GNU General Public License v3.0](LICENSE) (GPL-3.0-only).
+`tizen-app/js/qrcode.js` is [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator)
+by Kazuhiko Arase under the MIT License; its notice stays in the file.
