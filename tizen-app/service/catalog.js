@@ -18,6 +18,12 @@ var pkgid = require('./pkgid.js');
 
 var MAX_AGE_MS = 7 * 24 * 3600 * 1000;   // the workflow re-signs at least twice a day
 
+// The format versions this TV-Store reads (tizen-community-packages docs/catalog.md, Versioning): the
+// snapshot's schemaVersion and the community catalog's. Additive changes keep 1; a higher number
+// means a breaking change, announced 30 days ahead. TV-Store keeps working on such a catalog (the
+// signature and every file's hash are still checked), but tells the user to update.
+var KNOWN_SCHEMA = 1;
+
 var Buf = require('./compat.js');
 function b64(s) { return Buf.from(s, 'base64'); }
 
@@ -50,7 +56,18 @@ function verify(buf, publicKeyPem, now) {
     if ((now || Date.now()) - at > MAX_AGE_MS) throw new Error('the signed catalog is from ' + catalog.generatedAt + ', more than 7 days old: check the TV’s clock, or the Apps2Samsung catalog workflow');
 
     var s = scan(catalog);
-    return { catalog: catalog, payload: payload, index: s.index, levels: s.levels, icons: s.icons, moved: s.moved, keys: s.keys, files: s.files, removed: s.removed, settings: s.settings };
+    return { catalog: catalog, payload: payload, index: s.index, levels: s.levels, icons: s.icons, moved: s.moved, keys: s.keys, files: s.files, removed: s.removed, settings: s.settings, newer: newerFormat(catalog) };
+}
+
+// The highest format version in the snapshot or a provider's catalog, when it is above what this
+// TV-Store knows; 0 when everything is known. A missing or odd value counts as known.
+function newerFormat(catalog) {
+    var top = 0;
+    function see(v) { if (typeof v === 'number' && v % 1 === 0 && v > KNOWN_SCHEMA && v > top) top = v; }
+    if (!catalog || typeof catalog !== 'object') return 0;
+    see(catalog.schemaVersion);
+    (Array.isArray(catalog.providers) ? catalog.providers : []).forEach(function (p) { if (p && p.catalog && typeof p.catalog === 'object') see(p.catalog.schemaVersion); });
+    return top;
 }
 
 // One walk over providers -> releases -> assets for the lookups the install and the icons need:
@@ -127,4 +144,4 @@ function icons(catalog) { return scan(catalog).icons; }
 
 function sha256(buf) { return crypto.createHash('sha256').update(buf).digest('hex'); }
 
-module.exports = { verify: verify, envelope: envelope, signatureOk: signatureOk, scan: scan, index: index, levels: levels, icons: icons, sha256: sha256, MAX_AGE_MS: MAX_AGE_MS };
+module.exports = { verify: verify, newerFormat: newerFormat, KNOWN_SCHEMA: KNOWN_SCHEMA, envelope: envelope, signatureOk: signatureOk, scan: scan, index: index, levels: levels, icons: icons, sha256: sha256, MAX_AGE_MS: MAX_AGE_MS };

@@ -383,6 +383,16 @@ plays no part: TV-Store signs every package with your certificate, as always.
 - `required_version` and the "Needs Tizen X" badge, Partner certificates (`cert_level`), 18+
   (`adult`) and root apps (`flags: ["root"]`) work for repository apps as for official ones.
 
+### A newer catalog format
+
+The official catalog has a format version (`schemaVersion`, see
+[Versioning](https://github.com/Apps2Samsung/tizen-community-packages/blob/main/docs/catalog.md#versioning)).
+TV-Store knows version 1, both for the signed snapshot and for the community catalog inside it. When
+either says a higher number, TV-Store keeps working with what it understands (the signature and every
+file's hash are still checked) and shows a banner asking to update TV-Store from Apps2Samsung; the log
+says `catalog: format version N`. A breaking change is announced 30 days ahead, so an up-to-date
+TV-Store doesn't see it.
+
 ### Apps that moved out of the official catalog
 
 When an app leaves the official catalog for its developer's own repository, its manifest in

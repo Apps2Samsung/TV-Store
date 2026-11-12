@@ -98,8 +98,16 @@ if (rm.BisnorTV01.reason !== 'unlicensed-content' || rm.BisnorTV01.note !== 'Get
 if (JSON.stringify(rm.BisnorTV01.appIds) !== '["BisnorTV01.Bisnor"]' || JSON.stringify(rm.NoFiles01.appIds) !== '[]') fail('removed: app ids ' + JSON.stringify(rm.BisnorTV01.appIds));
 if (rm.NoFiles01.since !== '' || rm.NoFiles01.note !== '') fail('removed: a bad date and no note come out empty');
 if (JSON.stringify(r.removed) !== '{}') fail('a catalog without removed verifies with an empty removed map');
+// The format version (tizen-community-packages docs/catalog.md): a newer one in the snapshot or in a
+// provider's catalog still verifies, and is reported so the screen asks for an update.
+if (r.newer !== 0) fail('a version 1 catalog reports no newer format');
+var v2 = cat.verify(signed(good.replace('"schemaVersion": 1', '"schemaVersion": 2')), pub, now);
+if (v2.newer !== 2 || v2.index['https://github.com/o/r/releases/download/1/A.wgt'] !== hash) fail('a version 2 snapshot verifies and reports 2: ' + v2.newer);
+if (cat.newerFormat({ schemaVersion: 1, providers: [{ id: 'tizen-community', catalog: { schemaVersion: 3, apps: [] } }, { id: 'p' }, null] }) !== 3) fail('a newer community catalog is reported');
+if (cat.newerFormat({ schemaVersion: '9', providers: [{ catalog: { schemaVersion: 1.5 } }, { catalog: {} }] }) !== 0) fail('odd or missing versions count as known');
+if (cat.newerFormat(null) !== 0) fail('newerFormat(null)');
 // The shipped key parses: verifying anything with it answers false instead of throwing.
 if (crypto.createVerify('RSA-SHA256').update('x').verify(shipped, 'AAAA', 'base64') !== false) fail('shipped key');
 
 console.log('PASS');
-console.log('  signed catalog verifies; tampered, foreign-key, unsigned and stale ones are refused; cert_level per file and per provider; moved_to per package');
+console.log('  signed catalog verifies; tampered, foreign-key, unsigned and stale ones are refused; cert_level per file and per provider; moved_to per package; a newer format version is reported');

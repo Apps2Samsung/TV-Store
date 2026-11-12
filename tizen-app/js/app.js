@@ -210,6 +210,16 @@
     var uploadToken = null, uploadTokenError = null;
     var tried = [];            // what startService got from each address, for the error screen
     var officialCat = null;    // the official catalog as the service verified it
+    // The catalog's format version when it is newer than this TV-Store knows (tizen-community-packages
+    // docs/catalog.md, Versioning; the service's catalog.js has the same check): 0 when all is known.
+    var KNOWN_SCHEMA = 1, catalogNewer = 0;
+    function newerFormat(cat) {
+        var top = 0;
+        function see(v) { if (typeof v === 'number' && v % 1 === 0 && v > KNOWN_SCHEMA && v > top) top = v; }
+        see(cat && cat.schemaVersion);
+        ((cat && cat.providers) || []).forEach(function (p) { if (p && p.catalog) see(p.catalog.schemaVersion); });
+        return top;
+    }
     var sources = [];          // the independent repositories (#82), from /sources/catalog: [{ repositoryId, name, ..., manifest | error }]
     var srcFilter = 'all';     // 'all', 'official' or a repositoryId: the From chips
     var offers = [];           // sources Apps2Samsung sent (A2SStore.addSources) still to confirm: [{ src, done }]
@@ -1248,6 +1258,9 @@
             if (own && latest && newer(latest, own)) { selfLatest = latest; selfText = 'TV-Store v' + latest + ' is out (this is v' + own + '). This copy was installed under another package id by Apps2Samsung, so update it from Apps2Samsung (On the TV, Update) rather than from here.'; }
         }
         h += selfResultHtml();
+        // A breaking change in the catalog's format is announced 30 days ahead, so an up-to-date
+        // TV-Store never sees this; one left behind keeps working on what it understands.
+        if (catalogNewer) h += '<div class="notice bad" style="margin:0 0 26px">' + esc('The app catalog uses a newer format (version ' + catalogNewer + ') than this TV-Store understands. Update TV-Store from Apps2Samsung on a phone or PC (On the TV, Update). Until then some apps may be missing or shown wrongly; what it installs is still checked against the signed catalog.') + '</div>';
         movedGroups().forEach(function (g) {
             if (movedSeen.indexOf(g.url) >= 0) return;
             h += '<div class="notice row" style="margin:0 0 26px"><span>' + esc(names(g.apps) + (g.apps.length === 1 ? ' has' : ' have') + ' moved to ' + (g.source ? '\u2018' + g.source.name + '\u2019' : 'the developer\u2019s own repository at ' + g.domain) + '. The official catalog stops updating ' + (g.apps.length === 1 ? 'it' : 'them') + ' soon. ' + (g.source ? 'Take the updates from there to keep getting them.' : 'Add that repository to keep getting updates.')) + '</span>'
@@ -2209,6 +2222,7 @@
                 var community = (cat.providers || []).filter(function (p) { return p.catalog && p.catalog.categories; })[0];
                 if (community) applyCategories(community.catalog);
                 officialCat = cat;
+                catalogNewer = newerFormat(cat);
                 loading = false; rebuild(); renderPage(); focusFirst();
                 openRequested();
                 // The independent repositories (#82) after the official catalog, which shows meanwhile:
