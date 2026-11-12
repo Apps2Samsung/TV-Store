@@ -204,6 +204,7 @@
     var confirmingAdult = false;
     var device = '';
     var tvIp = '';             // this TV's IP now, from systeminfo
+    var tvFree = 0;            // free bytes on the TV's own storage, 0 when unknown
     var upload = null;         // the file waiting in the service (#30), from /uploads
     var seenUpload = null;     // the id this page already asked about
     var uploadToken = null, uploadTokenError = null;
@@ -679,6 +680,8 @@
         ['ETHERNET_NETWORK', 'WIFI_NETWORK'].forEach(function (t) {
             try { tizen.systeminfo.getPropertyValue(t, function (n) { if (n && n.ipAddress && !tvIp) tvIp = n.ipAddress; }, function () {}); } catch (e) {}
         });
+        // Free space, for the store in a browser (#101): the internal storage's available bytes.
+        try { tizen.systeminfo.getPropertyValue('STORAGE', function (st) { var u = st && st.units && st.units[0]; if (u && u.availableCapacity) tvFree = u.availableCapacity; }, function () {}); } catch (e) {}
         try { if (window.webapis && webapis.productinfo && webapis.productinfo.getDuid) tvDuid = String(webapis.productinfo.getDuid() || '').trim(); } catch (e) {}
         try {
             tizen.systeminfo.getPropertyValue('BUILD', function (b) {
@@ -1589,8 +1592,8 @@
             + '<div class="sbody vscroll"><div class="opts">' + opt('showAdult', 'Show adult (18+) apps', 'Apps marked adult-only stay out of the store until this is on.')
             + opt('showNeedsHead', 'Show apps that need a phone or PC', 'Some apps need Apps2Samsung on a phone or PC to install. Turn this off to keep them out of the store.')
             + opt('verboseLog', 'Verbose logging', 'Writes much more detail to the TV-Store log. Turn it on when a bug report asks for it, and off again afterwards.')
-            + relayRow() + installerRow()
-            + opt('selfUpdate', 'Let TV-Store update itself (experiment)', 'Off: update TV-Store from Apps2Samsung on a phone or PC. On: TV-Store offers its own update under On the TV. It closes during the install; open it again after a minute and it says whether the update landed. Results help GitHub issue #41.') + '</div>' + relayNotice() + installerNotice();
+            + browserRow() + relayRow() + installerRow()
+            + opt('selfUpdate', 'Let TV-Store update itself (experiment)', 'Off: update TV-Store from Apps2Samsung on a phone or PC. On: TV-Store offers its own update under On the TV. It closes during the install; open it again after a minute and it says whether the update landed. Results help GitHub issue #41.') + '</div>' + browserNotice() + relayNotice() + installerNotice();
         if (confirmingAdult) h += '<div class="notice">These apps are meant for adults only. Turn them on only if you are 18 or older.</div>'
             + '<div class="btns" style="margin-top:16px"><button class="btn primary grow f" data-k="adultyes" data-act="adultyes" data-default>I am 18 or older</button><button class="btn f" data-k="adultno" data-act="adultno">Cancel</button></div>';
         var certList = (ready && ready.certificates ? ready.certificates.map(function (c) { return c.name + (c.level === 'partner' || c.level === 'public' ? ' (' + levelName(c.level) + ')' : ''); }) : (ready && ready.certNames) || []);
@@ -1601,6 +1604,8 @@
             + '<div class="trow"><span class="k">TV-Store</span><span class="v">v' + VERSION + (ready && ready.node ? ' · Node ' + esc(ready.node) : '') + '</span></div>'
             + '<div class="trow"><span class="k">This TV</span><span class="v">' + esc((device ? device + ' · ' : '') + (tvTizen ? 'Tizen ' + tvTizen : 'Tizen version not known')) + '</span></div></div>';
         if (confirmingAdult) return h + '</div>';    // the question needs the room the QR codes take
+        // The store in a browser (#101): its address, as a QR for a phone.
+        if (browserOn() && ready.browser.url) h += '<div class="qrrow">' + qr(ready.browser.url, 120) + '<div><b>Browse and install from your phone</b><span>Scan, or open <span class="mono">' + esc(ready.browser.url) + '</span> on a computer in the same network. Install there and TV-Store installs it here, while it is open.</span></div></div>';
         // Your own file (#30): the upload page's address, as a QR for a phone.
         if (ready && ready.ownIp) {
             var u = 'http://' + ready.ownIp + ':8077/upload';
@@ -1610,11 +1615,130 @@
     }
 
     // ---- actions ----------------------------------------------------------------------------------
+    // The build an app's page lands on: the one on the TV, else the first, but not a build this TV
+    // cannot run when another can (#47).
+    function pickVariant(x) {
+        var st = state(x), v = st.installed ? st.variant : 0;
+        if (!fits(x.variants[v])) for (var i = 0; i < x.variants.length; i++) if (fits(x.variants[i])) { v = i; break; }
+        return v;
+    }
     function openApp(x, vIdx) {
-        var st = state(x), v = vIdx != null ? vIdx : (st.installed ? st.variant : 0);
-        // Not a build this TV cannot run when another can (#47): the first that fits is the one to land on.
-        if (vIdx == null && !fits(x.variants[v])) for (var i = 0; i < x.variants.length; i++) if (fits(x.variants[i])) { v = i; break; }
-        openSheet({ mode: 'app', app: x, v: v, all: false });
+        openSheet({ mode: 'app', app: x, v: vIdx != null ? vIdx : pickVariant(x), all: false });
+    }
+
+    // ---- the store in a phone or PC browser (#101) ------------------------------------------------
+    // http://<TV IP>:8077/ (the service's storepage.js) shows what this screen sends it: every app the
+    // Settings let through, with its state and, when it cannot be installed from there, why. Install
+    // there becomes a request this screen takes in the answer to its next send and installs as if OK
+    // was pressed on it, so every check and question stays here, and the TV shows it happening. Only
+    // the page token lets this screen send or take: other apps on the TV reach the port too.
+    var browserBusy = false, browserError = null;   // the Settings switch, as for the relay
+    var storeSent = '', storeBusy = false;          // the picture the service has, as JSON
+    var browserTaken = {};                          // request id -> true, taken once
+    var browserReq = {};                            // app key -> the request id it was installed for
+    function browserOn() { return !!(ready && ready.browser && ready.browser.enabled); }
+    // Why x cannot be installed from a browser, or '' when it can; for an app on the TV that is up to
+    // date, '' as well (the page shows it as installed, without a button).
+    function browserWhy(x, st, v) {
+        if (isSelf(x)) return 'TV-Store updates itself from the TV, or from Apps2Samsung on a phone or PC.';
+        if (!armed()) return 'TV-Store is not armed yet.';
+        if (v.needsHead) return 'Needs Apps2Samsung on a phone or PC: this build ' + v.needsHead + '.';
+        if (!fits(v)) return 'Needs Tizen ' + v.tizen + ' or newer; this TV runs Tizen ' + tvTizen + '.';
+        if (signPlan(v).missing) return 'Needs a ' + levelName(signPlan(v).level) + ' certificate on the TV.';
+        if (st.installed && !st.known) return 'Several builds match the one on the TV: pick it on the TV.';
+        var from = heldElsewhere(x, v);
+        if (from) return 'On the TV from ' + from + ': switching it to this source needs a yes on the TV.';
+        return '';
+    }
+    function storeSnapshot() {
+        var list = catalogApps.filter(function (x) { return !(x.adult && !settings.showAdult) && !(x.needsHead && !settings.showNeedsHead); });
+        return {
+            tv: { model: device, tizen: tvTizen, version: VERSION, armed: armed(), free: tvFree,
+                  certs: ((ready && ready.certificates) || []).map(function (c) { return { name: certName(c), level: c.level === 'partner' || c.level === 'public' ? levelName(c.level) : '' }; }) },
+            categories: CATEGORY_ORDER.map(function (c) { return { id: c, name: CATEGORY_NAMES[c], color: CATEGORY_COLORS[c] }; }),
+            apps: list.map(function (x) {
+                var st = state(x), vi = pickVariant(x), v = x.variants[vi], why = browserWhy(x, st, v);
+                var current = st.installed && !st.update;
+                return { key: x.key, name: x.name, cat: knownCategory(x.category), author: x.author || '', desc: String(x.description || '').slice(0, 300),
+                         source: x.source === 'official' ? '' : x.sourceName || '', icon: x.icon || '', installed: st.installed ? st.version || '' : null,
+                         update: !!st.update, latest: st.installed ? st.latest || '' : v.version || '', variant: x.variants.length > 1 ? v.label : '',
+                         adult: !!x.adult, root: !!x.root, partner: !!x.partner, can: !current && !why, why: why };
+            }),
+            job: job ? { key: job.app.key, name: job.app.name, update: !!job.update, step: job.step, running: !!job.running, ok: !!job.ok, error: job.error || null,
+                         onTv: !!(job.error && /^(PACKAGE_ID_TAKEN|CERT_MISMATCH|SOURCE_SWITCH)$/.test(job.code || '')) } : null,
+            queue: queue.map(function (x) { return x.name; })
+        };
+    }
+    // Every tick, and right after an install starts or ends: the whole picture when it changed, else
+    // only "still open". The answer brings the requests from browsers.
+    function pushStore() {
+        if (loading || problem || !ready || !uploadToken || storeBusy || !browserOn()) return;
+        var snap = JSON.stringify(storeSnapshot()), body = { token: uploadToken };
+        if (snap !== storeSent) body.state = JSON.parse(snap);
+        storeBusy = true;
+        xhr('POST', '/store/state', body, function (err, res) {
+            storeBusy = false;
+            if (err) { if (/only the TV-Store screen/.test(err.message)) withUploadToken(function () {}); return; }
+            if (!res || !res.ok) return;
+            if (body.state) storeSent = snap;
+            if (res.want) storeSent = '';
+            (res.requests || []).forEach(takeRequest);
+        }, null, 5000);
+    }
+    function ackRequest(id, status, message) { if (id) xhr('POST', '/store/ack', { token: uploadToken, id: id, status: status, message: message || '' }, function () {}, null, 5000); }
+    function ackBrowser(x, status, message) { var id = x && browserReq[x.key]; if (!id) return; delete browserReq[x.key]; ackRequest(id, status, message); }
+    // The updates Update all installs: known builds, none that needs a phone or PC, not TV-Store itself.
+    function updatable() { return updates().filter(function (x) { var st = state(x), v = x.variants[st.variant]; return st.known && !v.needsHead && !isSelf(x) && !signPlan(v).missing; }); }
+    function updateAll() { queue = updatable(); if (queue.length) { var first = queue.shift(); startInstall(first, state(first).variant); } }
+    function takeRequest(r) {
+        if (!r || !r.id || browserTaken[r.id]) return;
+        browserTaken[r.id] = true;
+        if (r.all) {
+            var list = updatable().filter(function (x) { return queue.indexOf(x) < 0 && !(job && job.running && job.app === x); });
+            if (!list.length) return ackRequest(r.id, 'failed', 'No updates to install.');
+            ackRequest(r.id, 'taken');
+            toast('Update all, asked for from ' + r.from + ': ' + list.length + (list.length === 1 ? ' update' : ' updates'));
+            if (job && job.running) queue = queue.concat(list); else { queue = list; var first = queue.shift(); startInstall(first, pickVariant(first)); }
+            pushStore();
+            return;
+        }
+        var x = byKey(r.key);
+        if (!x) return ackRequest(r.id, 'failed', 'Not in the store on the TV.');
+        var st = state(x), why = browserWhy(x, st, x.variants[pickVariant(x)]);
+        if (why || (st.installed && !st.update)) return ackRequest(r.id, 'failed', why || 'It is on the TV already.');
+        if (queue.indexOf(x) >= 0 || (job && job.running && job.app === x)) return ackRequest(r.id, 'taken');
+        ackRequest(r.id, 'taken');
+        browserReq[x.key] = r.id;
+        toast((st.installed ? 'Updating ' : 'Installing ') + x.name + ', asked for from ' + r.from);
+        if (job && job.running) queue.push(x); else startInstall(x, pickVariant(x));
+        pushStore();
+    }
+    var toastTimer = null;
+    function toast(text) {
+        var t = $('toast');
+        if (!t) { t = document.createElement('div'); t.id = 'toast'; document.body.appendChild(t); }
+        t.textContent = text; t.className = 'toast on';
+        clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.className = 'toast'; }, 7000);
+    }
+    function browserRow() {
+        if (!ready || !ready.browser) return '';
+        var b = ready.browser;
+        var hint = b.enabled ? 'On: open ' + (b.url || 'this TV\u2019s address on port 8077') + ' on a phone or PC in your network to browse and install. Installs run here while TV-Store is open, as if OK was pressed.'
+            : 'Lets a phone or PC in your network browse the store and press Install; TV-Store then installs it here.';
+        return '<div class="opt f" tabindex="0" data-k="opt:browser" data-opt="browser"><div class="ot"><div class="ont">Install from a browser</div><div class="oh">' + esc(hint) + '</div></div>'
+            + '<span class="sw' + (b.enabled ? ' on' : '') + '"><i></i></span></div>';
+    }
+    function browserNotice() { return browserError ? '<div class="notice bad">' + esc('Could not change installing from a browser: ' + browserError) + '</div>' : ''; }
+    function toggleBrowser() {
+        if (!ready || !ready.browser || browserBusy) return;
+        var want = !ready.browser.enabled;
+        browserBusy = true;
+        xhr('POST', '/settings', { browser: { enabled: want } }, function (err, res) {
+            browserBusy = false;
+            if (!err && res && res.ok) { ready.browser = res.browser; browserError = null; storeSent = ''; pushStore(); }
+            else browserError = err ? err.message : (res && res.error) || 'no answer from the service';
+            renderSheet(); focusKey('opt:browser');
+        });
     }
 
     function startInstall(x, vIdx, opts) {
@@ -1622,7 +1746,7 @@
         var v = x.variants[vIdx], st = state(x), replace = !!(opts && opts.replace);
         job = { app: x, v: v, vIdx: vIdx, update: st.installed && st.known && st.variant === vIdx, replace: replace, running: true, finished: false, ok: false, step: 0, bytes: 0, line: '', error: null, code: null, started: Date.now(), plan: signPlan(v), certificate: '', level: '' };
         if (sheet) { sheet = { mode: 'job' }; renderSheet(true); } else openSheet({ mode: 'job' });
-        renderHeader();
+        renderHeader(); pushStore();
         var since = job.started - 2000, me = job;
         var timer = setInterval(function () { pollLog(me, since); }, 700);
         // installed: whether the TV lists the package, so the service can read a bare [118, -12] from
@@ -1645,7 +1769,13 @@
                 me.running = false; me.finished = true; me.ended = Date.now();
                 // TV-Store's own update: the service going away mid-install is what the update does.
                 if (err && isSelf(me.app)) err = new Error('The connection to the TV-Store service dropped, which is what installing TV-Store over itself does. Close TV-Store and open it again; it then says whether the update landed.');
-                if (err || !res.ok) { me.error = err ? err.message : res.error; me.code = err ? null : (res.code || null); renderHeader(); if (sheet && sheet.mode === 'job') renderSheet(true); queue = []; return; }
+                if (err || !res.ok) {
+                    me.error = err ? err.message : res.error; me.code = err ? null : (res.code || null); renderHeader(); if (sheet && sheet.mode === 'job') renderSheet(true);
+                    // Asked for from a browser (#101): say how it went there, and that the rest did not start.
+                    ackBrowser(me.app, 'failed', me.error);
+                    queue.forEach(function (q) { ackBrowser(q, 'failed', 'Not started: ' + me.app.name + ' before it failed.'); });
+                    queue = []; pushStore(); return;
+                }
                 var rr = res.result || {};
                 me.ok = true; me.step = 4; me.certificate = rr.certificate || ''; me.level = rr.level || '';
                 // Where it went on the TV: its own id, or one of its own beside another app (#84).
@@ -1655,13 +1785,15 @@
                 if (pkg) { installed[pkg] = v.version; claims = null; rememberVariant(v, pkg); }
                 if (pkg && ready) { ready.sourceOf = ready.sourceOf || {}; if (v.upload) delete ready.sourceOf[pkg]; else ready.sourceOf[pkg] = rr.source || x.source || 'official'; }
                 if (aid) appIds[aid] = true;
+                ackBrowser(me.app, 'done');
                 // The service now remembers the profile this package took; the next sheet should say so.
                 xhr('GET', '/ping', null, function (e, p) { if (!e && p && p.ok) ready = p; }, null, 5000);
                 readInstalled(function (map) {
                     if (map && Object.keys(map).length) setInstalled(map);
                     renderPage();
                     if (sheet && sheet.mode === 'job') renderSheet(true);
-                    if (queue.length) setTimeout(function () { var nx = queue.shift(); startInstall(nx, state(nx).variant); }, 2500);
+                    pushStore();
+                    if (queue.length) setTimeout(function () { var nx = queue.shift(); startInstall(nx, pickVariant(nx)); }, 2500);
                 });
             });
         }, null, 15 * 60 * 1000);
@@ -1711,6 +1843,7 @@
     function toggle(key) {
         if (key === 'relay') { toggleRelay(); return; }
         if (key === 'installer') { toggleInstaller(); return; }
+        if (key === 'browser') { toggleBrowser(); return; }
         if (key === 'showAdult' && !settings.showAdult) { confirmingAdult = true; renderSheet(true); return; }
         setSetting(key, !settings[key]);
     }
@@ -1776,10 +1909,7 @@
             case 'tvopen': launch(tvAppId(tvSel.variants[state(tvSel).variant])); return;
             case 'tvpin': togglePin(tvSel, state(tvSel).variant); renderPage(); focusKey('tvpin'); return;
             case 'vetro': launch(VETRO_APP); return;
-            case 'updall':
-                queue = updates().filter(function (x) { var st = state(x), v = x.variants[st.variant]; return st.known && !v.needsHead && !isSelf(x) && !signPlan(v).missing; });
-                if (queue.length) { var first = queue.shift(); startInstall(first, state(first).variant); }
-                return;
+            case 'updall': updateAll(); return;
         }
     }
 
@@ -1962,6 +2092,7 @@
         nextOffer();
         if (!armed()) xhr('GET', '/ping', null, function (err, res) { if (!err) setReady(res); });
         refreshRelay();
+        pushStore();
         xhr('GET', '/uploads', null, function (err, res) {
             if (err || !res) { if (++missed >= 3) revive(); return; }
             missed = 0;

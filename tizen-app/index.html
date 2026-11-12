@@ -190,6 +190,9 @@
   .notice{flex:none;font-size:18px;line-height:1.5;border-radius:14px;padding:14px 18px;margin-top:16px;background:rgba(240,160,32,.14);color:#F0A020}
   .notice.info{background:rgba(244,247,251,.06);color:#9FB0C6}
   .notice.bad{background:rgba(255,107,94,.14);color:#FF6B5E}
+  /* a toast at the bottom: an install a phone or PC asked for (#101) */
+  #toast{position:fixed;left:50%;bottom:48px;transform:translateX(-50%);max-width:1200px;padding:18px 28px;border-radius:16px;background:#F4F7FB;color:#0D1B2A;font-size:22px;font-weight:700;box-shadow:0 10px 40px rgba(0,0,0,.5);z-index:50;display:none}
+  #toast.on{display:block}
   .notice.row{display:flex;align-items:center}
   .notice.row>span{flex:1}
   .notice.row .btn{flex:none;margin-left:18px;padding:8px 18px;font-size:16px}

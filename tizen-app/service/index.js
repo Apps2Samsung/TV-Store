@@ -28,6 +28,7 @@ var iconsMod = require('./icons.js');
 var selfupdate = require('./selfupdate.js');
 var repos = require('./repos.js');
 var pkgid = require('./pkgid.js');
+var storePage = require('./storepage.js');
 
 var PORT = 8077;
 // sdbd's port; a test points the service at a fake sdbd (test/install.test.js).
@@ -462,6 +463,107 @@ function uploadPage() {
         + 'x.onerror=function(){m.className="msg bad";m.textContent="Could not reach the TV.";b.disabled=false};x.send(file)}})();</script></body></html>';
 }
 function escHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+
+// ---- the store in a phone or PC browser (#101) --------------------------------------------------------
+// http://<TV IP>:8077/ shows the store and has an Install button per app; storepage.js has the page.
+// The service installs nothing for it: the TV-Store screen sends what it shows (POST /store/state,
+// with the page token, every few seconds while it is open), a browser's Install becomes a request in
+// STORE_REQS, the screen picks it up in the answer to its next state and installs it as if OK was
+// pressed there, with every check and question it has, and says how it went (POST /store/ack). So
+// what a browser can start is exactly what the person at the TV could, and only while TV-Store is
+// open there. On by default (Patrick, 2026-11-12); the switch "Install from a browser" in Settings
+// turns it off. Who may use it: anyone on the LAN, as /upload, unless the relay's allow list names
+// clients, which then holds here too.
+var BROWSER_FILE = DATA_DIR ? path.join(DATA_DIR, '.a2s-browser.json') : null;
+var BROWSER_CFG = { enabled: true };
+try { if (BROWSER_FILE) { var bcf = JSON.parse(fs.readFileSync(BROWSER_FILE, 'utf8')); if (bcf && typeof bcf.enabled === 'boolean') BROWSER_CFG.enabled = bcf.enabled; } } catch (e) {}
+function saveBrowserCfg() {
+    if (!BROWSER_FILE) return;
+    try { fs.writeFileSync(BROWSER_FILE, JSON.stringify(BROWSER_CFG)); } catch (e) { log('browser: cannot save settings: ' + e.message); }
+}
+function browserStatus() { var ip = ownIp(); return { enabled: BROWSER_CFG.enabled, url: ip ? 'http://' + ip + ':' + PORT + '/' : null }; }
+var STORE = { state: null, at: 0 };     // the screen's last picture of the store, and when it last said it is open
+var STORE_LIVE_MS = 15000;             // the screen sends every 3 s; three missed means it is not open
+var STORE_REQS = [];                   // { id, key, all, name, from, at, status: waiting|taken|done|failed, message }
+function storeLive() { return !!STORE.state && Date.now() - STORE.at < STORE_LIVE_MS; }
+// A browser's address is allowed: this TV itself, or any LAN client unless the relay's allow list names some.
+function browserAllowed(req) {
+    if (fromThisTv(req)) return true;
+    var allow = RELAY_CFG.allow || [];
+    return !allow.length || allow.indexOf(relayMod.peerIp(req.socket)) >= 0;
+}
+// The name the browser used for the TV: an IP address or a LAN name. A public name pointed at the TV
+// (DNS rebinding) would let any web page drive these routes as if it were on the LAN.
+function lanHost(req) {
+    var h = String(req.headers.host || '').toLowerCase().replace(/:\d+$/, '');
+    return !h || /^\d{1,3}(\.\d{1,3}){3}$/.test(h) || /^\[[0-9a-f:.]+\]$/.test(h) || /^[a-z0-9-]+$/.test(h) || /\.(local|lan|home|internal|home\.arpa)$/.test(h);
+}
+// A POST from another web site (its Origin is not this TV's address) is refused: a page on the
+// internet must not be able to start installs from the browser of someone on the LAN.
+function sameOrigin(req) {
+    var o = req.headers.origin;
+    if (!o) return true;
+    var m = /^https?:\/\/([^\/]+)$/i.exec(String(o));
+    return !!m && m[1].toLowerCase() === String(req.headers.host || '').toLowerCase();
+}
+function storeJson(res, code, obj) { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); }
+function storeApp(key) { var l = (STORE.state && STORE.state.apps) || []; for (var i = 0; i < l.length; i++) if (l[i].key === key) return l[i]; return null; }
+function openReqs() { return STORE_REQS.filter(function (r) { return r.status === 'waiting'; }); }
+function publicReq(r) { return { id: r.id, key: r.key, all: r.all, name: r.name, from: r.from, at: r.at, status: r.status, message: r.message || '' }; }
+// What GET /store/state gives a browser.
+function storePublic() {
+    return { ok: true, enabled: BROWSER_CFG.enabled, live: storeLive(), age: STORE.state ? Date.now() - STORE.at : null, state: STORE.state,
+             requests: STORE_REQS.slice(-10).map(publicReq) };
+}
+// POST /store/install { key } or { all: true } from a browser: checked against what the screen last
+// showed, then left for the screen to take. cb(code, answer).
+function storeRequest(b, from, cb) {
+    if (!BROWSER_CFG.enabled) return cb(403, { ok: false, error: 'Installing from a browser is off in TV-Store’s Settings on the TV.' });
+    if (!storeLive()) return cb(409, { ok: false, error: 'TV-Store is not open on the TV. Open it there, then try again.' });
+    var all = !!(b && b.all === true), a = null, name;
+    if (all) {
+        var n = (STORE.state.apps || []).filter(function (x) { return x.update && x.can; }).length;
+        if (!n) return cb(409, { ok: false, error: 'There are no updates to install.' });
+        name = n === 1 ? '1 update' : n + ' updates';
+    } else {
+        a = storeApp(String((b && b.key) || ''));
+        if (!a) return cb(404, { ok: false, error: 'That app is not in the store on the TV.' });
+        if (!a.can) return cb(409, { ok: false, error: a.why || (a.installed !== null ? 'It is on the TV already.' : 'It cannot be installed from here.') });
+        name = a.name;
+    }
+    var key = all ? '*all' : a.key;
+    var dup = STORE_REQS.filter(function (r) { return r.key === key && (r.status === 'waiting' || r.status === 'taken'); })[0];
+    if (dup) return cb(200, { ok: true, request: publicReq(dup) });
+    if (openReqs().length >= 20) return cb(429, { ok: false, error: 'The TV has 20 requests waiting already.' });
+    var r = { id: crypto.randomBytes(8).toString('hex'), key: key, all: all, name: name, from: from, at: new Date().toISOString(), status: 'waiting', message: '' };
+    STORE_REQS.push(r);
+    if (STORE_REQS.length > 50) STORE_REQS.splice(0, STORE_REQS.length - 50);
+    log('browser: ' + from + ' asks for ' + (all ? 'Update all (' + name + ')' : name) + '; the TV-Store screen takes it');
+    cb(200, { ok: true, request: publicReq(r) });
+}
+// POST /store/state { token, state? } from the screen: a new picture, or none when nothing changed
+// (it still says the screen is open). The answer carries the requests waiting for it, and want: true
+// when the service has no picture (it restarted), so the screen sends the whole one again.
+function storeState(b) {
+    if (b.state && typeof b.state === 'object' && !Array.isArray(b.state)) STORE.state = b.state;
+    if (STORE.state) STORE.at = Date.now();
+    return { ok: true, want: !STORE.state, enabled: BROWSER_CFG.enabled, requests: BROWSER_CFG.enabled ? openReqs().map(publicReq) : [] };
+}
+// POST /store/ack { token, id, status, message } from the screen: it took a request, or it ended.
+function storeAck(b) {
+    var r = STORE_REQS.filter(function (x) { return x.id === b.id; })[0];
+    if (!r || !/^(taken|done|failed)$/.test(String(b.status))) return false;
+    r.status = b.status; r.message = String(b.message || '').slice(0, 400);
+    log('browser: ' + r.name + ' (asked for from ' + r.from + ') ' + (r.status === 'taken' ? 'taken by the TV-Store screen' : r.status === 'done' ? 'installed' : 'not installed: ' + (r.message || 'no reason given')));
+    return true;
+}
+// Apply { enabled } from Settings.
+function applyBrowserSettings(o) {
+    BROWSER_CFG.enabled = o.enabled;
+    saveBrowserCfg();
+    if (!o.enabled) STORE_REQS.forEach(function (r) { if (r.status === 'waiting') { r.status = 'failed'; r.message = 'Installing from a browser was turned off on the TV.'; } });
+    log('browser: installing from a browser is ' + (o.enabled ? 'on' : 'off') + ' (the switch in Settings)');
+}
 
 function logText() {
     var t = '';
@@ -1288,7 +1390,7 @@ http.createServer(function (req, res) {
     if (req.method === 'OPTIONS') { cors(res, 204, 'text/plain'); return res.end(); }
     var route = url.parse(req.url).pathname;
     // The page polls /ping and /logs all the time; those would drown the rest.
-    if (VERBOSE && !/^\/(ping|logs|log\.txt|uploads|icon\/.*)$/.test(route)) res.on('finish', function () { logv('http: ' + req.method + ' ' + route + ' -> ' + res.statusCode); });
+    if (VERBOSE && !/^\/(ping|logs|log\.txt|uploads|icon\/.*|store\/state)$/.test(route)) res.on('finish', function () { logv('http: ' + req.method + ' ' + route + ' -> ' + res.statusCode); });
     if (route === '/log.txt') { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Access-Control-Allow-Origin': '*' }); return res.end(logText()); }
     // The upload page and the upload itself come from a phone or PC (#30); the install of it only
     // from the TV-Store screen, below the gate and with the token.
@@ -1296,6 +1398,29 @@ http.createServer(function (req, res) {
     if (route === '/upload' && (req.method === 'PUT' || req.method === 'POST')) return receiveUpload(req, res);
     // The relay's state is for the phone or PC that could not get through it (#58).
     if (route === '/relay' && req.method === 'GET') return json(res, 200, { ok: true, relay: relayPublic() });
+    // The store in a browser (#101): the page, what the screen shows, and Install as a request to the
+    // screen. Read and asked for from the LAN; never with CORS for other sites, never by a public name.
+    var iconHex = /^\/icon\/([0-9a-fA-F]{64})$/.exec(route);
+    var storeRoute = ((route === '/' || route === '/store') && req.method === 'GET') || (route === '/store/state' && req.method === 'GET') || (route === '/store/install' && req.method === 'POST');
+    if (storeRoute || (iconHex && req.method === 'GET' && !fromThisTv(req))) {
+        var peer = relayMod.peerIp(req.socket);
+        if (!lanHost(req)) { res.writeHead(403, { 'Content-Type': 'text/plain' }); return res.end('open TV-Store by the TV\'s IP address'); }
+        if (!browserAllowed(req)) { res.writeHead(403, { 'Content-Type': 'text/plain' }); return res.end(peer + ' is not on the allow list in TV-Store\'s Settings'); }
+        if (iconHex && !storeRoute) {
+            if (!BROWSER_CFG.enabled) { res.writeHead(403, { 'Content-Type': 'text/plain' }); return res.end('installing from a browser is off'); }
+            return icons.serve(iconHex[1].toLowerCase(), res);
+        }
+        if (route === '/store/state') return storeJson(res, 200, storePublic());
+        if (route === '/store/install') {
+            if (!sameOrigin(req)) { req.resume(); log('browser: refused a request from another web site (' + req.headers.origin + ') via ' + peer); return storeJson(res, 403, { ok: false, error: 'only the TV-Store page on this TV may ask for an install' }); }
+            return body(req, function (err, b) {
+                if (err || !b || typeof b !== 'object') return storeJson(res, 400, { ok: false, error: 'need { key } or { all: true }' });
+                storeRequest(b, peer, function (code, out) { storeJson(res, code, out); });
+            });
+        }
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(storePage.page(ownIp()));
+    }
     // The rest only for this TV: the port is open to the LAN because Tizen 10 may not route a page's
     // request to the service over loopback, but nothing else on the network gets to hand over a
     // certificate or start an install.
@@ -1303,7 +1428,7 @@ http.createServer(function (req, res) {
     if (route === '/ping') return json(res, 200, { ok: true, service: 'tv-store', ownIp: ownIp(), logUrl: 'http://' + ownIp() + ':' + PORT + '/log.txt', signerReady: signer.ready, certReady: haveCerts(),
         certCount: haveCerts() ? loadCerts().certificates.length : 0, certNames: certs.names(loadCerts()), certificates: certs.summary(loadCerts()),
         certFile: CERT_FILE, certError: CERT_ERROR, node: process.version, verbose: VERBOSE, relay: relayStatus(), installer: installerStatus(), remembered: rememberedLevels(), selfUpdate: SELF_UPDATE,
-        sources: SOURCES.map(publicSource), sourceOf: sourceOfPackage() });
+        sources: SOURCES.map(publicSource), sourceOf: sourceOfPackage(), browser: browserStatus() });
     // The page has shown how the last self-update went (#41); { version } is what runs now.
     if (route === '/selfupdate/ack' && req.method === 'POST') return body(req, function (err, b) {
         var running = !err && b && typeof b.version === 'string' ? b.version : '';
@@ -1312,13 +1437,15 @@ http.createServer(function (req, res) {
         json(res, 200, { ok: true });
     });
     if (route === '/settings' && req.method === 'POST') return body(req, function (err, b) {
-        if (err || !b || (typeof b.verbose !== 'boolean' && b.relay === undefined && b.installer === undefined)) return json(res, 400, { ok: false, error: 'need { verbose: true|false }, { relay: { enabled, port, allow } } and/or { installer: { mode } }' });
+        if (err || !b || (typeof b.verbose !== 'boolean' && b.relay === undefined && b.installer === undefined && b.browser === undefined)) return json(res, 400, { ok: false, error: 'need { verbose: true|false }, { relay: { enabled, port, allow } }, { installer: { mode } } and/or { browser: { enabled } }' });
+        if (b.browser !== undefined && (!b.browser || typeof b.browser !== 'object' || typeof b.browser.enabled !== 'boolean')) return json(res, 400, { ok: false, error: 'browser must be { enabled: true|false }' });
         if (b.relay !== undefined) { var why = relaySettingsProblem(b.relay); if (why) return json(res, 400, { ok: false, error: why }); }
         if (b.installer !== undefined) { var iwhy = installerSettingsProblem(b.installer); if (iwhy) return json(res, 400, { ok: false, error: iwhy }); }
         if (typeof b.verbose === 'boolean') setVerbose(b.verbose);
         if (b.installer !== undefined) applyInstallerSettings(b.installer);
-        if (b.relay === undefined) return json(res, 200, { ok: true, verbose: VERBOSE, relay: relayStatus(), installer: installerStatus() });
-        applyRelaySettings(b.relay, function (status) { json(res, 200, { ok: true, verbose: VERBOSE, relay: status, installer: installerStatus() }); });
+        if (b.browser !== undefined) applyBrowserSettings(b.browser);
+        if (b.relay === undefined) return json(res, 200, { ok: true, verbose: VERBOSE, relay: relayStatus(), installer: installerStatus(), browser: browserStatus() });
+        applyRelaySettings(b.relay, function (status) { json(res, 200, { ok: true, verbose: VERBOSE, relay: status, installer: installerStatus(), browser: browserStatus() }); });
     });
     if (route === '/logs') return json(res, 200, { logs: LOGS });
     if (route === '/uploads') return json(res, 200, { pending: publicUpload(), busy: UPLOAD_BUSY });
@@ -1328,8 +1455,16 @@ http.createServer(function (req, res) {
         UPLOAD = null; unlink(UPLOAD_FILE);
         json(res, 200, { ok: true });
     });
-    var iconHex = /^\/icon\/([0-9a-fA-F]{64})$/.exec(route);
     if (iconHex && req.method === 'GET') return icons.serve(iconHex[1].toLowerCase(), res);
+    // The TV-Store screen's side of the browser store (#101), with the page token like an upload: other
+    // apps on the TV reach this port too, and none of them may feed browsers a store or take requests.
+    if ((route === '/store/state' || route === '/store/ack') && req.method === 'POST') return body(req, function (err, b) {
+        if (err || !b) return json(res, 400, { ok: false, error: 'need { token, state } or { token, id, status }' });
+        if (!pageToken(b)) return json(res, 403, { ok: false, error: 'only the TV-Store screen may do that', code: 'NO_TOKEN' });
+        if (route === '/store/state') return json(res, 200, storeState(b));
+        var acked = storeAck(b);
+        json(res, acked ? 200 : 400, acked ? { ok: true } : { ok: false, error: 'no such request, or a status that is not taken, done or failed' });
+    });
     // Independent repositories (#82). Reading is open to this TV; a change needs the page's token,
     // like an upload, since other apps on the TV reach this port too.
     if (route === '/sources' && req.method === 'GET') return json(res, 200, { ok: true, sources: SOURCES.map(publicSource) });
