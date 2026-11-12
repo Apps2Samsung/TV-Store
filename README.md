@@ -212,7 +212,7 @@ and on the page. Nothing is installed by the service on a browser's word alone.
 
 So TV-Store has to be open on the TV; the page says when it is not. An app that cannot be installed
 from there says why on the page: it needs Apps2Samsung on a phone or PC (user settings, root, an
-injector), a newer Tizen, a Partner certificate, the build on the TV is not known, or it came from
+injector, settings from an independent repository), a newer Tizen, a Partner certificate, the build on the TV is not known, or it came from
 another source and switching needs a yes on the TV. Questions that come up during an install
 (another app has the package id, another certificate installed it) are answered on the TV.
 
@@ -225,6 +225,28 @@ How it works: the TV-Store screen sends what it shows to the service every 3 sec
 (`POST /store/state` with the page token; only the whole picture when it changed), a browser reads
 `GET /store/state` and asks with `POST /store/install { key }` or `{ all: true }`, and the screen
 takes the request in the answer to its next send and reports back with `POST /store/ack`.
+
+### Apps with settings
+
+Some apps need a value typed in before they install: a server address, an API key, a port (the
+catalog's `user_settings`, the same form Apps2Samsung shows). On the browser page their button opens
+a form; the values go to the service, are checked against the signed catalog (required, digits,
+range, the field's pattern), kept on the TV and written into the package before it is signed,
+exactly as Apps2Samsung writes them (`usersettings.js`: an exact-text replacement, every
+occurrence, quotes escaped; a package whose text changed upstream is not installed). An update from
+the TV writes the same values again, so Update and Update all keep working for these apps. **Change
+its settings** on the page installs an app that is current again with the new values.
+
+On the TV such an app's page shows a QR code that opens its form on a phone (`/#app=<key>`). Without
+saved settings, an app with a required setting says it needs them first (`NEEDS_SETTINGS`), and an
+app that is on the TV with settings typed on the phone or PC that installed it is not updated from
+the TV (`SETTINGS_ELSEWHERE`): the update would drop them. Enter them on the page once, or update it
+from Apps2Samsung. An app with only optional settings installs as published.
+
+The values can be credentials: kept in TV-Store's private data folder (`.a2s-user-settings.json`,
+mode 0600), never logged, never sent back to a browser; `/ping` and the page only say which fields
+are saved, and a form leaves a saved field as it is when left empty. Only the official catalog's
+apps get settings here; an independent repository's app with settings stays for a phone or PC.
 
 ## Opening TV-Store from another app
 
@@ -591,6 +613,8 @@ node test/sources.test.js   # sources in the service: check and add with the tok
 node test/icons.test.js     # app icons: served only with the catalog's hash, cached and hashed again, one download per hash, pruned
 node test/manifest.test.js  # the ids and privileges of a .wgt / .tpk from its manifest
 node test/upload.test.js    # send a file to the service, see it wait, token gate, discard
+node test/usersettings.test.js    # app settings as Apps2Samsung writes them: checks, escaping, saved over default, targets, a changed package refused
+node test/settings-install.test.js  # app settings end to end: NEEDS_SETTINGS, the form, kept on the TV (keys only out), written in at install and update, SETTINGS_ELSEWHERE
 node test/browser-store.test.js  # the store in a browser (#101): the page, the screen's state behind the token, Install checked and handed to the screen, other sites and public names refused, the Settings switch
 node test/certs.test.js     # the profiles handed over: merge, order per package, Public or Partner level
 node test/install.test.js   # a certificate mismatch is retried with the next profile; replace

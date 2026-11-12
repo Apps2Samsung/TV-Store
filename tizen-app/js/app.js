@@ -749,7 +749,10 @@
                     var root = (e.flags || []).indexOf('root') >= 0;
                     if (root) x.root = true;
                     if (root) v.needsHead = 'gains root on the TV and needs Host PC IP changed afterwards';
-                    else if (e.user_settings) v.needsHead = 'asks for settings before it installs';
+                    // Settings (user_settings): the official catalog's are typed on a phone or PC at
+                    // TV-Store's own page and written in by the service; a repository's stay for Apps2Samsung.
+                    else if (e.user_settings && src) v.needsHead = 'asks for settings before it installs';
+                    if (e.user_settings && !src && !v.needsHead) v.settings = settingsInfo(e.user_settings);
                     else if (HEAD_ONLY.test(e.file)) v.needsHead = 'is configured by Apps2Samsung while it installs';
                     else if (!a.digest) v.needsHead = NO_HASH;
                 });
@@ -1453,15 +1456,17 @@
         else if (v.needsHead) h += '<div class="notice">' + esc(x.name + ' ' + v.needsHead + ', which this TV cannot do yet. Install it with Apps2Samsung on a phone or PC.') + '</div>';
         else if (!armed()) h += '<div class="notice">Not armed yet. Open this TV’s Toolbox in Apps2Samsung 3.0 or newer on your phone or PC and press Arm TV-Store once; after that every install runs here.</div>';
         else if (plan.missing) h += '<div class="notice">' + esc(missingLevelText(x.name, plan)) + '</div>';
+        var setBlock = !me && fits(v) && !v.needsHead ? settingsBlock(x, v, st) : '';
+        if (!me && fits(v) && !v.needsHead) h += appSettingsHtml(x, v, st);
         if (elsewhere && !me) h += '<div class="notice">' + esc(x.name + ' on this TV (v' + installed[tvPkg(v)] + ') came from ' + elsewhere + '. Installing this copy from ' + x.sourceName + ' replaces it, and its updates come from ' + x.sourceName + ' from then on.') + '</div>';
         var mv = movedInfo(x);
         if (mv && !mv.done) h += '<div class="notice row"><span>' + esc('The developer moved ' + x.name + ' to ' + (mv.source ? '\u2018' + mv.source.name + '\u2019' : 'their own repository at ' + mv.domain) + '. The official catalog stops updating it soon. ' + (st.installed ? (mv.source ? 'Take its updates from there.' : 'Add that repository to keep getting updates.') : 'Add that repository to install it from there.')) + '</span>'
             + '<button class="btn f" data-k="movedadd" data-act="movedadd" data-url="' + esc(mv.url) + '" data-fp="' + esc(mv.fingerprint) + '" data-name="' + esc(x.name) + '">' + (mv.source ? 'Take updates from there' : 'Add source') + '</button></div>';
         else if (mv && mv.done) h += '<div class="notice info">' + esc(x.name + ' moved to \u2018' + mv.source.name + '\u2019; its updates come from there now.') + '</div>';
         if (x.source !== 'official') h += '<div class="notice info">' + esc('From ' + x.sourceName + ', an independent repository you added. Its signature says the files come from its publisher; Apps2Samsung has not reviewed them.') + '</div>';
-        var can = !v.needsHead && fits(v) && !me && armed() && !plan.missing && !(job && job.running);
+        var can = !v.needsHead && fits(v) && !me && armed() && !plan.missing && !setBlock && !(job && job.running);
         h += '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="install" data-act="install"' + (can ? (x.variants.length > 1 ? '' : ' data-default') : ' disabled') + '>'
-            + esc(me ? (st.update ? 'Update' : 'Reinstall') + ' from a phone or PC' : !fits(v) ? 'Needs Tizen ' + v.tizen + ' or newer' : v.needsHead ? 'Install from a phone or PC' : plan.missing ? 'Needs a ' + levelName(plan.level) + ' certificate' : job && job.running ? 'Another install is running' : label) + '</button>';
+            + esc(me ? (st.update ? 'Update' : 'Reinstall') + ' from a phone or PC' : !fits(v) ? 'Needs Tizen ' + v.tizen + ' or newer' : v.needsHead ? 'Install from a phone or PC' : setBlock ? 'Fill in its settings on a phone or PC' : plan.missing ? 'Needs a ' + levelName(plan.level) + ' certificate' : job && job.running ? 'Another install is running' : label) + '</button>';
         if (st.installed && x.variants[st.variant].appId) h += '<button class="btn f" data-k="open" data-act="open">Open</button>';
         // Pin this build to the top of the store (#29); for a one-build app the button pins the app.
         h += '<button class="btn f" data-k="pin" data-act="pin">' + (isPinned(x, sheet.v) ? 'Unpin' : 'Pin') + '</button>';
@@ -1637,6 +1642,31 @@
     var browserTaken = {};                          // request id -> true, taken once
     var browserReq = {};                            // app key -> the request id it was installed for
     function browserOn() { return !!(ready && ready.browser && ready.browser.enabled); }
+    // An app's settings (user_settings), as the TV needs them: { required, labels }.
+    function settingsInfo(us) {
+        var f = (us && Array.isArray(us.fields) ? us.fields : []).filter(function (x) { return x && x.key; });
+        return { required: f.some(function (x) { return x.required === true; }), labels: f.map(function (x) { return String(x.label || x.key).replace(/[;(].*$/, '').trim(); }) };
+    }
+    // Whether the TV holds settings for this build (saved from a phone or PC, maybe all left empty).
+    function settingsSaved(v) { var m = ready && ready.userSettings; return !!(m && v && v.file && m.hasOwnProperty(v.file)); }
+    // What stops an install of v from the TV because of its settings, in words, or ''.
+    function settingsBlock(x, v, st) {
+        if (!v.settings || settingsSaved(v)) return '';
+        if (st.installed) return x.name + ' is on this TV with settings typed on the phone or PC that installed it. Updating it from here would drop them.';
+        if (v.settings.required) return x.name + ' needs its settings before it installs: ' + v.settings.labels.join(', ') + '.';
+        return '';
+    }
+    // The address of an app on the store page, for the QR code: its form opens there.
+    function settingsUrl(x) { return ready && ready.browser && ready.browser.url ? ready.browser.url + '#app=' + encodeURIComponent(x.key) : ''; }
+    function appSettingsHtml(x, v, st) {
+        if (!v.settings) return '';
+        var block = settingsBlock(x, v, st), u = browserOn() ? settingsUrl(x) : '';
+        var text = block ? block + (u ? ' Scan the code, or open the address on a phone or PC, and fill them in there; TV-Store then installs it here.' : ' Turn on \u201cInstall from a browser\u201d in Settings to fill them in on a phone or PC, or install it from Apps2Samsung.')
+            : settingsSaved(v) ? 'Its settings (' + v.settings.labels.join(', ') + ') are saved on this TV and written into it at every install.' + (u ? ' Change them by scanning the code.' : '')
+            : x.name + ' has optional settings (' + v.settings.labels.join(', ') + '). Install it as it is, or fill them in on a phone or PC first' + (u ? ' by scanning the code.' : '.');
+        if (!u) return '<div class="notice' + (block ? '' : ' info') + '">' + esc(text) + '</div>';
+        return '<div class="qrrow">' + qr(u, 120) + '<div><b>' + esc(block ? 'Needs its settings' : 'Its settings') + '</b><span>' + esc(text) + ' <span class="mono">' + esc(u) + '</span></span></div></div>';
+    }
     // Why x cannot be installed from a browser, or '' when it can; for an app on the TV that is up to
     // date, '' as well (the page shows it as installed, without a button).
     function browserWhy(x, st, v) {
@@ -1659,7 +1689,7 @@
             apps: list.map(function (x) {
                 var st = state(x), vi = pickVariant(x), v = x.variants[vi], why = browserWhy(x, st, v);
                 var current = st.installed && !st.update;
-                return { key: x.key, name: x.name, cat: knownCategory(x.category), author: x.author || '', desc: String(x.description || '').slice(0, 300),
+                return { key: x.key, url: v.url || '', file: v.file || '', name: x.name, cat: knownCategory(x.category), author: x.author || '', desc: String(x.description || '').slice(0, 300),
                          source: x.source === 'official' ? '' : x.sourceName || '', icon: x.icon || '', installed: st.installed ? st.version || '' : null,
                          update: !!st.update, latest: st.installed ? st.latest || '' : v.version || '', variant: x.variants.length > 1 ? v.label : '',
                          adult: !!x.adult, root: !!x.root, partner: !!x.partner, can: !current && !why, why: why };
@@ -1682,13 +1712,18 @@
             if (!res || !res.ok) return;
             if (body.state) storeSent = snap;
             if (res.want) storeSent = '';
+            // Settings saved from a browser: the app's page on the TV says so, and installs with them.
+            if (res.userSettings && ready && JSON.stringify(res.userSettings) !== JSON.stringify(ready.userSettings || {})) {
+                ready.userSettings = res.userSettings; storeSent = '';
+                if (sheet && sheet.mode === 'app') renderSheet();
+            }
             (res.requests || []).forEach(takeRequest);
         }, null, 5000);
     }
     function ackRequest(id, status, message) { if (id) xhr('POST', '/store/ack', { token: uploadToken, id: id, status: status, message: message || '' }, function () {}, null, 5000); }
     function ackBrowser(x, status, message) { var id = x && browserReq[x.key]; if (!id) return; delete browserReq[x.key]; ackRequest(id, status, message); }
     // The updates Update all installs: known builds, none that needs a phone or PC, not TV-Store itself.
-    function updatable() { return updates().filter(function (x) { var st = state(x), v = x.variants[st.variant]; return st.known && !v.needsHead && !isSelf(x) && !signPlan(v).missing; }); }
+    function updatable() { return updates().filter(function (x) { var st = state(x), v = x.variants[st.variant]; return st.known && !v.needsHead && !isSelf(x) && !signPlan(v).missing && !settingsBlock(x, v, st); }); }
     function updateAll() { queue = updatable(); if (queue.length) { var first = queue.shift(); startInstall(first, state(first).variant); } }
     function takeRequest(r) {
         if (!r || !r.id || browserTaken[r.id]) return;
@@ -1705,7 +1740,7 @@
         var x = byKey(r.key);
         if (!x) return ackRequest(r.id, 'failed', 'Not in the store on the TV.');
         var st = state(x), why = browserWhy(x, st, x.variants[pickVariant(x)]);
-        if (why || (st.installed && !st.update)) return ackRequest(r.id, 'failed', why || 'It is on the TV already.');
+        if (why || (st.installed && !st.update && !r.again)) return ackRequest(r.id, 'failed', why || 'It is on the TV already.');
         if (queue.indexOf(x) >= 0 || (job && job.running && job.app === x)) return ackRequest(r.id, 'taken');
         ackRequest(r.id, 'taken');
         browserReq[x.key] = r.id;

@@ -50,7 +50,7 @@ function verify(buf, publicKeyPem, now) {
     if ((now || Date.now()) - at > MAX_AGE_MS) throw new Error('the signed catalog is from ' + catalog.generatedAt + ', more than 7 days old: check the TV’s clock, or the Apps2Samsung catalog workflow');
 
     var s = scan(catalog);
-    return { catalog: catalog, payload: payload, index: s.index, levels: s.levels, icons: s.icons, moved: s.moved, keys: s.keys, files: s.files, removed: s.removed };
+    return { catalog: catalog, payload: payload, index: s.index, levels: s.levels, icons: s.icons, moved: s.moved, keys: s.keys, files: s.files, removed: s.removed, settings: s.settings };
 }
 
 // One walk over providers -> releases -> assets for the lookups the install and the icons need:
@@ -67,6 +67,8 @@ function verify(buf, publicKeyPem, now) {
 //           derived from (#84, pkgid.js): a community package's repo and file, else the provider's
 //           GitHub owner/name and the asset's name; none when neither is known;
 //   files:  download URL -> the release asset's name (a repository's key is its URL and this, #84);
+//   settings: download URL -> the community package's user_settings as the catalog has it, for every
+//           file of a package that declares them (usersettings.js normalizes it);
 //   removed: package id -> { name, category, reason, note, since, appIds, derived } for every app the
 //           community catalog took out (catalog.removed, #87), under each of its own package_ids
 //           and under the id a rename gave each of its files (derived: true, pkgid.derive of its
@@ -89,13 +91,14 @@ function scanRemoved(list, removed) {
     });
 }
 function scan(catalog) {
-    var index = {}, levels = {}, icons = {}, moved = {}, keys = {}, files = {}, removed = {};
+    var index = {}, levels = {}, icons = {}, moved = {}, keys = {}, files = {}, removed = {}, settings = {};
     (catalog.providers || []).forEach(function (p) {
         if (p.catalog) scanRemoved(p.catalog.removed, removed);
-        var byFile = {}, assetByName = {}, repoOf = {}, community = !!(p.catalog && p.catalog.apps), own = pkgid.githubRepo(p.url);
+        var byFile = {}, settingsOf = {}, assetByName = {}, repoOf = {}, community = !!(p.catalog && p.catalog.apps), own = pkgid.githubRepo(p.url);
         (p.releases || []).forEach(function (r) { (r.assets || []).forEach(function (a) { if (a.name && !assetByName[a.name]) assetByName[a.name] = a; }); });
         ((p.catalog && p.catalog.apps) || []).forEach(function (e) {
             if (e.file && String(e.cert_level || '').toLowerCase() === 'partner') byFile[e.file] = true;
+            if (e.file && e.user_settings && typeof e.user_settings === 'object' && !settingsOf[e.file]) settingsOf[e.file] = e.user_settings;
             if (e.file && typeof e.repo === 'string' && e.repo.trim() && !repoOf[e.file]) repoOf[e.file] = e.repo.trim();
             var m = e.moved_to, pkg = e.package_id || (assetByName[e.file] && assetByName[e.file].package_id);
             if (pkg && m && typeof m.url === 'string' && MOVED_URL.test(m.url) && typeof m.fingerprint === 'string' && FINGERPRINT.test(m.fingerprint)) moved[pkg] = { url: m.url, fingerprint: m.fingerprint, name: e.group || e.name || pkg };
@@ -108,6 +111,7 @@ function scan(catalog) {
                 index[a.browser_download_url] = m ? m[1].toLowerCase() : null;
                 if (all || byFile[a.name]) levels[a.browser_download_url] = 'partner';
                 if (a.name) files[a.browser_download_url] = a.name;
+                if (a.name && settingsOf[a.name]) settings[a.browser_download_url] = settingsOf[a.name];
                 var k = pkgid.key(community ? repoOf[a.name] : own, a.name);
                 if (k) keys[a.browser_download_url] = k;
                 var im = /^sha256:([0-9a-fA-F]{64})$/.exec(a.icon_digest || '');
@@ -115,7 +119,7 @@ function scan(catalog) {
             });
         });
     });
-    return { index: index, levels: levels, icons: icons, moved: moved, keys: keys, files: files, removed: removed };
+    return { index: index, levels: levels, icons: icons, moved: moved, keys: keys, files: files, removed: removed, settings: settings };
 }
 function index(catalog) { return scan(catalog).index; }
 function levels(catalog) { return scan(catalog).levels; }
