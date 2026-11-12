@@ -277,6 +277,7 @@ try {
     }
 } catch (e) {}
 var relay = new relayMod.Relay({ sdbPort: SDB_PORT, allow: RELAY_CFG.allow, log: log });
+relay.inUse = function () { return SDB_ACTIVE > 0 ? 'TV-Store itself is installing an app' : ''; };
 function saveRelayCfg() {
     if (!RELAY_FILE) return;
     // Turned on by itself is not saved as on: the next start checks Host PC IP again.
@@ -299,11 +300,14 @@ function relayLoopbackSeen() {
 }
 // At start, before anyone needs it: one handshake with sdbd on 127.0.0.1, closed straight away.
 function probeLoopback() {
-    if (RELAY_CFG.chosen || RELAY_CFG.enabled) return;
+    // With the relay already decided there is still the TV's DUID to read, once (see learnDuid).
+    var decided = RELAY_CFG.chosen || RELAY_CFG.enabled;
+    if (decided && DUID) return;
     var t = { host: sdbhosts.LOOPBACK, port: SDB_PORT, tunnel: false }, c = new sdb.SdbClient(t.host, t.port);
     c.connect(function (err) {
+        if (!err) { if (!SDB_WORKED) SDB_WORKED = t; return learnDuid(c, function () { c.end(); if (!decided) relayLoopbackSeen(); }); }
         c.end();
-        if (!err) { if (!SDB_WORKED) SDB_WORKED = t; return relayLoopbackSeen(); }
+        if (decided) return;
         log('relay: off: sdbd does not take a connection on 127.0.0.1 (' + (err.code || err.message) + '), so Host PC IP is not 127.0.0.1 or Developer Mode is off; the switch in Settings turns the relay on');
     });
 }
@@ -959,6 +963,23 @@ function removeOld(entry, cb) {
 // own relay has that port: the relay only leads back to the same sdbd. When none gets in, the error
 // says what to change on the TV instead of the socket error.
 var SDB_WORKED = null;
+// This TV's DUID as sdbd gives it (`0 getduid`): the id Samsung puts in a distributor certificate's
+// device list. The one a web app reads (webapis.productinfo) is another id on many sets, and held
+// against a certificate it said "does not cover this TV" on a set the certificate installs on. Read
+// once over a developer connection that is open anyway, and kept.
+var DUID_FILE = DATA_DIR ? path.join(DATA_DIR, '.a2s-duid') : null;
+var DUID = '';
+try { if (DUID_FILE) { var savedDuid = fs.readFileSync(DUID_FILE, 'utf8').trim(); if (/^[A-Za-z0-9]{6,40}$/.test(savedDuid)) DUID = savedDuid; } } catch (e) {}
+var SDB_ACTIVE = 0;            // TV-Store's own developer connections open now (the relay says so to a client sdbd drops)
+function learnDuid(c, done) {
+    if (DUID) return done();
+    c.shell('0 getduid', function (err, out) {
+        var m = err ? null : /(?:^|\n)\s*([A-Za-z0-9]{6,40})\s*(?:\r?\n|$)/.exec(String(out || ''));
+        if (m) { DUID = m[1]; log('duid: this TV is ' + DUID + ' (from sdbd)'); try { if (DUID_FILE) fs.writeFileSync(DUID_FILE, DUID); } catch (e) {} }
+        else logv('duid: sdbd did not give one (' + (err ? err.message : String(out || '').replace(/\s+/g, ' ').slice(0, 80)) + ')');
+        done();
+    });
+}
 function tunnelPort() { var s = relay.status(); return s.listening && s.port === TUNNEL_PORT ? 0 : TUNNEL_PORT; }
 function sdbHosts() { return sdbhosts.targets(ownIp(), SDB_WORKED, SDB_PORT, tunnelPort()); }
 function sdbName(t) { return t.tunnel ? t.host + ':' + t.port + ' (another app\u2019s sdb tunnel, as Vetro has' + (t.host === sdbhosts.LOOPBACK ? '' : ', through this TV\u2019s own IP') + ')' : t.host; }
@@ -971,7 +992,10 @@ function connectSdb(hosts, cb, i, seen) {
         if (!err) {
             SDB_WORKED = t; log('install: sdb connected to ' + sdbName(t) + ', first frame ' + c.firstFrame);
             if (!t.tunnel && t.host === sdbhosts.LOOPBACK) relayLoopbackSeen();
-            return cb(null, c);
+            SDB_ACTIVE++;
+            var endSdb = c.end, ended = false;
+            c.end = function () { if (!ended) { ended = true; SDB_ACTIVE--; } return endSdb.apply(c, arguments); };
+            return learnDuid(c, function () { cb(null, c); });
         }
         c.end();
         log('install: ' + err.message);
@@ -1523,7 +1547,7 @@ http.createServer(function (req, res) {
     if (!fromThisTv(req)) { cors(res, 403, 'text/plain'); return res.end('only this TV may use TV-Store'); }
     if (route === '/ping') return json(res, 200, { ok: true, service: 'tv-store', ownIp: ownIp(), logUrl: 'http://' + ownIp() + ':' + PORT + '/log.txt', signerReady: signer.ready, certReady: haveCerts(),
         certCount: haveCerts() ? loadCerts().certificates.length : 0, certNames: certs.names(loadCerts()), certificates: certs.summary(loadCerts()),
-        certFile: CERT_FILE, certError: CERT_ERROR, node: process.version, verbose: VERBOSE, relay: relayStatus(), installer: installerStatus(), remembered: rememberedLevels(), selfUpdate: SELF_UPDATE,
+        certFile: CERT_FILE, certError: CERT_ERROR, duid: DUID || null, node: process.version, verbose: VERBOSE, relay: relayStatus(), installer: installerStatus(), remembered: rememberedLevels(), selfUpdate: SELF_UPDATE,
         sources: SOURCES.map(publicSource), sourceOf: sourceOfPackage(), browser: browserStatus(), userSettings: usetKeys() });
     // The page has shown how the last self-update went (#41); { version } is what runs now.
     if (route === '/selfupdate/ack' && req.method === 'POST') return body(req, function (err, b) {
@@ -1636,7 +1660,7 @@ http.createServer(function (req, res) {
     if (SELF_UPDATE) log('self-update: the last run sent an update of TV-Store' + (SELF_UPDATE.to ? ' to v' + SELF_UPDATE.to : '') + ' at ' + SELF_UPDATE.at + ' and was stopped; the page says whether it landed');
     logPlatform();
     if (RELAY_CFG.enabled) { log('relay: enabled, starting on port ' + RELAY_CFG.port); startRelay(); }
-    else if (!RELAY_CFG.chosen) setTimeout(probeLoopback, 1000);
+    if ((!RELAY_CFG.chosen && !RELAY_CFG.enabled) || !DUID) setTimeout(probeLoopback, 1000);
 });
 
 module.exports.onStart = function () { log('service onStart'); };
