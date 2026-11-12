@@ -216,8 +216,8 @@ injector, settings from an independent repository), a newer Tizen, a Partner cer
 another source and switching needs a yes on the TV. Questions that come up during an install
 (another app has the package id, another certificate installed it) are answered on the TV.
 
-Who may use it: anyone on the network, like `/upload`, unless the relay's allow list names
-clients, which then holds here too. The page is served only under an IP address or a LAN name (not
+Who may use it: anyone on the network, like `/upload`, unless devices are picked under **Devices
+that may connect** in Settings (the relay's allow list), which then holds here too. The page is served only under an IP address or a LAN name (not
 a public name pointed at the TV), and an Install from another web site (its `Origin`) is refused.
 The page loads nothing from outside the network.
 
@@ -269,7 +269,8 @@ tizen.application.launchAppControl(
     function (e) { /* not installed: point people to apps2samsung.com */ });
 ```
 
-The key `app` stays; more keys may come. Not yet tried from another app on a TV.
+The key `app` stays; more keys may come. Tried on a 2019 Tizen 5.0 set: an app control with
+`app=Jellyfin` opens TV-Store on Jellyfin's page (0.3.28). Not yet tried from Vetro itself.
 
 ## A fork that kept another app's package id
 
@@ -487,10 +488,16 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
   IP to `127.0.0.1` once, restart the TV, and Apps2Samsung 3.2 or newer connects to the TV from
   any phone or PC by itself (it reads the Host PC IP from the TV and dials the relay instead of
   26101). The switch says the address. While it is on, any device in your network can install
-  through that port; the service also takes a client allow list (`POST /settings { relay: { allow:
-  [...] } }`), not yet on this screen. This switch lives in the service, not in the page's
-  settings, so `/ping` reports it (`relay: { enabled, listening, port, sessions, allow, error,
-  served, failures, lastFailure }`).
+  through that port, unless you pick devices below. This switch lives in the service, not in the
+  page's settings, so `/ping` reports it (`relay: { enabled, listening, port, sessions, allow,
+  seen, error, served, failures, lastFailure }`).
+- **Devices that may connect**: the phones and PCs that connected since TV-Store started, through
+  the relay or with a browser, each with a switch (`relay.seen` on `/ping`, the TV only). With none
+  switched on, any device in your network can connect. With one or more on, only those can, for the
+  relay and for the store in a browser alike; a device that was kept out is listed too, so it can
+  be switched on. This is the relay's allow list (`POST /settings { relay: { allow: [...] } }`),
+  made with the remote instead of typed. The choice is kept on the TV; the list of who came by is
+  not.
 
   Vetro (a TV manager) runs a background service that starts with the TV and restarts itself
   (`on-boot`, `auto-restart`), whether or not the Vetro app is open. That service keeps its own
@@ -613,6 +620,7 @@ A `.wgt` is a zip of `tizen-app/`; no Tizen Studio needed.
 
 ```sh
 scripts/build-wgt.sh        # -> dist/TV-Store.wgt
+scripts/run-tests.sh        # every test below, on the Node on PATH; CI runs it on Node 20 and on the TV's Node 4.4.3
 node test/run.js            # connect + push + install against a fake sdbd
 node test/sign.test.js      # the signer, with a certificate chain
 node --expose-gc test/stream-sign.test.js  # the file-to-file signer on a 24 MB package
@@ -678,6 +686,11 @@ Only when that start fails too does the page say "The TV-Store service stopped".
 | A fork that kept another app's package id (#84) | built (0.3.22): a `.wgt` goes on beside the other app under the id derived from its catalog entry (the scheme of Apps2Samsung#1028), a `.tpk` asks before replacing; proven against local HTTPS stand-ins and a fake `sdbd`, untested on a TV |
 | Apps removed from the community catalog (#87) | built (0.3.23): an installed copy that no catalog app claims gets a row under "Removed from the catalog" on the On the TV page with the reason, and search answers with "No longer in the catalog"; matched by the entry's own package ids (with its app ids or name) and by the rename id of each file; waits on Apps2Samsung carrying `catalog.removed` into `resolved.json`; untested on a TV |
 | TV-Store updating itself (#41) | dropped in 0.3.11; back as an experiment behind a Settings switch, off by default, through `sdbd` with a marker that tells the next start whether it landed (0.3.21). Apps2Samsung#1005 saw an update of TV-Store land on a Tizen 5.0 set after the service that sent it was stopped; untested from the TV itself, Tizen 9 above all |
+| The store in a phone or PC browser (#101) | built (0.3.28): browse and install at `http://<TV>:8077/`, the TV screen does the install; apps with settings get a form there. Proven on a 2019 Tizen 5.0 set, a settings install included |
+| Open TV-Store on an app, Vetro in the Pinned row (#102) | built (0.3.28): the app control data key `app` proven on a 2019 Tizen 5.0 set; Vetro's own entry to TV-Store is Vetro's to build |
+| The relay on by default when Host PC IP is `127.0.0.1` | built (0.3.28), proven on a 2019 Tizen 5.0 set |
+| The TV's real DUID for the certificate check | built (0.3.28): read from `sdbd` (`0 getduid`), since `webapis.productinfo` gives another id; the id in the certificate confirmed on a 2019 Tizen 5.0 set |
+| Picking which devices may connect | built (0.3.29): a switch per phone or PC that came by, in Settings |
 | First real install from the TV | done, 2019 Tizen 5.0 set (0.3.4) |
 | Tizen 3.0 and 4.0 sets (2017, 2018) | untested |
 | Tizen 10 sets (2025) | done, retail set (0.3.9) |

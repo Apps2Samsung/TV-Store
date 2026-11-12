@@ -95,8 +95,35 @@ function sameSettings() {
             setTimeout(function () {
                 if (heldClosed) fail('saving unchanged settings or the allow list must not drop a live session');
                 if (j.relay.sessions !== 1) fail('the live session must still be counted: ' + JSON.stringify(j.relay));
-                changePort();
+                seenClients();
             }, 100);
+        });
+    });
+}
+function seenClients() {
+    // 3b. The client that came through the relay is listed for Settings (the TV only, never on /relay),
+    //     and one the allow list keeps out is listed as refused, so it can be switched on there.
+    call('GET', '/ping', null, function (e, code, j) {
+        var seen = j && j.relay && j.relay.seen;
+        if (e || !seen || seen.length !== 1 || seen[0].ip !== '127.0.0.1' || seen[0].via !== 'relay' || seen[0].refused || !seen[0].at) fail('/ping must list who came through the relay: ' + JSON.stringify(seen));
+        settings({ allow: ['10.0.0.9'] }, function (e, code, j) {
+            if (e || code !== 200) fail('allow list: ' + code);
+            var c = net.connect(RELAY, '127.0.0.1');
+            c.on('error', function () {});
+            c.on('close', function () {
+                call('GET', '/ping', null, function (e, code, j) {
+                    var seen = j && j.relay && j.relay.seen;
+                    if (e || !seen || seen.length !== 1 || seen[0].ip !== '127.0.0.1' || seen[0].refused !== true) fail('a client the allow list kept out must be listed as refused: ' + JSON.stringify(seen));
+                    call('GET', '/relay', null, function (e, code, j) {
+                        if (e || !j || !j.relay || 'seen' in j.relay) fail('/relay must not list the clients: ' + JSON.stringify(j && j.relay));
+                        settings({ allow: [] }, function (e, code, j) {
+                            if (e || code !== 200 || j.relay.allow.length !== 0) fail('an empty allow list lets every device in again: ' + JSON.stringify(j && j.relay));
+                            if (heldClosed) fail('changing the allow list must not drop a live session');
+                            changePort();
+                        });
+                    });
+                });
+            });
         });
     });
 }
@@ -123,6 +150,7 @@ function disable() {
             console.log('  bad relay settings refused with 400 before anything is applied');
             console.log('  enable answers with the listener up and the port; GET /relay says the same to the LAN, without the allow list');
             console.log('  unchanged settings and an allow-list change keep the live session');
+            console.log('  /ping lists who came through the relay, refused ones too; /relay does not');
             console.log('  a port change restarts the listener; disable tears it down');
             process.exit(0);
         });

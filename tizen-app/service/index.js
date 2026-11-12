@@ -276,7 +276,17 @@ try {
         }
     }
 } catch (e) {}
-var relay = new relayMod.Relay({ sdbPort: SDB_PORT, allow: RELAY_CFG.allow, log: log });
+// The phones and PCs that came by in this run, through the relay or with a browser, newest first:
+// what Settings lists so the allow list can be made with the remote, without typing an address.
+// refused: the allow list kept the last visit out. Kept in memory only; the allow list itself is saved.
+var SEEN = [], SEEN_MAX = 8;
+function noteClient(ip, via, allowed) {
+    if (!ip) return;
+    for (var i = 0; i < SEEN.length; i++) if (SEEN[i].ip === ip) { SEEN.splice(i, 1); break; }
+    SEEN.unshift({ ip: ip, at: new Date().toISOString(), via: via, refused: !allowed });
+    if (SEEN.length > SEEN_MAX) SEEN.length = SEEN_MAX;
+}
+var relay = new relayMod.Relay({ sdbPort: SDB_PORT, allow: RELAY_CFG.allow, log: log, onClient: function (ip, allowed) { noteClient(ip, 'relay', allowed); } });
 relay.inUse = function () { return SDB_ACTIVE > 0 ? 'TV-Store itself is installing an app' : ''; };
 function saveRelayCfg() {
     if (!RELAY_FILE) return;
@@ -324,6 +334,7 @@ function relayStatus() {
     s.configuredPort = RELAY_CFG.port;
     s.chosen = RELAY_CFG.chosen;      // false: the default decides (on when Host PC IP is 127.0.0.1)
     s.auto = RELAY_AUTO;              // why it turned itself on, or null
+    s.seen = SEEN.slice();            // who came by in this run, for the allow list in Settings
     return s;
 }
 // The relay's state for a phone or PC on the LAN (GET /relay, TV-Store#58): whether it is on and
@@ -548,8 +559,10 @@ function storeLive() { return !!STORE.state && Date.now() - STORE.at < STORE_LIV
 // A browser's address is allowed: this TV itself, or any LAN client unless the relay's allow list names some.
 function browserAllowed(req) {
     if (fromThisTv(req)) return true;
-    var allow = RELAY_CFG.allow || [];
-    return !allow.length || allow.indexOf(relayMod.peerIp(req.socket)) >= 0;
+    var allow = RELAY_CFG.allow || [], ip = relayMod.peerIp(req.socket);
+    var ok = !allow.length || allow.indexOf(ip) >= 0;
+    noteClient(ip, 'browser', ok);
+    return ok;
 }
 // The name the browser used for the TV: an IP address or a LAN name. A public name pointed at the TV
 // (DNS rebinding) would let any web page drive these routes as if it were on the LAN.
@@ -1525,7 +1538,7 @@ http.createServer(function (req, res) {
     if (storeRoute || (iconHex && req.method === 'GET' && !fromThisTv(req))) {
         var peer = relayMod.peerIp(req.socket);
         if (!lanHost(req)) { res.writeHead(403, { 'Content-Type': 'text/plain' }); return res.end('open TV-Store by the TV\'s IP address'); }
-        if (!browserAllowed(req)) { res.writeHead(403, { 'Content-Type': 'text/plain' }); return res.end(peer + ' is not on the allow list in TV-Store\'s Settings'); }
+        if (!browserAllowed(req)) { res.writeHead(403, { 'Content-Type': 'text/plain' }); return res.end(peer + ' is not one of the devices picked under "Devices that may connect" in TV-Store\'s Settings on the TV'); }
         if (iconHex && !storeRoute) {
             if (!BROWSER_CFG.enabled) { res.writeHead(403, { 'Content-Type': 'text/plain' }); return res.end('installing from a browser is off'); }
             return icons.serve(iconHex[1].toLowerCase(), res);

@@ -66,6 +66,7 @@ function Relay(opts) {
     this.maxSessions = opts.maxSessions > 0 ? opts.maxSessions : MAX_SESSIONS;
     this.idleMs = opts.idleMs !== undefined ? opts.idleMs : IDLE_MS;   // 0 turns the idle timeout off
     this.log = typeof opts.log === 'function' ? opts.log : function () {};
+    this.onClient = typeof opts.onClient === 'function' ? opts.onClient : null;   // (ip, allowed) for every connection, before anything else
     this._server = null;
     this._sessions = [];       // { client, upstream, closed } for every live relayed connection
     this._listening = false;
@@ -127,7 +128,9 @@ Relay.prototype.setAllow = function (allow) { this.allow = normList(allow); };
 Relay.prototype._accept = function (client) {
     var self = this;
     var ip = peerIp(client);
-    if (self.allow.length && self.allow.indexOf(ip) < 0) {
+    var allowed = !self.allow.length || self.allow.indexOf(ip) >= 0;
+    if (self.onClient) { try { self.onClient(ip, allowed); } catch (e) {} }
+    if (!allowed) {
         self._fail({ ip: ip }, 'NOT_ALLOWED');
         try { client.destroy(); } catch (e) {}
         return;
