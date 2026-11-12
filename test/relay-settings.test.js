@@ -15,6 +15,7 @@ var dir = path.join(os.tmpdir(), 'a2s-relay-' + process.pid + '-' + Date.now());
 // Off by choice, as a relay file from before 0.3.28 says: else the relay turns itself on at start,
 // since the fake sdbd takes loopback (test/relay-default.test.js has that).
 fs.writeFileSync(path.join(dir, '.a2s-relay.json'), JSON.stringify({ enabled: false }));
+fs.writeFileSync(path.join(dir, '.a2s-duid'), 'TESTDUID12345');   // known already: the start-up read of it stays off sdbd
 var child = null, err = '', handle = null;
 var WD = setTimeout(function () { fail('watchdog (30 s)' + (err ? '\n' + err : '')); }, 30000);
 function stop() { clearTimeout(WD); if (child) child.kill(); if (handle && handle.server) try { handle.server.close(); } catch (e) {} }

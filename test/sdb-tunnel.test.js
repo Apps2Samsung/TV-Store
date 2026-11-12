@@ -21,6 +21,7 @@ var dir = path.join(os.tmpdir(), 'a2s-tunnel-' + process.pid + '-' + Date.now())
 // The relay's start-up check (0.3.28) connects to sdbd once, a second after start; this test counts
 // sdbd's connections, so it starts with the relay off by choice, which skips that check.
 fs.writeFileSync(path.join(dir, '.a2s-relay.json'), JSON.stringify({ enabled: false }));
+fs.writeFileSync(path.join(dir, '.a2s-duid'), 'TESTDUID12345');   // known already: the start-up read of it stays off sdbd
 var wgt = zip.write([{ name: 'index.html', data: Buf.from('<html></html>') },
     { name: 'config.xml', data: Buf.from('<widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets" version="1.0.0"><name>Probe</name><tizen:application id="A2SProbe01.Probe" package="A2SProbe01" required_version="2.3"/></widget>') }]);
 var INSTALLED = 'install A2SProbe01.Probe package_path /x was_install_app return WAS_TRUE installing[100] app_id[A2SProbe01.Probe] install completed\n';

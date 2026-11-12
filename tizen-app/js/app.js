@@ -371,9 +371,12 @@
     function certCoverage(c) {
         var list = c.deviceIds || [];
         if (!list.length) return { cls: '', text: 'No device list in the certificate' };
-        if (!tvDuid) return { cls: '', text: 'Lists ' + list.length + (list.length === 1 ? ' TV' : ' TVs') + '; this TV\'s id could not be read to compare' };
-        var mine = tvDuid.toUpperCase();
-        if (list.some(function (d) { return String(d).toUpperCase() === mine; })) return { cls: '', text: 'Covers this TV' };
+        function has(id) { id = String(id || '').toUpperCase(); return !!id && list.some(function (d) { return String(d).toUpperCase() === id; }); }
+        // The id sdbd gives is the one Samsung puts in a certificate (the service reads it once a
+        // developer connection was open): held against the list, it says yes or no.
+        var real = ready && ready.duid;
+        if (real) return has(real) ? { cls: '', text: 'Covers this TV' } : { cls: ' bad', text: 'Does not cover this TV (' + real + '), so it cannot install here' };
+        if (has(tvDuid)) return { cls: '', text: 'Covers this TV' };
         // No match says nothing: on many sets the id an app can read is not the one Samsung puts in
         // a certificate (this said "does not cover" on a TV the certificate installed on fine).
         return { cls: '', text: 'Made for ' + (list.length === 1 ? 'the TV with id ' + list[0] : list.length + ' TVs: ' + list.slice(0, 3).join(', ') + (list.length > 3 ? ', \u2026' : '')) };
@@ -1920,7 +1923,13 @@
         var id = el.id, act = el.getAttribute('data-act'), k;
         if (id === 'tabInstall') { view = 'install'; renderPage(); focusFirst(); return; }
         if (id === 'tabTv') { view = 'tv'; renderPage(); focusFirst(); return; }
-        if (id === 'gear') { openSheet({ mode: 'settings' }); return; }
+        if (id === 'gear') {
+            openSheet({ mode: 'settings' });
+            // The TV's id for the certificates' device lists arrives after the first ping (the service
+            // reads it from sdbd): ask again, so Settings says whether each certificate covers this TV.
+            if (ready && !ready.duid) xhr('GET', '/ping', null, function (err, res) { if (!err && res && res.duid && ready) { ready.duid = res.duid; if (sheet && sheet.mode === 'settings') renderSheet(); } }, null, 5000);
+            return;
+        }
         if ((k = el.getAttribute('data-chip'))) { chip = k; renderPage(); focusKey('chip:' + k) || focusFirst(); return; }
         if ((k = el.getAttribute('data-opt'))) { toggle(k); return; }
         if ((k = el.getAttribute('data-certrow'))) { selectCert(k); return; }

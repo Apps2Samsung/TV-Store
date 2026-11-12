@@ -31,6 +31,7 @@ var IDLE_MS = 30 * 60 * 1000;   // sdb's transport connection sits silent betwee
 var CODES = {
     SDBD_DOWN: 'nothing listens on the TV\'s sdbd: Developer Mode is off, or the TV needs a restart',
     SDBD_DROPPED: 'the TV\'s sdbd took the connection and closed it without answering: Developer Mode\'s Host PC IP is not 127.0.0.1, or the TV was not restarted after setting it',
+    SDBD_BUSY: 'the TV\'s sdbd took the connection and closed it without answering while another connection is open: the TV takes one developer connection at a time',
     SDBD_SILENT: 'the TV\'s sdbd never answered and the client gave up: Developer Mode\'s Host PC IP is not 127.0.0.1, the TV was not restarted after setting it, or sdbd is busy with another connection',
     SDBD_ERROR: 'the connection to the TV\'s sdbd failed',
     NOT_ALLOWED: 'the client is not on the relay\'s allow list',
@@ -79,6 +80,19 @@ function Relay(opts) {
 // once at most, whichever of the socket events gets there first.
 Relay.prototype._fail = function (session, code, detail) {
     if (session && session.outcome) return;
+    // sdbd takes one client at a time (#73) and drops the next one the way it drops a wrong Host PC
+    // IP. With another session talking to sdbd through this relay, or TV-Store's own install on it
+    // (inUse), the drop is that, and saying Host PC IP would send the user to the wrong setting.
+    if (code === 'SDBD_DROPPED') {
+        var others = this._sessions.filter(function (s) { return s !== session && s.up > 0 && s.ip; }).map(function (s) { return s.ip; });
+        var own = this.inUse ? this.inUse() : '';
+        if (others.length || own) {
+            code = 'SDBD_BUSY';
+            var who = others.filter(function (ip, i) { return others.indexOf(ip) === i; }).join(', ');
+            detail = (who ? who + ' is connected through the relay' + (own ? ', and ' + own : '') : own)
+                + '; ' + (who ? 'close Apps2Samsung there, or wait: an idle connection is closed after ' + Math.round(this.idleMs / 60000) + ' min' : 'try again when it is done');
+        }
+    }
     if (session) session.outcome = code;
     var client = session && session.ip ? session.ip : '';
     var reason = CODES[code] + (detail ? ' (' + detail + ')' : '');

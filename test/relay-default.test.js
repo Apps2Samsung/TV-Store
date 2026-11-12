@@ -40,7 +40,9 @@ function stopService(cb) { var c = child; child = null; c.once('exit', function 
 function readCfg(dir) { try { return JSON.parse(fs.readFileSync(path.join(dir, '.a2s-relay.json'), 'utf8')); } catch (e) { return null; } }
 
 // 1. Host PC IP 127.0.0.1 (the fake takes loopback): on by itself.
-fake.start(SDB, { shell: function () { return 'ok\n'; } }, function (h) {
+// The same connection reads the TV's DUID from sdbd (`0 getduid`), the id a certificate's device list
+// carries: /ping gives it and it is kept for the next start.
+fake.start(SDB, { shell: function (cmd) { return /getduid/.test(cmd) ? 'TESTDUID12345\n' : 'ok\n'; } }, function (h) {
     handle = h;
     var dir = newDir('auto');
     startService(dir, function (r) {
@@ -49,7 +51,11 @@ fake.start(SDB, { shell: function () { return 'ok\n'; } }, function (h) {
         if (c && c.enabled) fail('turned on by itself must not be saved as on: ' + JSON.stringify(c));
         call('GET', '/relay', null, function (e, code, j) {
             if (e || !j || !j.relay || !j.relay.enabled || !j.relay.auto) fail('GET /relay must say it is on by default: ' + JSON.stringify(j));
+            var kept = ''; try { kept = fs.readFileSync(path.join(dir, '.a2s-duid'), 'utf8'); } catch (x) {}
+            if (kept !== 'TESTDUID12345') fail('the DUID must be kept on the TV: ' + JSON.stringify(kept));
             // 2. The switch turned off is a choice: saved, and a restart does not turn it back on.
+            call('GET', '/ping', null, function (e, code, p) {
+            if (e || !p || p.duid !== 'TESTDUID12345') fail('/ping must carry the DUID sdbd gave: ' + JSON.stringify(p && p.duid));
             call('POST', '/settings', JSON.stringify({ relay: { enabled: false } }), function (e, code, j) {
                 if (e || code !== 200 || j.relay.enabled || j.relay.listening || j.relay.chosen !== true || j.relay.auto) fail('turning it off: ' + code + ' ' + JSON.stringify(j));
                 var c = readCfg(dir);
@@ -60,6 +66,7 @@ fake.start(SDB, { shell: function () { return 'ok\n'; } }, function (h) {
                         stopService(function () { legacy(); });
                     });
                 });
+            });
             });
         });
     });

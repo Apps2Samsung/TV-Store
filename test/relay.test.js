@@ -232,8 +232,53 @@ fake.start(SDB, {
                         if (st.failures !== 1 || !st.lastFailure || st.lastFailure.code !== 'SDBD_DROPPED' || st.lastFailure.client !== '127.0.0.1') return done(new Error('sdbd closing without a byte back must read SDBD_DROPPED: ' + JSON.stringify(st)));
                         if (st.lastFailure.reason.indexOf('Host PC IP') < 0) return done(new Error('the SDBD_DROPPED reason must name Host PC IP: ' + st.lastFailure.reason));
                         if (st.served !== 0) return done(new Error('a dropped session must not count as served'));
-                        step10();
+                        step9b();
                     }, 50);
+                });
+            });
+        });
+    }
+
+    // 9b) sdbd takes one client at a time (#73): with one session open through the relay, the next is
+    //     dropped the same silent way. That is SDBD_BUSY, naming who holds it, not a wrong Host PC IP.
+    //     The same when TV-Store's own install holds sdbd (inUse).
+    function step9b() {
+        fake.start(0, { single: true, shell: function () { return 'ok\n'; } }, function (h3) {
+            var relayB = new relayMod.Relay({ sdbPort: h3.server.address().port, log: quiet });
+            relayB.start(0, function (err, port) {
+                if (err) return done(err);
+                var first = new sdb.SdbClient('127.0.0.1', port);
+                first.connect(function (err) {
+                    if (err) return done(new Error('the first session must connect: ' + err.message));
+                    var second = new sdb.SdbClient('127.0.0.1', port);
+                    second.connect(function (err) {
+                        second.end();
+                        if (!err) return done(new Error('a second session on a one-client sdbd must fail'));
+                        setTimeout(function () {
+                            var st = relayB.status();
+                            if (!st.lastFailure || st.lastFailure.code !== 'SDBD_BUSY') return done(new Error('a drop while another session is open must be SDBD_BUSY: ' + JSON.stringify(st.lastFailure)));
+                            if (st.lastFailure.reason.indexOf('Host PC IP') >= 0 || st.lastFailure.reason.indexOf('127.0.0.1 is connected through the relay') < 0) return done(new Error('SDBD_BUSY must name who holds the connection, not Host PC IP: ' + st.lastFailure.reason));
+                            first.end();
+                            relayB.stop(); h3.server.close();
+                            fake.start(0, { hostPcIp: '10.9.9.9', shell: function () { return 'ok\n'; } }, function (h4) {
+                                var relayC = new relayMod.Relay({ sdbPort: h4.server.address().port, log: quiet });
+                                relayC.inUse = function () { return 'TV-Store itself is installing an app'; };
+                                relayC.start(0, function (err, port) {
+                                    if (err) return done(err);
+                                    var c = new sdb.SdbClient('127.0.0.1', port);
+                                    c.connect(function () {
+                                        c.end();
+                                        setTimeout(function () {
+                                            var st = relayC.status();
+                                            relayC.stop(); h4.server.close();
+                                            if (!st.lastFailure || st.lastFailure.code !== 'SDBD_BUSY' || st.lastFailure.reason.indexOf('installing an app') < 0) return done(new Error('a drop during TV-Store\'s own install must be SDBD_BUSY: ' + JSON.stringify(st.lastFailure)));
+                                            step10();
+                                        }, 50);
+                                    });
+                                });
+                            });
+                        }, 50);
+                    });
                 });
             });
         });
