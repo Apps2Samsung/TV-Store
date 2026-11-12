@@ -14,7 +14,7 @@ jobs:
           node-version: '20'
       - name: Syntax-check the service and UI
         run: |
-          for f in tizen-app/service/sdb.js tizen-app/service/relay.js tizen-app/service/zip.js tizen-app/service/index.js tizen-app/service/signer.js tizen-app/service/catalog.js tizen-app/service/catalog-key.js tizen-app/service/compat.js tizen-app/service/manifest.js tizen-app/service/refusal.js tizen-app/service/certs.js tizen-app/service/sdbhosts.js tizen-app/service/wascmd.js tizen-app/service/selfupdate.js tizen-app/service/icons.js tizen-app/service/repos.js tizen-app/js/app.js test/fake-sdbd.js test/run.js test/relay.test.js test/relay-settings.test.js test/relay-default.test.js test/sign.test.js test/config.test.js test/sdb-errors.test.js test/manifest.test.js test/refusal.test.js test/certs.test.js test/install.test.js test/certlevel.test.js test/sdbhosts.test.js test/sdb-loopback.test.js test/sdb-tunnel.test.js test/wascmd.test.js test/selfupdate.test.js test/repos.test.js test/sources.test.js; do
+          for f in tizen-app/service/sdb.js tizen-app/service/relay.js tizen-app/service/zip.js tizen-app/service/index.js tizen-app/service/signer.js tizen-app/service/catalog.js tizen-app/service/catalog-key.js tizen-app/service/compat.js tizen-app/service/manifest.js tizen-app/service/refusal.js tizen-app/service/certs.js tizen-app/service/sdbhosts.js tizen-app/service/wascmd.js tizen-app/service/selfupdate.js tizen-app/service/icons.js tizen-app/service/repos.js tizen-app/service/storepage.js tizen-app/js/app.js test/fake-sdbd.js test/run.js test/relay.test.js test/relay-settings.test.js test/relay-default.test.js test/browser-store.test.js test/sign.test.js test/config.test.js test/sdb-errors.test.js test/manifest.test.js test/refusal.test.js test/certs.test.js test/install.test.js test/certlevel.test.js test/sdbhosts.test.js test/sdb-loopback.test.js test/sdb-tunnel.test.js test/wascmd.test.js test/selfupdate.test.js test/repos.test.js test/sources.test.js; do
             node --check "$f"
           done
       - name: config.xml ids (package id is 10 alphanumerics)
@@ -27,6 +27,8 @@ jobs:
         run: node test/relay-settings.test.js
       - name: Relay on by default when Host PC IP is 127.0.0.1
         run: node test/relay-default.test.js
+      - name: The store in a phone or PC browser (#101)
+        run: node test/browser-store.test.js
       - name: Signer test (valid signed package)
         run: node test/sign.test.js
       - name: Streaming signer test (big package, file to file)
@@ -78,6 +80,7 @@ jobs:
           node test/relay.test.js
           node test/relay-settings.test.js
           node test/relay-default.test.js
+          node test/browser-store.test.js
           node test/sign.test.js
           node --expose-gc test/stream-sign.test.js
           node test/bundle.test.js

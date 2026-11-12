@@ -199,6 +199,33 @@ If the TV already has a different app under the file's package id, the screen sa
 your TV: …"). A file sent this way has no catalog entry to derive another id from, so installing
 it replaces that app.
 
+## Browse and install from a phone or PC
+
+Open `http://<TV IP>:8077/` on a phone or PC in the same network (Settings shows it as a QR code
+while **Install from a browser** is on, which it is by default). The page shows the store as
+TV-Store on the TV sees it: every app the Settings let through, with **Installed**, **Update to
+vX**, the TV's model, Tizen version, certificates and free space, the install that is running and
+what is queued after it. **Install**, **Update** and **Update all** there ask the TV-Store screen
+to do it, and it installs exactly as if OK was pressed on the remote: the same build choice,
+signing, checks and questions, a toast saying which phone or PC asked, and the progress on the TV
+and on the page. Nothing is installed by the service on a browser's word alone.
+
+So TV-Store has to be open on the TV; the page says when it is not. An app that cannot be installed
+from there says why on the page: it needs Apps2Samsung on a phone or PC (user settings, root, an
+injector), a newer Tizen, a Partner certificate, the build on the TV is not known, or it came from
+another source and switching needs a yes on the TV. Questions that come up during an install
+(another app has the package id, another certificate installed it) are answered on the TV.
+
+Who may use it: anyone on the network, like `/upload`, unless the relay's allow list names
+clients, which then holds here too. The page is served only under an IP address or a LAN name (not
+a public name pointed at the TV), and an Install from another web site (its `Origin`) is refused.
+The page loads nothing from outside the network.
+
+How it works: the TV-Store screen sends what it shows to the service every 3 seconds
+(`POST /store/state` with the page token; only the whole picture when it changed), a browser reads
+`GET /store/state` and asks with `POST /store/install { key }` or `{ all: true }`, and the screen
+takes the request in the answer to its next send and reports back with `POST /store/ack`.
+
 ## Opening TV-Store from another app
 
 Another app on the TV can send people to TV-Store, for its own "Get apps" button for example. TV-Store's
@@ -400,6 +427,9 @@ sources are kept in `.a2s-sources.json` in the service's data folder.
 
 Press **▲** at the top of the list to reach **Settings**. The switches are remembered on the TV:
 
+- **Install from a browser**: on by default (#101). Lets a phone or PC open
+  `http://<TV IP>:8077/` and install from there while TV-Store is open; see Browse and install from
+  a phone or PC. Off, the page says so and refuses every Install.
 - **Show adult (18+) apps**: off by default. Turning it on asks "I am 18 or older" first, as the
   phone app does; those apps then carry an 18+ badge.
 - **Show apps that need a PC or phone**: on by default, so nobody thinks an app is missing; turn
@@ -561,6 +591,7 @@ node test/sources.test.js   # sources in the service: check and add with the tok
 node test/icons.test.js     # app icons: served only with the catalog's hash, cached and hashed again, one download per hash, pruned
 node test/manifest.test.js  # the ids and privileges of a .wgt / .tpk from its manifest
 node test/upload.test.js    # send a file to the service, see it wait, token gate, discard
+node test/browser-store.test.js  # the store in a browser (#101): the page, the screen's state behind the token, Install checked and handed to the screen, other sites and public names refused, the Settings switch
 node test/certs.test.js     # the profiles handed over: merge, order per package, Public or Partner level
 node test/install.test.js   # a certificate mismatch is retried with the next profile; replace
 node test/certlevel.test.js # Public or Partner per install: refused up front, picked by privilege, chosen by hand
