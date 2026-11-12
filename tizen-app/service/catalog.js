@@ -50,7 +50,7 @@ function verify(buf, publicKeyPem, now) {
     if ((now || Date.now()) - at > MAX_AGE_MS) throw new Error('the signed catalog is from ' + catalog.generatedAt + ', more than 7 days old: check the TV’s clock, or the Apps2Samsung catalog workflow');
 
     var s = scan(catalog);
-    return { catalog: catalog, payload: payload, index: s.index, levels: s.levels, icons: s.icons, moved: s.moved, keys: s.keys, files: s.files, removed: s.removed, settings: s.settings };
+    return { catalog: catalog, payload: payload, index: s.index, levels: s.levels, icons: s.icons, moved: s.moved, keys: s.keys, files: s.files, removed: s.removed, settings: s.settings, newerSchema: s.newerSchema };
 }
 
 // One walk over providers -> releases -> assets for the lookups the install and the icons need:
@@ -90,10 +90,14 @@ function scanRemoved(list, removed) {
         (Array.isArray(e.files) ? e.files : []).forEach(function (f) { var k = pkgid.key(repo, str(f)); if (k) put(pkgid.derive(k), true); });
     });
 }
+// The newest catalog.json schemaVersion this TV-Store knows (tizen-community-packages docs/catalog.md);
+// a newer one is read as far as it goes, scan() reports it as newerSchema for the log.
+var CATALOG_SCHEMA = 1;
 function scan(catalog) {
-    var index = {}, levels = {}, icons = {}, moved = {}, keys = {}, files = {}, removed = {}, settings = {};
+    var index = {}, levels = {}, icons = {}, moved = {}, keys = {}, files = {}, removed = {}, settings = {}, newerSchema = 0;
     (catalog.providers || []).forEach(function (p) {
         if (p.catalog) scanRemoved(p.catalog.removed, removed);
+        if (p.catalog && typeof p.catalog.schemaVersion === 'number' && p.catalog.schemaVersion > CATALOG_SCHEMA) newerSchema = Math.max(newerSchema, p.catalog.schemaVersion);
         var byFile = {}, settingsOf = {}, assetByName = {}, repoOf = {}, community = !!(p.catalog && p.catalog.apps), own = pkgid.githubRepo(p.url);
         (p.releases || []).forEach(function (r) { (r.assets || []).forEach(function (a) { if (a.name && !assetByName[a.name]) assetByName[a.name] = a; }); });
         ((p.catalog && p.catalog.apps) || []).forEach(function (e) {
@@ -119,7 +123,7 @@ function scan(catalog) {
             });
         });
     });
-    return { index: index, levels: levels, icons: icons, moved: moved, keys: keys, files: files, removed: removed, settings: settings };
+    return { index: index, levels: levels, icons: icons, moved: moved, keys: keys, files: files, removed: removed, settings: settings, newerSchema: newerSchema };
 }
 function index(catalog) { return scan(catalog).index; }
 function levels(catalog) { return scan(catalog).levels; }
@@ -127,4 +131,4 @@ function icons(catalog) { return scan(catalog).icons; }
 
 function sha256(buf) { return crypto.createHash('sha256').update(buf).digest('hex'); }
 
-module.exports = { verify: verify, envelope: envelope, signatureOk: signatureOk, scan: scan, index: index, levels: levels, icons: icons, sha256: sha256, MAX_AGE_MS: MAX_AGE_MS };
+module.exports = { CATALOG_SCHEMA: CATALOG_SCHEMA, verify: verify, envelope: envelope, signatureOk: signatureOk, scan: scan, index: index, levels: levels, icons: icons, sha256: sha256, MAX_AGE_MS: MAX_AGE_MS };

@@ -90,6 +90,9 @@
     // renamed or dropped there without a TV-Store release. These are the fallback for a catalog
     // that says nothing, and the colours for one that names no colour for a category it knows.
     var CATEGORY_ORDER = ['media', 'iptv', 'streaming', 'games', 'casting', 'tools', 'other'];
+    // The official catalog's schemaVersion (tizen-community-packages docs/catalog.md): a newer one is
+    // still read as far as it goes, and the footer and Settings say an update may be needed.
+    var CATALOG_SCHEMA = 1, catalogSchemaNewer = 0;
     var CATEGORY_NAMES = { media: 'Media servers & players', iptv: 'IPTV & Live TV', streaming: 'Streaming', games: 'Games & emulators', casting: 'Casting & cameras', tools: 'Tools & system', other: 'Other' };
     var CATEGORY_COLORS = { media: '#2B59FF', iptv: '#E8590C', streaming: '#D6336C', games: '#7048E8', casting: '#0CA678', tools: '#5C677D', other: '#868E96' };
     var PALETTE = ['#2B59FF', '#E8590C', '#D6336C', '#7048E8', '#0CA678', '#5C677D', '#868E96'];
@@ -1159,6 +1162,7 @@
         if (device) bits.push(device);
         if (ready && ready.ownIp) bits.push(ready.ownIp);
         bits.push('TV-Store v' + VERSION);
+        if (catalogSchemaNewer) bits.push('Newer catalog format, update TV-Store');
         $('dev').textContent = bits.join(' · ');
     }
 
@@ -1605,7 +1609,7 @@
         var certText = !armed() ? 'not yet' : ready.certCount > 1 ? ready.certCount + ' handed over: ' + certList.join(', ') : 'handed over' + (certList[0] ? ': ' + certList[0] : '');
         var certs = certsBlock();
         h += certs + sourcesBlock() + '<div class="table kv">' + (certs ? '' : '<div class="trow"><span class="k">Signing certificate' + (ready && ready.certCount > 1 ? 's' : '') + '</span><span class="v">' + esc(certText) + '</span></div>')
-            + '<div class="trow"><span class="k">Catalog</span><span class="v">' + esc(catalogApps.length + ' apps, signature checked') + '</span></div>'
+            + '<div class="trow"><span class="k">Catalog</span><span class="v">' + esc(catalogApps.length + ' apps, signature checked' + (catalogSchemaNewer ? ' · format version ' + catalogSchemaNewer + ', newer than this TV-Store knows: update TV-Store if something looks missing' : '')) + '</span></div>'
             + '<div class="trow"><span class="k">TV-Store</span><span class="v">v' + VERSION + (ready && ready.node ? ' · Node ' + esc(ready.node) : '') + '</span></div>'
             + '<div class="trow"><span class="k">This TV</span><span class="v">' + esc((device ? device + ' · ' : '') + (tvTizen ? 'Tizen ' + tvTizen : 'Tizen version not known')) + '</span></div></div>';
         if (confirmingAdult) return h + '</div>';    // the question needs the room the QR codes take
@@ -2208,6 +2212,9 @@
                 if (err) { loading = false; problem = { title: 'The catalog did not load', short: 'No catalog', text: err.message + '.' }; renderPage(); focusFirst(); return; }
                 var community = (cat.providers || []).filter(function (p) { return p.catalog && p.catalog.categories; })[0];
                 if (community) applyCategories(community.catalog);
+                var official = (cat.providers || []).filter(function (p) { return p.catalog && p.catalog.apps; })[0];
+                catalogSchemaNewer = official && typeof official.catalog.schemaVersion === 'number' && official.catalog.schemaVersion > CATALOG_SCHEMA ? official.catalog.schemaVersion : 0;
+                if (catalogSchemaNewer) renderFoot();
                 officialCat = cat;
                 loading = false; rebuild(); renderPage(); focusFirst();
                 openRequested();

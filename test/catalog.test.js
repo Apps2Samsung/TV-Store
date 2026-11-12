@@ -98,8 +98,15 @@ if (rm.BisnorTV01.reason !== 'unlicensed-content' || rm.BisnorTV01.note !== 'Get
 if (JSON.stringify(rm.BisnorTV01.appIds) !== '["BisnorTV01.Bisnor"]' || JSON.stringify(rm.NoFiles01.appIds) !== '[]') fail('removed: app ids ' + JSON.stringify(rm.BisnorTV01.appIds));
 if (rm.NoFiles01.since !== '' || rm.NoFiles01.note !== '') fail('removed: a bad date and no note come out empty');
 if (JSON.stringify(r.removed) !== '{}') fail('a catalog without removed verifies with an empty removed map');
+// schemaVersion (tizen-community-packages docs/catalog.md): a newer one is reported, never refused.
+if (cat.scan({ providers: [{ catalog: { schemaVersion: 1, apps: [] } }] }).newerSchema !== 0) fail('schema 1 reported as newer');
+if (cat.scan({ providers: [{ catalog: { apps: [] } }] }).newerSchema !== 0) fail('no schemaVersion reported as newer');
+if (cat.scan({ providers: [{ catalog: { schemaVersion: '2', apps: [] } }] }).newerSchema !== 0) fail('a string schemaVersion counted');
+if (cat.scan({ providers: [{ catalog: { schemaVersion: 2, apps: [] } }] }).newerSchema !== 2) fail('schema 2 not reported');
+if (cat.CATALOG_SCHEMA !== 1) fail('CATALOG_SCHEMA');
+
 // The shipped key parses: verifying anything with it answers false instead of throwing.
 if (crypto.createVerify('RSA-SHA256').update('x').verify(shipped, 'AAAA', 'base64') !== false) fail('shipped key');
 
 console.log('PASS');
-console.log('  signed catalog verifies; tampered, foreign-key, unsigned and stale ones are refused; cert_level per file and per provider; moved_to per package');
+console.log('  signed catalog verifies; tampered, foreign-key, unsigned and stale ones are refused; cert_level per file and per provider; moved_to per package; a newer schemaVersion is reported');
