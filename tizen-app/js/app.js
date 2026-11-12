@@ -261,11 +261,47 @@
         if (!r) return '';
         // r.auto: on by itself, since this TV's Host PC IP is 127.0.0.1 and the switch was never used (0.3.28).
         var hint = r.enabled
-            ? (r.listening ? (r.auto ? 'On by default, because Host PC IP is 127.0.0.1: ' : 'On: ') + 'Apps2Samsung connects through ' + relayAddress() + '. ' : 'On, but not running. ') + 'Any device in your network can install apps through this port while it is on.'
+            ? (r.listening ? (r.auto ? 'On by default, because Host PC IP is 127.0.0.1: ' : 'On: ') + 'Apps2Samsung connects through ' + relayAddress() + '. ' : 'On, but not running. ') + (r.allow && r.allow.length ? 'Only the devices picked below can install apps through this port.' : 'Any device in your network can install apps through this port while it is on.')
             : 'Lets Apps2Samsung on a phone or PC reach this TV while Developer Mode\'s Host PC IP is 127.0.0.1, so you never type an address into Developer Mode again.'
                 + (r.chosen === false ? ' Turns on by itself when Host PC IP is 127.0.0.1.' : '');
         return '<div class="opt f" tabindex="0" data-k="opt:relay" data-opt="relay"><div class="ot"><div class="ont">Connect from Apps2Samsung (sdb relay)</div><div class="oh">' + esc(hint) + '</div></div>'
             + '<span class="sw' + (r.enabled ? ' on' : '') + '"><i></i></span></div>';
+    }
+    // Who may connect (the relay's allow list, which holds for the store in a browser too): the phones
+    // and PCs that came by since TV-Store started, each with a switch, so nobody types an address with
+    // the remote. None on: any device in the network. One or more on: only those.
+    function devicesRows() {
+        var r = ready && ready.relay;
+        if (!r || !(r.enabled || browserOn())) return '';
+        var allow = r.allow || [], seen = r.seen || [], rows = [];
+        seen.forEach(function (d) { rows.push(d); });
+        allow.forEach(function (ip) { if (!seen.some(function (d) { return d.ip === ip; })) rows.push({ ip: ip }); });
+        var h = '<div class="opt"><div class="ot"><div class="ont">Devices that may connect</div><div class="oh">'
+            + esc(allow.length ? 'Only the ' + (allow.length === 1 ? 'device' : allow.length + ' devices') + ' switched on here, from Apps2Samsung or a browser. Switch all off to let any device in your network in again.'
+                : rows.length ? 'Any device in your network, from Apps2Samsung or a browser. Switch one on and only the devices you picked can connect.'
+                : 'Any device in your network, from Apps2Samsung or a browser. Once a phone or PC has connected it is listed here, and you can pick the ones that may.') + '</div></div></div>';
+        rows.forEach(function (d) {
+            var on = allow.indexOf(d.ip) >= 0, when = '';
+            try { if (d.at) { var t = new Date(d.at); when = ' at ' + t.getHours() + ':' + (t.getMinutes() < 10 ? '0' : '') + t.getMinutes(); } } catch (e) {}
+            var how = d.via === 'browser' ? 'a browser' : 'Apps2Samsung';
+            var out = d.refused && allow.length > 0;   // kept out, and still would be
+            var hint = !d.at ? 'Not seen since TV-Store started.' : d.refused && !out ? 'Last tried' + when + ' from ' + how + '.' : out ? 'Kept out' + when + ' (' + how + '): not one of the devices you picked.' : 'Connected' + when + ' from ' + how + '.';
+            h += '<div class="opt f" tabindex="0" data-k="opt:allow:' + esc(d.ip) + '" data-opt="allow:' + esc(d.ip) + '"><div class="ot"><div class="ont mono">' + esc(d.ip) + '</div><div class="oh' + (out && !on ? ' warn' : '') + '">' + esc(hint) + '</div></div>'
+                + '<span class="sw' + (on ? ' on' : '') + '"><i></i></span></div>';
+        });
+        return h;
+    }
+    function toggleAllow(ip) {
+        if (!ready || !ready.relay || relayBusy) return;
+        var allow = (ready.relay.allow || []).slice(), i = allow.indexOf(ip);
+        if (i >= 0) allow.splice(i, 1); else allow.push(ip);
+        relayBusy = true;
+        xhr('POST', '/settings', { relay: { allow: allow } }, function (err, res) {
+            relayBusy = false;
+            if (!err && res && res.ok) { ready.relay = res.relay; relayError = null; }
+            else relayError = { want: 'change who may connect to', why: err ? err.message : (res && res.error) || 'no answer from the service' };
+            renderSheet(); focusKey('opt:allow:' + ip);
+        });
     }
     function relayNotice() {
         var r = ready && ready.relay;
@@ -280,7 +316,7 @@
         if (r.error) return flip + '<div class="notice bad">' + esc('The relay could not start: ' + r.error + '. Turn it off and on again; if that does not help, restart TV-Store.') + '</div>';
         if (!r.listening) return flip + '<div class="notice">' + esc('The relay is starting…') + '</div>';
         return flip + '<div class="notice info">' + esc('Once: on the TV open Apps, type 1 2 3 4 5, set Host PC IP to 127.0.0.1 and restart the TV. From then on Apps2Samsung 3.2 or newer finds ' + relayAddress() + ' by itself'
-            + (r.allow && r.allow.length ? '; allowed clients: ' + r.allow.join(', ') : '') + '. This TV keeps installing from TV-Store either way.') + '</div>'
++ '. This TV keeps installing from TV-Store either way.') + '</div>'
             + relayFailureNotice(r);
     }
     // The last connection through the relay that failed, with why (#58): the sdb protocol cannot tell
@@ -296,7 +332,7 @@
     // While Settings is open with the relay on, keep its state fresh: a failed connection shows up here
     // within a few seconds, which is when the person at the TV is looking for it.
     function refreshRelay() {
-        if (!sheet || sheet.mode !== 'settings' || !ready || !ready.relay || !ready.relay.enabled || relayBusy) return;
+        if (!sheet || sheet.mode !== 'settings' || !ready || !ready.relay || !(ready.relay.enabled || browserOn()) || relayBusy) return;
         xhr('GET', '/ping', null, function (err, res) {
             if (err || !res || !res.relay || !sheet || sheet.mode !== 'settings' || relayBusy) return;
             var before = JSON.stringify(ready.relay);
@@ -1620,7 +1656,7 @@
             + '<div class="sbody vscroll"><div class="opts">' + opt('showAdult', 'Show adult (18+) apps', 'Apps marked adult-only stay out of the store until this is on.')
             + opt('showNeedsHead', 'Show apps that need a phone or PC', 'Some apps need Apps2Samsung on a phone or PC to install. Turn this off to keep them out of the store.')
             + opt('verboseLog', 'Verbose logging', 'Writes much more detail to the TV-Store log. Turn it on when a bug report asks for it, and off again afterwards.')
-            + browserRow() + relayRow() + installerRow()
+            + browserRow() + relayRow() + devicesRows() + installerRow()
             + opt('selfUpdate', 'Let TV-Store update itself (experiment)', 'Off: update TV-Store from Apps2Samsung on a phone or PC. On: TV-Store offers its own update under On the TV. It closes during the install; open it again after a minute and it says whether the update landed. Results help GitHub issue #41.') + '</div>' + browserNotice() + relayNotice() + installerNotice();
         if (confirmingAdult) h += '<div class="notice">These apps are meant for adults only. Turn them on only if you are 18 or older.</div>'
             + '<div class="btns" style="margin-top:16px"><button class="btn primary grow f" data-k="adultyes" data-act="adultyes" data-default>I am 18 or older</button><button class="btn f" data-k="adultno" data-act="adultno">Cancel</button></div>';
@@ -1905,6 +1941,7 @@
 
     function toggle(key) {
         if (key === 'relay') { toggleRelay(); return; }
+        if (key.indexOf('allow:') === 0) { toggleAllow(key.slice(6)); return; }
         if (key === 'installer') { toggleInstaller(); return; }
         if (key === 'browser') { toggleBrowser(); return; }
         if (key === 'showAdult' && !settings.showAdult) { confirmingAdult = true; renderSheet(true); return; }

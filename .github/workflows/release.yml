@@ -16,30 +16,16 @@ jobs:
         with:
           node-version: '20'
       - name: Tests
-        run: |
-          node test/config.test.js
-          node test/run.js
-          node test/relay.test.js
-          node test/relay-settings.test.js
-          node test/sign.test.js
-          node --expose-gc test/stream-sign.test.js
-          node test/bundle.test.js
-          node test/catalog.test.js
-          node test/repos.test.js
-          node test/sources.test.js
-          node test/sdb-errors.test.js
-          node test/manifest.test.js
-          node test/refusal.test.js
-          node test/certs.test.js
-          node test/install.test.js
-          node test/certlevel.test.js
-          node test/sdbhosts.test.js
-          node test/sdb-loopback.test.js
-          node test/sdb-tunnel.test.js
-          node test/wascmd.test.js
-          node test/selfupdate.test.js
-          node test/pkgid.test.js
-          node test/rename.test.js
+        run: scripts/run-tests.sh
+      # The TV's own Node (4.4.3 on a 2019 set): the build runs on Node 20, so switch back after.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '4.4.3'
+      - name: Tests on the TV's Node (4.4.3)
+        run: scripts/run-tests.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
       - name: Version in config.xml must match the tag
         run: |
           tag="${GITHUB_REF_NAME#v}"
