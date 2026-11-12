@@ -1624,7 +1624,7 @@
         var certList = (ready && ready.certificates ? ready.certificates.map(function (c) { return c.name + (c.level === 'partner' || c.level === 'public' ? ' (' + levelName(c.level) + ')' : ''); }) : (ready && ready.certNames) || []);
         var certText = !armed() ? 'not yet' : ready.certCount > 1 ? ready.certCount + ' handed over: ' + certList.join(', ') : 'handed over' + (certList[0] ? ': ' + certList[0] : '');
         var certs = certsBlock();
-        h += certs + sourcesBlock() + '<div class="table kv">' + (certs ? '' : '<div class="trow"><span class="k">Signing certificate' + (ready && ready.certCount > 1 ? 's' : '') + '</span><span class="v">' + esc(certText) + '</span></div>')
+        h += certs + sourcesBlock() + '<div class="table kv f stop" tabindex="0" data-k="stop:info">' + (certs ? '' : '<div class="trow"><span class="k">Signing certificate' + (ready && ready.certCount > 1 ? 's' : '') + '</span><span class="v">' + esc(certText) + '</span></div>')
             + '<div class="trow"><span class="k">Catalog</span><span class="v">' + esc(catalogApps.length + ' apps, signature checked' + (catalogNewer ? ' · format version ' + catalogNewer + ', newer than this TV-Store knows: update TV-Store' : '')) + '</span></div>'
             + '<div class="trow"><span class="k">TV-Store</span><span class="v">v' + VERSION + (ready && ready.node ? ' · Node ' + esc(ready.node) : '') + '</span></div>'
             + '<div class="trow"><span class="k">This TV</span><span class="v">' + esc((device ? device + ' · ' : '') + (tvTizen ? 'Tizen ' + tvTizen : 'Tizen version not known')) + '</span></div></div>';
@@ -1636,7 +1636,10 @@
             var u = 'http://' + ready.ownIp + ':8077/upload';
             h += '<div class="qrrow">' + qr(u, 120) + '<div><b>Install your own app</b><span>Scan with your phone, or open <span class="mono">' + esc(u) + '</span> on a computer in the same network, and send a .wgt or .tpk. TV-Store then asks here whether to install it.</span></div></div>';
         }
-        return h + logBlock() + '</div>';
+        // The table and the QR codes take the focus too, one after another, so the way down to the
+        // end of Settings always shows where the remote is.
+        var stops = 0;
+        return (h + logBlock()).replace(/<div class="qrrow">/g, function () { return '<div class="qrrow f stop" tabindex="0" data-k="stop:qr' + (stops++) + '">'; }) + '</div>';
     }
 
     // ---- actions ----------------------------------------------------------------------------------
