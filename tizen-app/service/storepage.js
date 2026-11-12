@@ -22,10 +22,14 @@ function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').repla
 var CSS = ''
     + ':root{color-scheme:dark}*{box-sizing:border-box}'
     + 'body{margin:0;background:#0D1B2A;color:#F4F7FB;font-family:-apple-system,"Segoe UI",Roboto,Arial,sans-serif;font-size:16px;line-height:1.45}'
-    + '.wrap{max-width:1100px;margin:0 auto;padding:20px 16px 80px}'
-    + 'h1{font-size:24px;margin:0}.sub{color:#9FB0C6;font-size:14px;margin-top:4px}'
-    + '.top{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px}'
-    + '.live{font-size:14px;padding:6px 12px;border-radius:999px;background:rgba(48,196,110,.14);color:#30C46E;white-space:nowrap}.live.off{background:rgba(240,160,32,.14);color:#F0A020}'
+    + '.wrap{max-width:1100px;margin:0 auto;padding:16px 16px 80px}'
+    // The TV's card: its name, whether TV-Store is open on it, and three numbers.
+    + '.hero{border-radius:20px;padding:18px;margin-bottom:14px;background:#142638;background:radial-gradient(120% 140% at 100% 0,rgba(45,212,191,.26),rgba(45,212,191,0) 55%),linear-gradient(160deg,#1B3A55,#11263A)}'
+    + '.lbl{color:#9FB0C6;font-size:12px;letter-spacing:.08em;text-transform:uppercase}'
+    + 'h1{font-size:26px;line-height:1.15;margin:2px 0 4px;word-wrap:break-word}.sub{color:#9FB0C6;font-size:13px;margin-top:4px}'
+    + '.live{font-size:14px;font-weight:700;color:#30C46E}.live:before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:#30C46E;margin-right:7px}.live.off{color:#F0A020}.live.off:before{background:#F0A020}'
+    + '.stats{display:flex;margin:14px -4px 0}.stats:empty{display:none}.stat{flex:1;min-width:0;margin:0 4px;background:rgba(5,12,20,.35);border-radius:12px;padding:8px 10px;font-size:12px;color:#9FB0C6}.stat b{display:block;font-size:17px;color:#F4F7FB;white-space:nowrap}'
+    + '@media(min-width:700px){.hero{display:flex;align-items:center;justify-content:space-between;padding:22px 24px}.hero>div:first-child{min-width:0;padding-right:20px}.stats{flex:0 0 420px;margin-top:0}}'
     + '.card{background:#142638;border-radius:16px;padding:16px;margin-bottom:14px}'
     + '.notice{border-radius:12px;padding:12px 14px;margin-bottom:14px;background:rgba(240,160,32,.14);color:#F0A020}.notice.bad{background:rgba(255,107,94,.14);color:#FF6B5E}.notice.info{background:rgba(244,247,251,.06);color:#9FB0C6}'
     + '.bar{height:8px;border-radius:4px;background:rgba(244,247,251,.14);overflow:hidden;margin-top:10px}.bar i{display:block;height:100%;background:#2DD4BF;transition:width .4s}.bar.bad i{background:#FF6B5E}'
@@ -33,16 +37,22 @@ var CSS = ''
     + 'input{font:inherit}input[type=search],.fld input{width:100%;padding:12px 14px;border-radius:12px;border:2px solid transparent;background:rgba(244,247,251,.08);color:#F4F7FB}input[type=search]{flex:1 1 240px;width:auto;min-width:0}'
     + '.fld input:focus,input[type=search]:focus{outline:none;border-color:#2DD4BF}'
     + '.btn{border:0;border-radius:12px;padding:10px 16px;font:inherit;font-weight:700;background:#2DD4BF;color:#042F2E;cursor:pointer;text-decoration:none;display:inline-block;text-align:center}.btn.sec{background:rgba(244,247,251,.12);color:#F4F7FB}.btn[disabled]{background:rgba(244,247,251,.08);color:#9FB0C6;cursor:default}'
-    + '.chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin-bottom:14px;scrollbar-width:none}.chips::-webkit-scrollbar{display:none}@media (hover:hover) and (min-width:700px){.chips{flex-wrap:wrap;overflow:visible}}'
+    + '.chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;scrollbar-width:none}.chips::-webkit-scrollbar{display:none}@media (hover:hover) and (min-width:700px){.chips{flex-wrap:wrap;overflow:visible}}'
     + '.chip{flex:none;border:0;border-radius:999px;padding:7px 14px;font:inherit;font-size:14px;background:rgba(244,247,251,.08);color:#9FB0C6;cursor:pointer}.chip.on{background:#F4F7FB;color:#0D1B2A}'
-    + '.grid{display:flex;flex-wrap:wrap;margin:0 -7px}.app{width:100%;padding:0 7px}@media(min-width:640px){.app{width:50%}}@media(min-width:960px){.app{width:33.333%}}'
-    + '.app .card{display:flex;flex-direction:column;height:calc(100% - 14px)}.app .card.hl{box-shadow:inset 0 0 0 2px #2DD4BF}'
-    + '.hd{display:flex;align-items:center;gap:12px}.nm{font-weight:700;font-size:17px}.mt{color:#9FB0C6;font-size:13px}'
-    + '.tile{position:relative;flex:none;width:52px;height:52px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:22px;overflow:hidden}'
+    // A section (Updates, On the TV, a category) is a heading and a list; an app is one row in it:
+    // one card of rows on a phone, a card per row in two or three columns on a wider screen.
+    + '.sh{display:flex;align-items:center;min-height:32px;margin:16px 0 8px;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#9FB0C6}.sh .pb{margin-left:auto;text-transform:none;letter-spacing:0}'
+    + '.list{background:#142638;border-radius:16px;overflow:hidden}'
+    + '.r{padding:10px 12px;border-bottom:1px solid rgba(244,247,251,.09)}.r:last-child{border-bottom:0}.r.hl{box-shadow:inset 0 0 0 2px #2DD4BF}'
+    + '.rm{display:flex;align-items:center;cursor:pointer}.r.open .rm{align-items:flex-start}.rb{flex:1;min-width:0;margin:0 12px}'
+    + '.nm{font-weight:700;font-size:16px}.mt{color:#9FB0C6;font-size:13px}.ds{color:#8497AE;font-size:13px}'
+    + '.rb .nm,.rb .mt,.ds{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.r.open .rb .nm,.r.open .rb .mt,.r.open .ds{white-space:normal}'
+    + '.tile{position:relative;flex:none;width:44px;height:44px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:19px;overflow:hidden}'
     + '.tile img{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover}'
-    + '.desc{color:#9FB0C6;font-size:14px;margin:10px 0;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}'
-    + '.badges{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.b{font-size:12px;padding:3px 8px;border-radius:999px;background:rgba(244,247,251,.08);color:#9FB0C6}.b.ok{background:rgba(48,196,110,.14);color:#30C46E}.b.warn{background:rgba(240,160,32,.14);color:#F0A020}'
-    + '.act{margin-top:auto;padding-top:10px}.act .why{color:#9FB0C6;font-size:13px;margin-top:6px}.act .btn{width:100%}.act .btn+.btn{margin-top:8px}'
+    + '.pb{flex:none;border:0;border-radius:999px;padding:7px 14px;font:inherit;font-size:13px;font-weight:800;background:rgba(45,212,191,.14);color:#2DD4BF;cursor:pointer;white-space:nowrap}.pb.fill{background:#2DD4BF;color:#042F2E}.pb.done{background:none;color:#30C46E;padding-right:2px;cursor:default}.pb[disabled]{background:rgba(244,247,251,.08);color:#9FB0C6;cursor:default}'
+    + '.why{color:#9FB0C6;font-size:13px;margin:6px 0 0 56px}.more{display:none;margin:8px 0 0 56px}.r.open .more{display:block}'
+    + '.b{display:inline-block;font-size:12px;padding:3px 8px;margin:0 6px 4px 0;border-radius:999px;background:rgba(244,247,251,.08);color:#9FB0C6}.b.ok{background:rgba(48,196,110,.14);color:#30C46E}.b.warn{background:rgba(240,160,32,.14);color:#F0A020}.nm .b{margin:0 0 0 6px;font-weight:400;vertical-align:1px}'
+    + '@media(min-width:640px){.list{display:flex;flex-wrap:wrap;align-items:flex-start;background:none;border-radius:0;overflow:visible;margin:-5px}.r,.r:last-child{width:calc(50% - 10px);margin:5px;background:#142638;border-radius:14px;border-bottom:0}}@media(min-width:960px){.r,.r:last-child{width:calc(33.333% - 10px)}}'
     + '.empty{color:#9FB0C6;text-align:center;padding:40px 0}'
     + '.veil{position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(5,12,20,.72);display:none;align-items:flex-start;justify-content:center;overflow-y:auto;padding:24px 16px}.veil.on{display:flex}'
     + '.form{width:100%;max-width:560px;background:#142638;border-radius:18px;padding:20px}.form h2{margin:0 0 4px;font-size:20px}'
@@ -53,9 +63,10 @@ var CSS = ''
 // The page's own script, sent as source. Polls /store/state every 2 s and renders it.
 /* eslint-disable */
 function client() {
-    var S = null, cat = 'all', q = '', busy = {}, sent = {}, seen = {}, form = null, wanted = null;
+    var S = null, cat = 'all', q = '', busy = {}, sent = {}, seen = {}, form = null, wanted = null, open = {}, drawn = null;
     var STEPS = ['Downloading', 'Checking and signing', 'Installing on the TV', 'Ready to open'];
     var $ = function (id) { return document.getElementById(id); };
+    var NAME = $('title').textContent;   // the TV's address, until the state says its model
     function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
     function toast(t) { var e = $('toast'); e.textContent = t; e.className = 'toast on'; clearTimeout(toast.t); toast.t = setTimeout(function () { e.className = 'toast'; }, 6000); }
     function ago(ms) { var s = Math.round(ms / 1000); return s < 90 ? s + ' s' : Math.round(s / 60) + ' min'; }
@@ -74,29 +85,49 @@ function client() {
         return '<div class="tile" style="background:' + esc(c ? c.color : '#868E96') + '">' + esc(m ? m[0].toUpperCase() : '?')
             + (a.icon ? '<img alt="" src="/icon/' + esc(a.icon) + '" onerror="this.parentNode.removeChild(this)">' : '') + '</div>';
     }
+    // What the row's second line says: the version, an update as from and to, who made it.
+    function meta(a) {
+        var p = [];
+        if (a.installed !== null && a.update) p.push((a.installed ? 'v' + a.installed + ' to ' : 'Update to ') + 'v' + a.latest);
+        else if (a.installed !== null) p.push(a.installed ? 'v' + a.installed : 'Installed');
+        else if (a.latest) p.push('v' + a.latest);
+        if (a.author) p.push('by ' + a.author);
+        return p.join(' · ');
+    }
+    // The rest, shown when the row is tapped open.
     function badges(a) {
         var b = '';
-        if (a.installed !== null) b += a.update ? '<span class="b warn">Update to v' + esc(a.latest) + '</span>' : '<span class="b ok">Installed' + (a.installed ? ' · v' + esc(a.installed) : '') + '</span>';
-        else if (a.latest) b += '<span class="b">v' + esc(a.latest) + '</span>';
         if (a.source) b += '<span class="b">' + esc(a.source) + '</span>';
         if (a.variant) b += '<span class="b">' + esc(a.variant) + '</span>';
         if (a.settings) b += '<span class="b">' + (a.saved && a.saved.length ? 'Settings saved on the TV' : 'Has settings') + '</span>';
-        if (a.adult) b += '<span class="b warn">18+</span>';
-        if (a.root) b += '<span class="b warn">root</span>';
         if (a.partner) b += '<span class="b">Partner certificate</span>';
         return b;
     }
+    function pending(a) { var j = S.state.job; return !!((j && j.running && j.key === a.key) || busy[a.key]); }
     function action(a) {
         var j = S.state.job, mine = j && j.running && j.key === a.key;
-        if (mine) return '<button class="btn" disabled>' + (j.update ? 'Updating' : 'Installing') + ' on the TV…</button>';
-        if (busy[a.key]) return '<button class="btn" disabled>Sent to the TV…</button>';
+        if (mine) return '<button class="pb" disabled>' + (j.update ? 'Updating' : 'Installing') + '…</button>';
+        if (busy[a.key]) return '<button class="pb" disabled>Sent to the TV…</button>';
         var current = a.installed !== null && !a.update;
         // An app with settings that is on the TV and current: its settings can be changed, which installs it again.
-        if (current && a.settings && !a.why) return '<button class="btn sec" data-form="' + esc(a.key) + '"' + (live() ? '' : ' disabled') + '>Change its settings</button>';
-        if (current) return a.why ? '<div class="why">' + esc(a.why) + '</div>' : '';
+        if (current && a.settings && !a.why) return '<button class="pb" data-form="' + esc(a.key) + '"' + (live() ? '' : ' disabled') + '>Settings</button>';
+        if (current) return '<span class="pb done">✓ On the TV</span>';
         var label = a.update ? 'Update' : 'Install';
-        if (!a.can) return '<button class="btn" disabled>' + label + '</button><div class="why">' + esc(a.why) + '</div>';
-        return '<button class="btn" ' + (a.settings ? 'data-form' : 'data-key') + '="' + esc(a.key) + '"' + (live() ? '' : ' disabled') + '>' + label + (a.settings ? '…' : '') + '</button>';
+        if (!a.can) return '<button class="pb" disabled>' + label + '</button>';
+        return '<button class="pb' + (a.update ? ' fill' : '') + '" ' + (a.settings ? 'data-form' : 'data-key') + '="' + esc(a.key) + '"' + (live() ? '' : ' disabled') + '>' + label + (a.settings ? '…' : '') + '</button>';
+    }
+    // One app: its tile, name, version and one line of its description, the button on the right. A tap
+    // on the row opens it: the whole description and the rest of what is known about it.
+    function row(a) {
+        var current = a.installed !== null && !a.update, more = badges(a);
+        return '<div class="r' + (wanted === a.key ? ' hl' : '') + (open[a.key] ? ' open' : '') + '" id="app-' + esc(a.key) + '"><div class="rm" data-row="' + esc(a.key) + '">' + tile(a)
+            + '<div class="rb"><div class="nm">' + esc(a.name) + (a.adult ? '<span class="b warn">18+</span>' : '') + (a.root ? '<span class="b warn">root</span>' : '') + '</div><div class="mt">' + esc(meta(a)) + '</div>'
+            + (a.desc ? '<div class="ds">' + esc(a.desc) + '</div>' : '') + '</div>' + action(a) + '</div>'
+            + (a.why && !pending(a) && (current || !a.can) ? '<div class="why">' + esc(a.why) + '</div>' : '')
+            + (more ? '<div class="more">' + more + '</div>' : '') + '</div>';
+    }
+    function section(title, items, extra) {
+        return items.length ? '<div class="sh"><span>' + esc(title) + ' · ' + items.length + '</span>' + (extra || '') + '</div><div class="list">' + items.map(row).join('') + '</div>' : '';
     }
     function jobHtml(j) {
         var pct = j.error || j.ok ? 100 : Math.min(100, Math.round(j.step / 4 * 100 + 8));
@@ -110,16 +141,19 @@ function client() {
     function render() {
         if (!S) return;
         var st = S.state || {}, tv = st.tv || {}, list = apps();
-        $('title').textContent = 'TV-Store' + (tv.model ? ' on ' + tv.model : '');
-        var sub = [];
-        if (tv.tizen) sub.push('Tizen ' + tv.tizen);
-        if (tv.version) sub.push('TV-Store v' + tv.version);
-        if (tv.certs && tv.certs.length) sub.push('signs with ' + tv.certs.map(function (c) { return c.name + (c.level ? ' (' + c.level + ')' : ''); }).join(', '));
-        if (tv.free) sub.push(gb(tv.free) + ' free');
-        $('sub').textContent = sub.join(' · ');
+        $('title').textContent = tv.model || NAME;
+        $('sub').textContent = tv.certs && tv.certs.length ? 'Signs with ' + tv.certs.map(function (c) { return c.name + (c.level ? ' (' + c.level + ')' : ''); }).join(', ') : '';
+        var onTv = list.filter(function (a) { return a.installed !== null; }).length, stats = '';
+        function stat(big, small) { stats += '<div class="stat"><b>' + esc(big) + '</b>' + esc(small) + '</div>'; }
+        if (S.state) {
+            stat(onTv + (onTv === 1 ? ' app' : ' apps'), 'on the TV');
+            if (tv.free) stat(gb(tv.free), 'free');
+            if (tv.tizen) stat('Tizen ' + tv.tizen, tv.version ? 'TV-Store v' + tv.version : '');
+        }
+        $('stats').innerHTML = stats;
         var l = $('live');
         if (!S.enabled) { l.className = 'live off'; l.textContent = 'Off in TV-Store’s Settings'; }
-        else if (S.live) { l.className = 'live'; l.textContent = 'TV-Store is open on the TV'; }
+        else if (S.live) { l.className = 'live'; l.textContent = 'TV-Store is open, ready to install'; }
         else { l.className = 'live off'; l.textContent = 'TV-Store is not open on the TV'; }
         var n = '';
         if (!S.enabled) n = '<div class="notice">Installing from a browser is off. Turn on “Install from a browser” in TV-Store’s Settings on the TV.</div>';
@@ -128,24 +162,34 @@ function client() {
         else if (!tv.armed) n = '<div class="notice">TV-Store is not armed yet: open this TV in Apps2Samsung on a phone or PC and press Arm TV-Store once.</div>';
         $('notice').innerHTML = n;
         $('job').innerHTML = st.job ? jobHtml(st.job) : '';
-        var u = $('updall');
-        if (!S.state) { $('grid').innerHTML = ''; $('chips').innerHTML = ''; u.style.display = 'none'; return; }
-        var ups = list.filter(function (a) { return a.update && a.can && !a.settings; });
-        u.style.display = ups.length ? '' : 'none'; u.textContent = 'Update all (' + ups.length + ')'; u.disabled = !live() || !!busy['*all'];
+        if (!S.state) { $('apps').innerHTML = drawn = ''; $('chips').innerHTML = ''; return; }
         var cats = (st.categories || []).filter(function (c) { return list.some(function (a) { return a.cat === c.id; }); });
         if (cat !== 'all' && cat !== 'tv' && !cats.some(function (c) { return c.id === cat; })) cat = 'all';
         $('chips').innerHTML = '<button class="chip' + (cat === 'all' ? ' on' : '') + '" data-cat="all">All</button>'
-            + (list.some(function (a) { return a.installed !== null; }) ? '<button class="chip' + (cat === 'tv' ? ' on' : '') + '" data-cat="tv">On the TV</button>' : '')
+            + (onTv ? '<button class="chip' + (cat === 'tv' ? ' on' : '') + '" data-cat="tv">On the TV</button>' : '')
             + cats.map(function (c) { return '<button class="chip' + (cat === c.id ? ' on' : '') + '" data-cat="' + esc(c.id) + '">' + esc(c.name) + '</button>'; }).join('');
-        var ql = q.toLowerCase(), shown = list.filter(function (a) {
-            if (cat === 'tv' && a.installed === null) return false;
-            if (cat !== 'all' && cat !== 'tv' && a.cat !== cat) return false;
-            return !ql || (a.name + ' ' + (a.author || '') + ' ' + (a.desc || '')).toLowerCase().indexOf(ql) >= 0;
-        });
-        $('grid').innerHTML = shown.length ? shown.map(function (a) {
-            return '<div class="app" id="app-' + esc(a.key) + '"><div class="card' + (wanted === a.key ? ' hl' : '') + '"><div class="hd">' + tile(a) + '<div style="min-width:0"><div class="nm">' + esc(a.name) + '</div><div class="mt">' + esc(a.author ? 'by ' + a.author : '') + '</div></div></div>'
-                + '<div class="badges">' + badges(a) + '</div>' + (a.desc ? '<div class="desc">' + esc(a.desc) + '</div>' : '') + '<div class="act">' + action(a) + '</div></div></div>';
-        }).join('') : '<div class="empty">Nothing here.</div>';
+        var ql = q.toLowerCase(), h = '';
+        if (cat === 'all' && !ql) {
+            // Everything: what needs an update first, then what is on the TV, then the rest per category.
+            var ups = list.filter(function (a) { return a.update && a.can && !a.settings; });
+            h += section('Updates', list.filter(function (a) { return a.installed !== null && a.update; }),
+                ups.length ? '<button class="pb" id="updall"' + (live() && !busy['*all'] ? '' : ' disabled') + '>Update all (' + ups.length + ')</button>' : '');
+            h += section('On the TV', list.filter(function (a) { return a.installed !== null && !a.update; }));
+            var rest = list.filter(function (a) { return a.installed === null; });
+            cats.forEach(function (c) { h += section(c.name, rest.filter(function (a) { return a.cat === c.id; })); });
+            h += section('Other', rest.filter(function (a) { return !cats.some(function (c) { return c.id === a.cat; }); }));
+        } else {
+            // A category, On the TV or a search: one list.
+            var named = cats.filter(function (c) { return c.id === cat; })[0];
+            h = section(ql ? 'Found' : cat === 'tv' ? 'On the TV' : named ? named.name : 'Apps', list.filter(function (a) {
+                if (cat === 'tv' && a.installed === null) return false;
+                if (cat !== 'all' && cat !== 'tv' && a.cat !== cat) return false;
+                return !ql || (a.name + ' ' + (a.author || '') + ' ' + (a.desc || '')).toLowerCase().indexOf(ql) >= 0;
+            }));
+        }
+        h = h || '<div class="empty">Nothing here.</div>';
+        // Only when it changed: the poll comes every 2 s, and a redraw loads every icon again.
+        if (h !== drawn) { $('apps').innerHTML = h; drawn = h; }
     }
     // The settings form: one field per setting, saved ones said, never shown.
     function openForm(a, errors) {
@@ -182,7 +226,7 @@ function client() {
         if (!wanted || !S || !S.state) return;
         var a = app(wanted); if (!a) { wanted = null; return; }
         if (a.settings && live() && !busy[a.key] && (a.can || (a.installed !== null && !a.why))) { openForm(a); wanted = null; return; }
-        cat = 'all'; render();
+        cat = 'all'; open[a.key] = true; wanted = a.key; render();
         var el = $('app-' + a.key); if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center' });
         setTimeout(function () { wanted = null; render(); }, 4000);
         wanted = a.key;
@@ -224,7 +268,10 @@ function client() {
         var f = t.getAttribute('data-form'); if (f && !t.disabled) { var fa = app(f); if (fa) openForm(fa); return; }
         var k = t.getAttribute('data-key');
         if (k && !t.disabled) { var a = app(k); if (a) ask({ key: k }, k, a.name); return; }
-        if (t.id === 'updall' && !t.disabled) ask({ all: true }, '*all', 'the updates');
+        if (t.id === 'updall') { if (!t.disabled) ask({ all: true }, '*all', 'the updates'); return; }
+        // Anywhere else on a row: open or close it.
+        while (t && t.getAttribute && !t.getAttribute('data-row')) t = t.parentNode;
+        if (t && t.getAttribute) { var rk = t.getAttribute('data-row'); open[rk] = !open[rk]; render(); }
     });
     document.addEventListener('keydown', function (e) { if (!form) return; if (e.keyCode === 27) closeForm(); if (e.keyCode === 13 && e.target && e.target.getAttribute && e.target.getAttribute('data-field')) submitForm(); });
     $('q').addEventListener('input', function () { q = this.value.trim(); render(); });
@@ -232,13 +279,13 @@ function client() {
     poll();
 }
 
-// The page; ip names the TV in the title until the state says its model.
+// The page; ip names the TV in its card until the state says its model.
 function page(ip) {
     return '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TV-Store</title><style>' + CSS + '</style></head><body><div class="wrap">'
-        + '<div class="top"><div><h1 id="title">TV-Store</h1><div class="sub" id="sub">' + esc(ip || '') + '</div></div><span class="live off" id="live">Connecting…</span></div>'
+        + '<div class="hero"><div><div class="lbl">TV-Store on</div><h1 id="title">' + esc(ip || 'your TV') + '</h1><div class="live off" id="live">Connecting…</div><div class="sub" id="sub"></div></div><div class="stats" id="stats"></div></div>'
         + '<div id="notice"></div><div id="job"></div>'
-        + '<div class="tools"><input type="search" id="q" placeholder="Search apps" autocomplete="off"><button class="btn" id="updall" style="display:none">Update all</button><a class="btn sec" href="/upload">Send your own .wgt</a></div>'
-        + '<div class="chips" id="chips"></div><div class="grid" id="grid"></div></div><div class="veil" id="veil"></div><div class="toast" id="toast"></div>'
+        + '<div class="tools"><input type="search" id="q" placeholder="Search apps" autocomplete="off"><a class="btn sec" href="/upload">Send your own .wgt</a></div>'
+        + '<div class="chips" id="chips"></div><div id="apps"></div></div><div class="veil" id="veil"></div><div class="toast" id="toast"></div>'
         + '<script>(' + client.toString() + ')();</script></body></html>';
 }
 
