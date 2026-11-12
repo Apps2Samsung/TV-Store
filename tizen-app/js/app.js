@@ -374,7 +374,9 @@
         if (!tvDuid) return { cls: '', text: 'Lists ' + list.length + (list.length === 1 ? ' TV' : ' TVs') + '; this TV\'s id could not be read to compare' };
         var mine = tvDuid.toUpperCase();
         if (list.some(function (d) { return String(d).toUpperCase() === mine; })) return { cls: '', text: 'Covers this TV' };
-        return { cls: ' bad', text: 'Does not cover this TV (' + tvDuid + '), so it cannot install here' };
+        // No match says nothing: on many sets the id an app can read is not the one Samsung puts in
+        // a certificate (this said "does not cover" on a TV the certificate installed on fine).
+        return { cls: '', text: 'Made for ' + (list.length === 1 ? 'the TV with id ' + list[0] : list.length + ' TVs: ' + list.slice(0, 3).join(', ') + (list.length > 3 ? ', \u2026' : '')) };
     }
     function certsBlock() {
         var list = (ready && ready.certificates) || [];
@@ -552,7 +554,7 @@
     function logBlock() {
         var u = logUrl();
         if (!u) return '';
-        return '<div class="qrrow">' + qr(u, 150) + '<div><b>The TV-Store log</b><span>Scan with your phone, or open <span class="mono">' + esc(u) + '</span> on a computer in the same network. Attach it to a bug report.</span></div></div>';
+        return '<div class="qrrow">' + qr(u, 120) + '<div><b>The TV-Store log</b><span>Scan with your phone, or open <span class="mono">' + esc(u) + '</span> on a computer in the same network. Attach it to a bug report.</span></div></div>';
     }
 
     // ---- the service ------------------------------------------------------------------------------
@@ -1271,12 +1273,14 @@
             h += '<div class="notice row" style="margin:0 0 26px"><span>' + esc(selfText) + '</span><button class="btn f" data-k="dismissself" data-act="dismissself" data-v="' + esc(selfLatest) + '">Got it</button></div>';
 
         if (!hover || apps.indexOf(hover) < 0) hover = apps[0] || null;
+        // The Selected card stays put (with the greeting and the chips) and the rows scroll under it,
+        // so the description of the app under the remote always shows.
         if (!query) {
             h += '<div class="hero"><div class="greet"><h1>' + greeting() + '</h1><p>Everything here installs straight onto this TV. Pick an app, press OK, and it shows up in your Apps row in about a minute.</p></div>' + selCard(hover) + '</div>';
             var cats = CATEGORY_ORDER.filter(function (c) { return apps.some(function (x) { return x.category === c; }); });
             h += '<div class="chips"><span class="chip f' + (chip === 'all' ? ' on' : '') + '" tabindex="0" data-k="chip:all" data-chip="all">All</span>'
                 + cats.map(function (c) { return '<span class="chip f' + (chip === c ? ' on' : '') + '" tabindex="0" data-k="chip:' + c + '" data-chip="' + c + '">' + esc(catName(c)) + '</span>'; }).join('') + '</div>';
-            h += srcChips();
+            h += srcChips() + '<div class="rows vscroll" id="rows">';
             if (chip === 'all') {
                 var pinnedNow = pinned(), vetro = vetroOnTv();
                 if (pinnedNow.length || vetro) h += '<div class="sect"><div class="shead"><span class="t">Pinned</span><span class="n">' + (pinnedNow.length + (vetro ? 1 : 0)) + '</span>'
@@ -1293,6 +1297,8 @@
             // Name, description or developer (the heads match the author too since Apps2Samsung #906).
             var q = query.toLowerCase();
             var found = apps.filter(function (x) { return x.name.toLowerCase().indexOf(q) >= 0 || (x.description || '').toLowerCase().indexOf(q) >= 0 || (x.author || '').toLowerCase().indexOf(q) >= 0; });
+            if (found.length && found.indexOf(hover) < 0) hover = found[0];
+            h += '<div class="hero"><div class="greet"><h1>Search</h1><p>' + esc(found.length ? found.length + (found.length === 1 ? ' app matches' : ' apps match') + ' \u201c' + query + '\u201d, by name, description or developer.' : 'Nothing matches \u201c' + query + '\u201d.') + '</p></div>' + selCard(found.length ? hover : null) + '</div><div class="rows vscroll" id="rows">';
             // Apps the catalog took out (#87) answer too, after the results, without an install.
             var gq = goneMatches(q);
             h += found.length ? section('search', 'Results for “' + query + '”', found, true, false)
@@ -1301,7 +1307,7 @@
                 + '<div class="strip"><div class="cards">' + gq.map(goneCard).join('') + '</div></div></div>';
         }
         if (!apps.length) h += srcFilter !== 'all' && !query ? '<div class="empty">' + esc(sourceName(srcFilter) + ' has no apps to show here.') + '</div>' : '<div class="empty">No apps to show. The gear at the top has the Settings.</div>';
-        pageEl.innerHTML = h;
+        pageEl.innerHTML = h + '</div>';
     }
 
     function goneCard(g) {
@@ -1348,7 +1354,7 @@
         var gone = goneOnTv();
         if (tvSel && tvSel.gone) tvSel = gone.filter(function (g) { return g.key === tvSel.key; })[0] || null;
         // TV-Store itself updates from a head (#41); an app that needs a certificate level this TV lacks waits too (#50).
-        var doable = ups.filter(function (x) { return !isSelf(x) && !signPlan(x.variants[state(x).variant]).missing; });
+        var doable = ups.filter(function (x) { var s = state(x), uv = x.variants[s.variant]; return !isSelf(x) && !signPlan(uv).missing && !settingsBlock(x, uv, s); });
         if (!tvSel || (!tvSel.gone && all.indexOf(tvSel) < 0)) tvSel = ups[0] || ok[0] || gone[0] || null;
         var h = '<div class="tvtop"><div><h1>Your apps</h1><p>' + (all.length
             ? all.length + (all.length === 1 ? ' catalog app is' : ' catalog apps are') + ' on this TV. ' + (ups.length ? (ups.length === 1 ? 'One has' : ups.length + ' have') + ' a newer version in the catalog.' : 'All up to date.')
@@ -1356,7 +1362,7 @@
         if (doable.length && armed()) h += '<button class="btn primary f" data-k="updall" data-act="updall">' + (doable.length === 1 ? 'Update ' + esc(doable[0].name) : doable.length === 2 ? 'Update both' : 'Update all ' + doable.length) + '</button>';
         h += '</div>';
         if (!all.length && !gone.length) { pageEl.innerHTML = h + '<div class="empty">Install something from the store and it shows up here, with its updates.</div>'; return; }
-        h += '<div class="tvcols"><div class="tvlist">';
+        h += '<div class="tvcols"><div class="tvlist vscroll">';
         if (ups.length) h += '<div class="glabel warn">Updates<span class="n">' + ups.length + '</span></div><div class="group">' + ups.map(tvRow).join('') + '</div>';
         if (ok.length) h += '<div class="glabel">Up to date<span class="n">' + ok.length + '</span></div><div class="group">' + ok.map(tvRow).join('') + '</div>';
         if (gone.length) h += '<div class="glabel warn">Removed from the catalog<span class="n">' + gone.length + '</span></div><div class="group">' + gone.map(goneRow).join('') + '</div>';
@@ -1374,7 +1380,7 @@
             + '<div class="trow"><span class="k">' + (x.source === 'official' ? 'In the catalog' : 'In ' + esc(x.sourceName)) + '</span><span class="v"' + (st.update ? ' style="color:#F0A020"' : '') + '>v' + esc(st.latest || v.version) + '</span></div>'
             + (x.variants.length > 1 ? '<div class="trow"><span class="k">Variant</span><span class="v">' + esc(st.known ? v.label + (st.byPin ? ' · pinned' : '') : 'Not known: the builds share one package') + '</span></div>' : '') + '</div>'
             + '<div class="btns" style="margin-top:18px">';
-        if (st.update && st.known && !v.needsHead && fits(v) && (!isSelf(x) || selfCan(x)) && armed() && !signPlan(v).missing) h += '<button class="btn primary grow f" data-k="tvupd" data-act="tvupd">Update</button>';
+        if (st.update && st.known && !v.needsHead && fits(v) && (!isSelf(x) || selfCan(x)) && armed() && !signPlan(v).missing && !settingsBlock(x, v, st)) h += '<button class="btn primary grow f" data-k="tvupd" data-act="tvupd">Update</button>';
         else h += '<button class="btn grow f" data-k="tvsheet" data-act="tvsheet">Details</button>';
         if (v.appId) h += '<button class="btn f" data-k="tvopen" data-act="tvopen">Open</button>';
         // Pin (#102): the build on the TV goes to the Pinned row on the home screen too.
@@ -1384,6 +1390,7 @@
         if (mvp && !mvp.done) h += '<div class="hint" style="text-align:left">' + esc(x.name + ' moved to ' + (mvp.source ? '\u2018' + mvp.source.name + '\u2019' : mvp.domain) + '. Open Details to keep getting its updates.') + '</div>';
         else if (st.update && isSelf(x)) h += '<div class="hint" style="text-align:left">' + esc(selfCan(x) ? SELF_TRY : SELF_HOW) + '</div>';
         else if (st.update && v.needsHead) h += '<div class="hint" style="text-align:left">' + esc(x.name + ' ' + v.needsHead + ': update it with Apps2Samsung on a phone or PC.') + '</div>';
+        else if (st.update && settingsBlock(x, v, st)) h += '<div class="hint" style="text-align:left">' + esc(settingsBlock(x, v, st) + ' Open Details for how to fill them in.') + '</div>';
         else if (!st.known && x.variants.length > 1) h += '<div class="hint" style="text-align:left">' + esc('TV-Store cannot tell which build of ' + x.name + ' this is: the builds share one package. Open Details, pick your build and pin it; the pinned build is the one that gets updated.') + '</div>';
         return h + '</div>';
     }
@@ -1479,7 +1486,7 @@
         if (x.source !== 'official') h += '<div class="notice info">' + esc('From ' + x.sourceName + ', an independent repository you added. Its signature says the files come from its publisher; Apps2Samsung has not reviewed them.') + '</div>';
         var can = !v.needsHead && fits(v) && !me && armed() && !plan.missing && !setBlock && !(job && job.running);
         h += '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="install" data-act="install"' + (can ? (x.variants.length > 1 ? '' : ' data-default') : ' disabled') + '>'
-            + esc(me ? (st.update ? 'Update' : 'Reinstall') + ' from a phone or PC' : !fits(v) ? 'Needs Tizen ' + v.tizen + ' or newer' : v.needsHead ? 'Install from a phone or PC' : setBlock ? 'Fill in its settings on a phone or PC' : plan.missing ? 'Needs a ' + levelName(plan.level) + ' certificate' : job && job.running ? 'Another install is running' : label) + '</button>';
+            + esc(me ? (st.update ? 'Update' : 'Reinstall') + ' from a phone or PC' : !fits(v) ? 'Needs Tizen ' + v.tizen + ' or newer' : v.needsHead ? 'Install from a phone or PC' : setBlock ? 'Fill in its settings first' : plan.missing ? 'Needs a ' + levelName(plan.level) + ' certificate' : job && job.running ? 'Another install is running' : label) + '</button>';
         if (st.installed && x.variants[st.variant].appId) h += '<button class="btn f" data-k="open" data-act="open">Open</button>';
         // Pin this build to the top of the store (#29); for a one-build app the button pins the app.
         h += '<button class="btn f" data-k="pin" data-act="pin">' + (isPinned(x, sheet.v) ? 'Unpin' : 'Pin') + '</button>';
@@ -1808,7 +1815,9 @@
         if (!v.upload && opts && opts.replaceOther) { req.replaceOther = true; job.replaceOther = true; }
         // Sign with (#50): the choice made on the TV; the service takes the catalog's and the manifest's word otherwise.
         if (certChoiceOf(v)) req.certLevel = certChoiceOf(v);
-        if (isSelf(x)) { req.selfUpdate = true; req.fromVersion = VERSION; req.toVersion = v.version || ''; }
+        // TV-Store's own package sent in by hand (#30) is a self-update as well, under the same switch.
+        var ownPkg = (selfInfo() || {}).packageId;
+        if (isSelf(x) || (v.upload && settings.selfUpdate && ownPkg && v.packageId === ownPkg)) { req.selfUpdate = true; req.fromVersion = VERSION; req.toVersion = v.version || ''; }
         // Download, sign and install in one call; a slow set with a big package needs more than the
         // usual 3 min, and while wascmd runs (#57) the service answers nothing at all for up to 5 min.
         xhr('POST', '/install', req, function (err, res) {
@@ -2010,7 +2019,10 @@
             if (!box) return;
             var br = box.getBoundingClientRect(), r = el.getBoundingClientRect(), m = 20;
             if (box === pageEl && !closest(el, 'sect') && !closest(el, 'group') && !closest(el, 'panel')) { box.scrollTop = 0; return; }
-            if (r.top < br.top + m) box.scrollTop -= (br.top + m - r.top);
+            // A card in the first line of its section brings the section's heading along.
+            var sect = box !== pageEl && closest(el, 'sect'), top = r.top;
+            if (sect) { var sr2 = sect.getBoundingClientRect(); if (r.top - sr2.top < 90) top = sr2.top + m - 6; }
+            if (top < br.top + m) box.scrollTop -= (br.top + m - top);
             else if (r.bottom > br.bottom - m) box.scrollTop += (r.bottom - br.bottom + m);
         });
     }
@@ -2040,7 +2052,10 @@
             var score = Math.max(main, 0) + cross * (dir === 'left' || dir === 'right' ? 3 : 0.6);
             if (score < bestScore) { bestScore = score; best = el; }
         });
-        if (best) focus(best);
+        if (best) return focus(best);
+        // Nothing left to move to: what follows may be text only (the tables and QR codes at the end
+        // of Settings), so the list itself scrolls on.
+        if (dir === 'down' || dir === 'up') { var box = closest(cur, 'vscroll'); if (box) box.scrollTop += dir === 'down' ? 260 : -260; }
     }
 
     function back() {
