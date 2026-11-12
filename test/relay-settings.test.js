@@ -12,6 +12,9 @@ var fake = require('./fake-sdbd.js');
 function fail(m) { stop(); console.error('FAIL: ' + m); process.exit(1); }
 var SDB = 26197, RELAY = 26198, RELAY2 = 26199;
 var dir = path.join(os.tmpdir(), 'a2s-relay-' + process.pid + '-' + Date.now()); fs.mkdirSync(dir);
+// Off by choice, as a relay file from before 0.3.28 says: else the relay turns itself on at start,
+// since the fake sdbd takes loopback (test/relay-default.test.js has that).
+fs.writeFileSync(path.join(dir, '.a2s-relay.json'), JSON.stringify({ enabled: false }));
 var child = null, err = '', handle = null;
 var WD = setTimeout(function () { fail('watchdog (30 s)' + (err ? '\n' + err : '')); }, 30000);
 function stop() { clearTimeout(WD); if (child) child.kill(); if (handle && handle.server) try { handle.server.close(); } catch (e) {} }
