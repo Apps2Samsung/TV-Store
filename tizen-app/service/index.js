@@ -1156,6 +1156,7 @@ function withCatalog(cb, fresh) {
         catch (e) { log('catalog: ' + e.message); return done(e); }
         cat.at = Date.now(); CATALOG = cat;
         log('catalog: signature ok, generated ' + cat.catalog.generatedAt + ', ' + Object.keys(cat.index).length + ' files, ' + Object.keys(cat.icons).length + ' icons');
+        if (cat.newer) log('catalog: format version ' + cat.newer + ', this TV-Store knows ' + catalogTrust.KNOWN_SCHEMA + ': update TV-Store');
         cat.id = 'official'; cat.label = 'the signed catalog';
         pruneIcons();
         done(null, cat);
