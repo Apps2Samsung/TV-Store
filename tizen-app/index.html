@@ -45,7 +45,10 @@
   .state.mute{background:rgba(244,247,251,.14);color:#9FB0C6}
 
   /* the page under the header scrolls vertically, with the focus */
-  .page{position:relative;flex:1;min-height:0;overflow:hidden;margin:16px -16px 0;padding:10px 16px 0}
+  .page{position:relative;flex:1;min-height:0;overflow:hidden;margin:16px -16px 0;padding:10px 16px 0;display:flex;flex-direction:column}
+  .page>*{flex:none}
+  .page>.rows{flex:1 1 auto;min-height:0;overflow:hidden;margin:-10px -16px 0 -18px;padding:14px 16px 0 18px;-webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 14px);mask-image:linear-gradient(to bottom,transparent 0,#000 14px)}
+  .page>.tvcols{flex:1 1 auto;min-height:0}
 
   /* C1: greeting + the selected app */
   .hero{display:flex;align-items:stretch;margin-bottom:26px}
@@ -114,8 +117,9 @@
   .card:focus{background:rgba(244,247,251,.14);box-shadow:inset 0 0 0 4px #2DD4BF,0 16px 40px rgba(0,0,0,.35);transform:scale(1.05);opacity:1}
   .card .nm{font-size:21px;font-weight:600;line-height:1.25;margin-top:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .card .mt{font-size:16px;color:#9FB0C6;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .card .badges{margin-top:auto}
-  .card .badge{font-size:14px;padding:4px 10px;margin-bottom:0}
+  .card .badges{margin-top:auto;flex-wrap:nowrap;overflow:hidden}
+  .card .badge{font-size:14px;padding:4px 10px;margin-bottom:0;flex:none}
+  .card .badge+.badge{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
   .empty{color:#9FB0C6;font-size:22px;padding:30px 4px}
 
   /* C5: first run, until a head arms the TV */
@@ -142,8 +146,8 @@
   .tvtop h1{font-size:46px;font-weight:700;letter-spacing:-.01em;margin:0}
   .tvtop p{font-size:22px;color:#9FB0C6;margin:8px 0 0}
   .tvtop .btn{margin-left:auto;flex:none;min-height:64px;padding:0 28px}
-  .tvcols{display:flex;align-items:flex-start}
-  .tvlist{width:884px;flex:none;margin-right:28px}
+  .tvcols{display:flex;align-items:stretch}
+  .tvlist{width:884px;flex:none;margin-right:28px;overflow:hidden}
   .glabel{font-size:22px;font-weight:600;color:#9FB0C6;margin:0 4px 10px}
   .glabel.warn{color:#F0A020}
   .glabel .n{opacity:.7;margin-left:8px;font-weight:400}
@@ -156,7 +160,7 @@
   .lrow .nm{font-size:22px;font-weight:600}
   .lrow .mt{font-size:18px;color:#9FB0C6;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .lrow .badge{margin:0 0 0 12px}
-  .tvpanel{flex:1;min-width:0}
+  .tvpanel{flex:1;min-width:0;align-self:flex-start}
   .panel{background:rgba(244,247,251,.06);border:1px solid rgba(244,247,251,.12);border-radius:24px;padding:26px}
   .phead{display:flex;align-items:center;margin-bottom:18px}
   .phead .tile{margin-right:20px}
@@ -200,7 +204,7 @@
   .btns{display:flex}
   .btn{display:flex;align-items:center;justify-content:center;font:inherit;font-size:22px;font-weight:600;min-height:72px;padding:0 28px;border:0;border-radius:16px;background:rgba(244,247,251,.14);color:#F4F7FB;cursor:pointer;margin-right:14px;white-space:nowrap}
   .btn:last-child{margin-right:0}
-  .btn.grow{flex:1}
+  .btn.grow{flex:1;min-width:0;white-space:normal;text-align:center;line-height:1.2;padding:8px 20px}
   .btn.primary{background:#2DD4BF;color:#042F2E}
   .btn.danger{background:rgba(255,107,94,.16);color:#FF6B5E}
   .btn:focus{outline:none;box-shadow:0 0 0 4px rgba(45,212,191,.55)}
