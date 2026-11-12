@@ -17,6 +17,9 @@ var SDB = 26195, F = path.join(__dirname, 'fixtures');
 function pem(f) { return fs.readFileSync(path.join(F, f), 'utf8'); }
 var CERT = { name: 'PC - Public', authorKeyPem: pem('author.key'), authorCertPem: pem('author.crt'), distributorKeyPem: pem('distributor.key'), distributorCertPem: pem('distributor.crt') };
 var dir = path.join(os.tmpdir(), 'a2s-loopback-' + process.pid + '-' + Date.now()); fs.mkdirSync(dir);
+// The relay's start-up check (0.3.28) connects to sdbd once, a second after start; this test counts
+// sdbd's connections, so it starts with the relay off by choice, which skips that check.
+fs.writeFileSync(path.join(dir, '.a2s-relay.json'), JSON.stringify({ enabled: false }));
 var wgt = zip.write([{ name: 'index.html', data: Buf.from('<html></html>') },
     { name: 'config.xml', data: Buf.from('<widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets" version="1.0.0"><name>Probe</name><tizen:application id="A2SProbe01.Probe" package="A2SProbe01" required_version="2.3"/></widget>') }]);
 

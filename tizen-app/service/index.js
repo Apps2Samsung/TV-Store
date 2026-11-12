@@ -29,6 +29,7 @@ var selfupdate = require('./selfupdate.js');
 var repos = require('./repos.js');
 var pkgid = require('./pkgid.js');
 var storePage = require('./storepage.js');
+var usersettings = require('./usersettings.js');
 
 var PORT = 8077;
 // sdbd's port; a test points the service at a fake sdbd (test/install.test.js).
@@ -464,6 +465,60 @@ function uploadPage() {
 }
 function escHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
+// ---- an app's user settings (the catalog's user_settings) ---------------------------------------------
+// Typed on a phone or PC (the store page), checked here against the signed official catalog's spec and
+// kept per package file in the data folder, then written into the package at every install of it, an
+// update from the TV included (usersettings.js has the rules, the same as Apps2Samsung's). The values
+// can be credentials: written with mode 0600, never logged, never sent out; /ping and the store page
+// only learn which keys are set. A repository's app (#82) gets no settings here: its spec is not
+// signed by Apps2Samsung, so the page keeps such apps for a phone or PC.
+var USET_FILE = DATA_DIR ? path.join(DATA_DIR, '.a2s-user-settings.json') : null;
+var USET = null;
+function usetAll() {
+    if (USET) return USET;
+    try { USET = JSON.parse(fs.readFileSync(USET_FILE, 'utf8')); } catch (e) { USET = {}; }
+    if (!USET || typeof USET !== 'object' || Array.isArray(USET)) USET = {};
+    return USET;
+}
+function usetGet(file) { var m = usetAll(); return file && m.hasOwnProperty(file) && m[file] && typeof m[file].values === 'object' ? m[file] : null; }
+function usetPut(file, keep) {
+    var m = usetAll();
+    m[file] = { values: keep, at: new Date().toISOString() };
+    if (!USET_FILE) return;
+    try { fs.writeFileSync(USET_FILE, JSON.stringify(m), { mode: 384 }); } catch (e) { log('settings: cannot save: ' + e.message); }
+}
+// Package file -> the keys saved for it (an empty list: saved with every field left empty).
+function usetKeys() { var m = usetAll(), out = {}; for (var f in m) if (m.hasOwnProperty(f) && m[f] && m[f].values) out[f] = Object.keys(m[f].values); return out; }
+function settingsSpec(cat, u) { return cat && cat.settings && cat.settings[u] ? usersettings.normalize(cat.settings[u]) : null; }
+function storeUrl() { var ip = ownIp(); return ip ? 'http://' + ip + ':' + PORT + '/' : 'TV-Store\u2019s page on this TV (Settings shows the address)'; }
+// The package at inFile with the app's settings written in (into outFile), or inFile when it has none.
+// Refused: required settings that were never filled in on the TV (NEEDS_SETTINGS); an update of an
+// app whose settings were filled in on a phone or PC and are not on this TV, which would drop them
+// (SETTINGS_ELSEWHERE); a package whose text changed upstream (SETTINGS_PATCH).
+function withSettings(entry, cat, u, inFile, outFile, cb) {
+    var spec = settingsSpec(cat, u);
+    if (!spec) return cb(null, inFile);
+    var file = (cat.files && cat.files[u]) || entry.file || '', had = usetGet(file), name = entry.name || file;
+    if (!had && entry.installed) {
+        log('install: ' + name + ' is on this TV and has settings, none of them saved here; not updating it without them');
+        return cb(coded('SETTINGS_ELSEWHERE', name + ' is on this TV with settings typed on the phone or PC that installed it, and they are not on this TV. Updating it from here would drop them. Enter them at ' + storeUrl() + ' (TV-Store then installs it here with them), or update it from Apps2Samsung.'));
+    }
+    var r = usersettings.resolve(spec, null, had ? had.values : null);
+    if (r.errors) {
+        var miss = spec.fields.filter(function (f) { return r.errors[f.key]; }).map(function (f) { return f.label; });
+        log('install: ' + name + ' needs its settings first (' + Object.keys(r.errors).join(', ') + ')');
+        return cb(coded('NEEDS_SETTINGS', name + ' needs its settings before it installs: ' + miss.join('; ') + '. Fill them in at ' + storeUrl() + ' on a phone or PC; TV-Store then installs it here.'));
+    }
+    var list = usersettings.edits(spec, r.values);
+    if (!list.length) { log('install: ' + name + ': no settings filled in, installing it as published'); return cb(null, inFile); }
+    usersettings.patch(inFile, outFile, list, function (err, out) {
+        if (err && err.code === 'SETTINGS_PATCH') { log('install: ' + name + ': its settings cannot be written: ' + err.message); return cb(coded('SETTINGS_PATCH', name + ' changed upstream, so its settings cannot be written (' + err.message + ') Not installing it; the catalog needs an update.')); }
+        if (err) return cb(err);
+        log('install: wrote the settings ' + out.keys.join(', ') + ' into ' + out.files.join(', '));
+        cb(null, outFile);
+    });
+}
+
 // ---- the store in a phone or PC browser (#101) --------------------------------------------------------
 // http://<TV IP>:8077/ shows the store and has an Install button per app; storepage.js has the page.
 // The service installs nothing for it: the TV-Store screen sends what it shows (POST /store/state,
@@ -509,33 +564,68 @@ function sameOrigin(req) {
 function storeJson(res, code, obj) { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); }
 function storeApp(key) { var l = (STORE.state && STORE.state.apps) || []; for (var i = 0; i < l.length; i++) if (l[i].key === key) return l[i]; return null; }
 function openReqs() { return STORE_REQS.filter(function (r) { return r.status === 'waiting'; }); }
-function publicReq(r) { return { id: r.id, key: r.key, all: r.all, name: r.name, from: r.from, at: r.at, status: r.status, message: r.message || '' }; }
+function publicReq(r) { return { id: r.id, key: r.key, all: r.all, name: r.name, from: r.from, at: r.at, status: r.status, message: r.message || '', again: !!r.again }; }
 // What GET /store/state gives a browser.
 function storePublic() {
-    return { ok: true, enabled: BROWSER_CFG.enabled, live: storeLive(), age: STORE.state ? Date.now() - STORE.at : null, state: STORE.state,
+    return { ok: true, enabled: BROWSER_CFG.enabled, live: storeLive(), age: STORE.state ? Date.now() - STORE.at : null, state: withSettingsInfo(STORE.state),
              requests: STORE_REQS.slice(-10).map(publicReq) };
+}
+// The screen's picture with each app's settings form added (official catalog apps only): the fields,
+// and which keys are saved on the TV, never their values. The screen sends url and file, not this.
+function withSettingsInfo(st) {
+    if (!st || !Array.isArray(st.apps) || !CATALOG) return st;
+    var out = {}, k;
+    for (k in st) if (st.hasOwnProperty(k)) out[k] = st[k];
+    out.apps = st.apps.map(function (a) {
+        var spec = a && !a.source ? settingsSpec(CATALOG, a.url) : null;
+        if (!spec) return a;
+        var c = {}, file = (CATALOG.files && CATALOG.files[a.url]) || a.file || '', had = usetGet(file);
+        for (k in a) if (a.hasOwnProperty(k)) c[k] = a[k];
+        c.settings = usersettings.publicSpec(spec); c.saved = had ? Object.keys(had.values) : []; c.settingsSet = !!had;
+        return c;
+    });
+    return out;
 }
 // POST /store/install { key } or { all: true } from a browser: checked against what the screen last
 // showed, then left for the screen to take. cb(code, answer).
 function storeRequest(b, from, cb) {
-    if (!BROWSER_CFG.enabled) return cb(403, { ok: false, error: 'Installing from a browser is off in TV-Store’s Settings on the TV.' });
+    if (!BROWSER_CFG.enabled) return cb(403, { ok: false, error: 'Installing from a browser is off in TV-Store\u2019s Settings on the TV.' });
     if (!storeLive()) return cb(409, { ok: false, error: 'TV-Store is not open on the TV. Open it there, then try again.' });
-    var all = !!(b && b.all === true), a = null, name;
+    if (b && b.all === true) return queueRequest(b, from, null, cb);
+    var a = storeApp(String((b && b.key) || ''));
+    if (!a) return cb(404, { ok: false, error: 'That app is not in the store on the TV.' });
+    // An app with settings: what was typed is checked against the signed catalog's spec and kept,
+    // before the screen is asked; an app already on the TV may be asked for again with new settings.
+    withCatalog(function (err, cat) {
+        var spec = !err && !a.source ? settingsSpec(cat, a.url) : null;
+        if (!spec) return queueRequest(b, from, a, cb);
+        var file = (cat.files && cat.files[a.url]) || a.file || '', had = usetGet(file);
+        var given = b.settings && typeof b.settings === 'object' && !Array.isArray(b.settings) ? b.settings : null;
+        if (!given && !had) return cb(409, { ok: false, code: 'NEEDS_SETTINGS', error: 'Fill in ' + a.name + '\u2019s settings first.' });
+        var r = usersettings.resolve(spec, given, had ? had.values : null);
+        if (r.errors) return cb(400, { ok: false, code: 'BAD_SETTINGS', error: 'Check the fields marked in red.', fields: r.errors });
+        if (given) { usetPut(file, r.keep); log('settings: ' + a.name + ': saved ' + (Object.keys(r.keep).join(', ') || 'none filled in') + ', from ' + from); }
+        queueRequest(b, from, a, cb, !!given);
+    });
+}
+// The request itself, checked against what the screen showed. typed: new settings came with it,
+// so an app that is on the TV and current is installed again with them.
+function queueRequest(b, from, a, cb, typed) {
+    var all = !a, name;
     if (all) {
-        var n = (STORE.state.apps || []).filter(function (x) { return x.update && x.can; }).length;
+        var n = (STORE.state.apps || []).filter(function (x) { return x.update && x.can && (!x.settings || x.settingsSet); }).length;
         if (!n) return cb(409, { ok: false, error: 'There are no updates to install.' });
         name = n === 1 ? '1 update' : n + ' updates';
     } else {
-        a = storeApp(String((b && b.key) || ''));
-        if (!a) return cb(404, { ok: false, error: 'That app is not in the store on the TV.' });
-        if (!a.can) return cb(409, { ok: false, error: a.why || (a.installed !== null ? 'It is on the TV already.' : 'It cannot be installed from here.') });
+        var again = typed && a.installed !== null && !a.why;
+        if (!a.can && !again) return cb(409, { ok: false, error: a.why || (a.installed !== null ? 'It is on the TV already.' : 'It cannot be installed from here.') });
         name = a.name;
     }
     var key = all ? '*all' : a.key;
     var dup = STORE_REQS.filter(function (r) { return r.key === key && (r.status === 'waiting' || r.status === 'taken'); })[0];
     if (dup) return cb(200, { ok: true, request: publicReq(dup) });
     if (openReqs().length >= 20) return cb(429, { ok: false, error: 'The TV has 20 requests waiting already.' });
-    var r = { id: crypto.randomBytes(8).toString('hex'), key: key, all: all, name: name, from: from, at: new Date().toISOString(), status: 'waiting', message: '' };
+    var r = { id: crypto.randomBytes(8).toString('hex'), key: key, all: all, name: name, from: from, at: new Date().toISOString(), status: 'waiting', message: '', again: !!(typed && !all) };
     STORE_REQS.push(r);
     if (STORE_REQS.length > 50) STORE_REQS.splice(0, STORE_REQS.length - 50);
     log('browser: ' + from + ' asks for ' + (all ? 'Update all (' + name + ')' : name) + '; the TV-Store screen takes it');
@@ -547,7 +637,7 @@ function storeRequest(b, from, cb) {
 function storeState(b) {
     if (b.state && typeof b.state === 'object' && !Array.isArray(b.state)) STORE.state = b.state;
     if (STORE.state) STORE.at = Date.now();
-    return { ok: true, want: !STORE.state, enabled: BROWSER_CFG.enabled, requests: BROWSER_CFG.enabled ? openReqs().map(publicReq) : [] };
+    return { ok: true, want: !STORE.state, enabled: BROWSER_CFG.enabled, requests: BROWSER_CFG.enabled ? openReqs().map(publicReq) : [], userSettings: usetKeys() };
 }
 // POST /store/ack { token, id, status, message } from the screen: it took a request, or it ended.
 function storeAck(b) {
@@ -702,8 +792,8 @@ function install(entry, cb) {
         if (!DATA_DIR) return cb(new Error('the service has no folder it can write to'));
         var own = selfGate(entry);
         if (own) return cb(own);
-        var base = path.join(DATA_DIR, 'job-' + Date.now()), inFile = base + '.in.wgt', outFile = base + '.signed.wgt', renFile = base + '.renamed.wgt';
-        function clean(err, r) { [inFile, outFile, renFile].forEach(function (f) { try { fs.unlinkSync(f); } catch (e) {} }); cb(err, r); }
+        var base = path.join(DATA_DIR, 'job-' + Date.now()), inFile = base + '.in.wgt', outFile = base + '.signed.wgt', renFile = base + '.renamed.wgt', setFile = base + '.settings.wgt';
+        function clean(err, r) { [inFile, outFile, renFile, setFile].forEach(function (f) { try { fs.unlinkSync(f); } catch (e) {} }); cb(err, r); }
         log('install: downloading ' + downloadUrl);
         var started = Date.now();
         getToFile(downloadUrl, inFile, function (err, got) {
@@ -718,11 +808,16 @@ function install(entry, cb) {
                 else { entry.requiredVersion = ids.requiredVersion; entry.manifestPartner = !!ids.partner; }
                 var gate = tizenGate(entry);
                 if (gate) return clean(gate);
-                placeOnTv(entry, err ? null : ids, inFile, renFile, function (err, file) {
+                var mids = err ? null : ids;
+                // The app's settings (user_settings) first, then a package id of its own (#84) on top.
+                withSettings(entry, cat, downloadUrl, inFile, setFile, function (err, setIn) {
                     if (err) return clean(err);
-                    var sw = entry.tvApps ? sourceSwitch() : null;
-                    if (sw) return clean(sw);
-                    signAndInstall(entry, remoteName, file, outFile, clean);
+                    placeOnTv(entry, mids, setIn, renFile, function (err, file) {
+                        if (err) return clean(err);
+                        var sw = entry.tvApps ? sourceSwitch() : null;
+                        if (sw) return clean(sw);
+                        signAndInstall(entry, remoteName, file, outFile, clean);
+                    });
                 });
             });
         });
@@ -1428,7 +1523,7 @@ http.createServer(function (req, res) {
     if (route === '/ping') return json(res, 200, { ok: true, service: 'tv-store', ownIp: ownIp(), logUrl: 'http://' + ownIp() + ':' + PORT + '/log.txt', signerReady: signer.ready, certReady: haveCerts(),
         certCount: haveCerts() ? loadCerts().certificates.length : 0, certNames: certs.names(loadCerts()), certificates: certs.summary(loadCerts()),
         certFile: CERT_FILE, certError: CERT_ERROR, node: process.version, verbose: VERBOSE, relay: relayStatus(), installer: installerStatus(), remembered: rememberedLevels(), selfUpdate: SELF_UPDATE,
-        sources: SOURCES.map(publicSource), sourceOf: sourceOfPackage(), browser: browserStatus() });
+        sources: SOURCES.map(publicSource), sourceOf: sourceOfPackage(), browser: browserStatus(), userSettings: usetKeys() });
     // The page has shown how the last self-update went (#41); { version } is what runs now.
     if (route === '/selfupdate/ack' && req.method === 'POST') return body(req, function (err, b) {
         var running = !err && b && typeof b.version === 'string' ? b.version : '';
