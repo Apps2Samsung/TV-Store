@@ -63,6 +63,13 @@ Object.keys(r.index).forEach(function (u) { if (!/^[0-9a-f]{64}$/.test(r.index[u
     if (t[1] === null ? p !== null : !(p && p.indexOf(t[1]) >= 0)) fail('urlProblem(' + t[0] + ') = ' + p);
 });
 
+// A category the official catalog adds later (data/categories.json there) is accepted; the store
+// shows one it does not know under other. Only the id's shape is checked.
+var payload = JSON.parse(valid.toString('utf8').slice(valid.toString('utf8').indexOf('\n') + 1));
+payload.providers[0].category = 'launcher';
+if (repos.schemaProblem(payload, []) !== null) fail('a category id the TV does not know yet must be accepted: ' + repos.schemaProblem(payload, []));
+['Media', 'bad cat', '', 7, undefined].forEach(function (c) { payload.providers[0].category = c; if (!repos.schemaProblem(payload, [])) fail('category ' + JSON.stringify(c) + ' must be refused'); });
+
 // What Apps2Samsung hands over (Send sources to TV).
 var ok = repos.normalizeSource({ url: 'https://owner.github.io/tizen/repository.json.signed', repositoryId: 'io.github.owner.tizen', fingerprint: test.fingerprint.toUpperCase(), name: 'Owner\'s apps|x' });
 if (!ok.source || ok.source.fingerprint !== test.fingerprint || ok.source.name !== 'Owner\'s apps x' || ok.source.publicKeyPem) fail('normalizeSource: ' + JSON.stringify(ok));

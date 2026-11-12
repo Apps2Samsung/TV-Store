@@ -25,7 +25,6 @@ var MAX_AGE_MS = 7 * 24 * 3600 * 1000;
 var MAX_AHEAD_MS = 3600 * 1000;
 var MIN_KEY_BITS = 3072;
 var SCHEMA_VERSIONS = [1];
-var CATEGORIES = ['media', 'iptv', 'streaming', 'games', 'casting', 'tools', 'other'];
 var FLAGS = ['root', 'closed-source', 'self-updating'];
 var RSA_OID = '2a864886f70d010101';   // 1.2.840.113549.1.1.1, rsaEncryption
 
@@ -37,6 +36,9 @@ var RE = {
     sha256: /^sha256:[0-9a-f]{64}$/,
     date: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/,
     providerId: /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/,
+    // Any id the official catalog's categories may hold (tizen-community-packages data/categories.json),
+    // not a fixed list: the store shows one it does not know under other.
+    category: /^[a-z0-9][a-z0-9_-]{0,31}$/,
     asset: /^[^\/\\]+[.](?:wgt|tpk)$/,
     version: /^\d+(?:\.\d+)*$/,
     fingerprint: /^[0-9a-f]{64}$/
@@ -123,7 +125,7 @@ function schemaProblem(m, urls) {
         var p = m.providers[i], at = 'providers[' + i + ']';
         if (!isObj(p)) return at + ' is not an object';
         if (!str(p.id, RE.providerId)) return at + '.id is not a valid id';
-        if (CATEGORIES.indexOf(p.category) < 0) return at + '.category must be one of ' + CATEGORIES.join(', ');
+        if (!str(p.category, RE.category)) return at + '.category must be a category id: lower-case letters, digits, - or _';
         if ((why = url(p.url, at + '.url'))) return why;
         if (p.displayName !== undefined && !str(p.displayName, RE.lineOrEmpty, 80)) return at + '.displayName must be one line of at most 80 characters';
         if (p.prefix !== undefined && !str(p.prefix, null, 80)) return at + '.prefix must be text of at most 80 characters';
