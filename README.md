@@ -410,7 +410,14 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
 - **Try the TV's own installer (wascmd)**: off by default (#57). On, an install is handed to
   `/usr/bin/wascmd` by the service itself before `sdbd` is tried; on every retail set so far that
   has taken the service down, so it is there for anyone who wants to report what their TV does.
-- **Connect from Apps2Samsung (sdb relay)**: off by default (#52). The TV's `sdbd` lets a
+- **Connect from Apps2Samsung (sdb relay)**: on by default when Host PC IP is `127.0.0.1`, off
+  otherwise (#52; the default since 0.3.28). The service checks once at start, and at every install
+  over loopback, whether `sdbd` takes a connection on `127.0.0.1`, which it only does with Host PC IP
+  at `127.0.0.1`; then no phone or PC reaches `sdbd` any other way, so the relay turns itself on
+  (`relay.auto` on `/ping` and `GET /relay` says why). Turned on that way it is not saved as on, so
+  a TV whose Host PC IP changes back gets it off again after the restart. Once the switch is used,
+  on or off, that choice stands (`relay.chosen`), and a relay setting saved by an older TV-Store
+  counts as a choice too. The TV's `sdbd` lets a
   connection in only from the address Developer Mode's Host PC IP names, so with Host PC IP at
   `127.0.0.1` (what TV-Store and a rooted TV want) no phone or PC can reach it. With this on,
   TV-Store's service holds port 26201 open on the TV and hands every connection to `sdbd` over
@@ -562,6 +569,7 @@ node test/sdb-loopback.test.js  # install works whether Host PC IP is the TV's o
 node test/wascmd.test.js    # install through wascmd from the service (fake wascmd), its refusals, the sdbd fallback, over spawn_sync too; nothing started before the first install, the Settings switch, a run that died, EACCES without a fork (#67, #68)
 node test/relay.test.js     # the on-TV sdb relay: a session survives the hop, allow list, cap, idle, stop; every failure told apart with a reason
 node test/relay-settings.test.js  # relay settings over /settings: validation, restart only on change, status; GET /relay for the LAN
+node test/relay-default.test.js   # the relay turns itself on when sdbd takes loopback (Host PC IP 127.0.0.1); a choice in Settings stands
 node test/certs.test.js     # signing profiles: payload shapes, merge, order, levels, expiry and DUIDs from the DER, default and remove on the TV (#78)
 node test/selfupdate.test.js  # TV-Store updating itself (#41): refused without the switch, the marker, reported after the installer stops the service
 node test/pkgid.test.js     # another app's package id (#84): the derived id against values computed apart, catalog keys, when to rename, whole-token rewrite

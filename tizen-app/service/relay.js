@@ -8,8 +8,9 @@
  * the source address sdbd sees (the decompiled verify_peer_ip compares the peer IP against the stored
  * Host PC IP with an exact strcmp; see TV-Store#52).
  *
- * Any LAN client that reaches this port can push and install, so the relay is off until turned on,
- * and an optional allow list pins it to specific client IPs. Every relayed connection costs sdbd a
+ * Any LAN client that reaches this port can push and install, so the relay is on by default only
+ * where nothing else reaches sdbd (Host PC IP at 127.0.0.1, index.js decides), and an optional allow
+ * list pins it to specific client IPs. Every relayed connection costs sdbd a
  * connection too, so there is a cap on live sessions and an idle timeout, or a client that connects
  * and never speaks could hold sdbd's slots until the TV's own install path fails. ES5, so it runs on
  * the TV's Node 4.4 too.

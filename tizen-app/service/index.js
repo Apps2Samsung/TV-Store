@@ -251,16 +251,24 @@ function wascmdUsageOnce(cb) {
 }
 
 // The on-TV sdb relay (TV-Store#52): a TCP proxy from a LAN port to the TV's own sdbd over loopback,
-// so clients connect without re-entering Developer Mode's Host PC IP (set it to 127.0.0.1 once). It is
-// off until turned on from Settings, since any LAN client that reaches the port can push and install;
-// an optional allow list pins it to specific client IPs. The config lives next to the other settings.
+// so clients connect without re-entering Developer Mode's Host PC IP (set it to 127.0.0.1 once). Any
+// LAN client that reaches the port can push and install; an optional allow list pins it to specific
+// client IPs. The config lives next to the other settings.
+// On by default where it is needed: until the switch in Settings was used (chosen), the relay turns
+// itself on once this TV's sdbd takes a connection on 127.0.0.1, which it only does when Developer
+// Mode's Host PC IP is 127.0.0.1 (see sdbhosts.js). Then no phone or PC reaches sdbd any other way,
+// so without the relay nothing could arm TV-Store or install from Apps2Samsung. Checked once at start
+// (a changed Host PC IP needs a TV restart, which restarts the service) and on every install over
+// loopback. A file written before 0.3.28 came from the switch, so it counts as a choice.
 var RELAY_FILE = DATA_DIR ? path.join(DATA_DIR, '.a2s-relay.json') : null;
-var RELAY_CFG = { enabled: false, port: RELAY_PORT, allow: [] };
+var RELAY_CFG = { enabled: false, port: RELAY_PORT, allow: [], chosen: false };
+var RELAY_AUTO = null;     // why the relay turned itself on, while it is on that way
 try {
     if (RELAY_FILE) {
         var rc = JSON.parse(fs.readFileSync(RELAY_FILE, 'utf8'));
         if (rc && typeof rc === 'object') {
-            RELAY_CFG.enabled = !!rc.enabled;
+            RELAY_CFG.chosen = rc.chosen === undefined ? true : !!rc.chosen;
+            RELAY_CFG.enabled = RELAY_CFG.chosen && !!rc.enabled;
             RELAY_CFG.port = parseRelayPort(rc.port, RELAY_PORT);
             RELAY_CFG.allow = relayMod.normList(rc.allow);
         }
@@ -269,8 +277,33 @@ try {
 var relay = new relayMod.Relay({ sdbPort: SDB_PORT, allow: RELAY_CFG.allow, log: log });
 function saveRelayCfg() {
     if (!RELAY_FILE) return;
-    try { fs.writeFileSync(RELAY_FILE, JSON.stringify(RELAY_CFG)); }
+    // Turned on by itself is not saved as on: the next start checks Host PC IP again.
+    var c = { enabled: RELAY_CFG.chosen && RELAY_CFG.enabled, port: RELAY_CFG.port, allow: RELAY_CFG.allow, chosen: RELAY_CFG.chosen };
+    try { fs.writeFileSync(RELAY_FILE, JSON.stringify(c)); }
     catch (e) { log('relay: cannot save settings: ' + e.message); }
+}
+// sdbd took a direct connection on 127.0.0.1, so Host PC IP is 127.0.0.1: the relay goes on, unless
+// the switch in Settings decided. A port another app holds (Vetro's tunnel, #90) leaves it off again.
+function relayLoopbackSeen() {
+    if (RELAY_CFG.chosen || RELAY_CFG.enabled) return;
+    RELAY_CFG.enabled = true;
+    RELAY_AUTO = 'Host PC IP is 127.0.0.1';
+    log('relay: on by default on port ' + RELAY_CFG.port + ': this TV\'s sdbd takes connections on 127.0.0.1 (Host PC IP is 127.0.0.1), so phones and PCs reach it only through the relay; the switch in Settings turns it off');
+    startRelay(function (err) {
+        if (!err || RELAY_CFG.chosen) return;
+        RELAY_CFG.enabled = false; RELAY_AUTO = null;
+        log('relay: stays off, since it could not start');
+    });
+}
+// At start, before anyone needs it: one handshake with sdbd on 127.0.0.1, closed straight away.
+function probeLoopback() {
+    if (RELAY_CFG.chosen || RELAY_CFG.enabled) return;
+    var t = { host: sdbhosts.LOOPBACK, port: SDB_PORT, tunnel: false }, c = new sdb.SdbClient(t.host, t.port);
+    c.connect(function (err) {
+        c.end();
+        if (!err) { if (!SDB_WORKED) SDB_WORKED = t; return relayLoopbackSeen(); }
+        log('relay: off: sdbd does not take a connection on 127.0.0.1 (' + (err.code || err.message) + '), so Host PC IP is not 127.0.0.1 or Developer Mode is off; the switch in Settings turns the relay on');
+    });
 }
 function startRelay(cb) {
     relay.setAllow(RELAY_CFG.allow);
@@ -283,6 +316,8 @@ function relayStatus() {
     var s = relay.status();
     s.enabled = RELAY_CFG.enabled;
     s.configuredPort = RELAY_CFG.port;
+    s.chosen = RELAY_CFG.chosen;      // false: the default decides (on when Host PC IP is 127.0.0.1)
+    s.auto = RELAY_AUTO;              // why it turned itself on, or null
     return s;
 }
 // The relay's state for a phone or PC on the LAN (GET /relay, TV-Store#58): whether it is on and
@@ -290,7 +325,7 @@ function relayStatus() {
 // instead of "connection reset". Without the allow list; the TV's own page gets everything via /ping.
 function relayPublic() {
     var s = relayStatus();
-    return { enabled: s.enabled, listening: s.listening, port: s.port, configuredPort: s.configuredPort, sessions: s.sessions,
+    return { enabled: s.enabled, auto: s.auto, listening: s.listening, port: s.port, configuredPort: s.configuredPort, sessions: s.sessions,
              served: s.served, failures: s.failures, lastFailure: s.lastFailure, error: s.error };
 }
 // Apply { enabled?, port?, allow? } from Settings (already validated): persist, then make the listener
@@ -300,7 +335,7 @@ function relayPublic() {
 // cb(status) runs once the listener is up or has failed, so the answer says which.
 function applyRelaySettings(r, cb) {
     var was = { enabled: RELAY_CFG.enabled, port: RELAY_CFG.port };
-    if (typeof r.enabled === 'boolean') RELAY_CFG.enabled = r.enabled;
+    if (typeof r.enabled === 'boolean') { RELAY_CFG.enabled = r.enabled; RELAY_CFG.chosen = true; RELAY_AUTO = null; }
     if (r.port !== undefined) RELAY_CFG.port = r.port;
     if (r.allow !== undefined) RELAY_CFG.allow = relayMod.normList(r.allow);
     saveRelayCfg();
@@ -736,7 +771,11 @@ function connectSdb(hosts, cb, i, seen) {
     var c = new sdb.SdbClient(t.host, t.port);
     c.trace = VERBOSE ? function (m) { logv('sdb ' + t.host + ':' + t.port + ': ' + m); } : null;
     c.connect(function (err) {
-        if (!err) { SDB_WORKED = t; log('install: sdb connected to ' + sdbName(t) + ', first frame ' + c.firstFrame); return cb(null, c); }
+        if (!err) {
+            SDB_WORKED = t; log('install: sdb connected to ' + sdbName(t) + ', first frame ' + c.firstFrame);
+            if (!t.tunnel && t.host === sdbhosts.LOOPBACK) relayLoopbackSeen();
+            return cb(null, c);
+        }
         c.end();
         log('install: ' + err.message);
         seen.push({ host: t.host, code: err.code, frame: c.firstFrame, tunnel: t.tunnel });
@@ -1366,6 +1405,7 @@ http.createServer(function (req, res) {
     if (SELF_UPDATE) log('self-update: the last run sent an update of TV-Store' + (SELF_UPDATE.to ? ' to v' + SELF_UPDATE.to : '') + ' at ' + SELF_UPDATE.at + ' and was stopped; the page says whether it landed');
     logPlatform();
     if (RELAY_CFG.enabled) { log('relay: enabled, starting on port ' + RELAY_CFG.port); startRelay(); }
+    else if (!RELAY_CFG.chosen) setTimeout(probeLoopback, 1000);
 });
 
 module.exports.onStart = function () { log('service onStart'); };

@@ -248,9 +248,11 @@
     function relayRow() {
         var r = ready && ready.relay;
         if (!r) return '';
+        // r.auto: on by itself, since this TV's Host PC IP is 127.0.0.1 and the switch was never used (0.3.28).
         var hint = r.enabled
-            ? (r.listening ? 'On: Apps2Samsung connects through ' + relayAddress() + '. ' : 'On, but not running. ') + 'Any device in your network can install apps through this port while it is on.'
-            : 'Lets Apps2Samsung on a phone or PC reach this TV while Developer Mode\'s Host PC IP is 127.0.0.1, so you never type an address into Developer Mode again.';
+            ? (r.listening ? (r.auto ? 'On by default, because Host PC IP is 127.0.0.1: ' : 'On: ') + 'Apps2Samsung connects through ' + relayAddress() + '. ' : 'On, but not running. ') + 'Any device in your network can install apps through this port while it is on.'
+            : 'Lets Apps2Samsung on a phone or PC reach this TV while Developer Mode\'s Host PC IP is 127.0.0.1, so you never type an address into Developer Mode again.'
+                + (r.chosen === false ? ' Turns on by itself when Host PC IP is 127.0.0.1.' : '');
         return '<div class="opt f" tabindex="0" data-k="opt:relay" data-opt="relay"><div class="ot"><div class="ont">Connect from Apps2Samsung (sdb relay)</div><div class="oh">' + esc(hint) + '</div></div>'
             + '<span class="sw' + (r.enabled ? ' on' : '') + '"><i></i></span></div>';
     }
