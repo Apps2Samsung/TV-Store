@@ -1319,7 +1319,7 @@
             var cats = CATEGORY_ORDER.filter(function (c) { return apps.some(function (x) { return x.category === c; }); });
             h += '<div class="chips"><span class="chip f' + (chip === 'all' ? ' on' : '') + '" tabindex="0" data-k="chip:all" data-chip="all">All</span>'
                 + cats.map(function (c) { return '<span class="chip f' + (chip === c ? ' on' : '') + '" tabindex="0" data-k="chip:' + c + '" data-chip="' + c + '">' + esc(catName(c)) + '</span>'; }).join('') + '</div>';
-            h += srcChips() + '<div class="rows vscroll" id="rows">';
+            h += srcChips() + '<div class="fade"></div><div class="rows vscroll" id="rows">';
             if (chip === 'all') {
                 var pinnedNow = pinned(), vetro = vetroOnTv();
                 if (pinnedNow.length || vetro) h += '<div class="sect"><div class="shead"><span class="t">Pinned</span><span class="n">' + (pinnedNow.length + (vetro ? 1 : 0)) + '</span>'
@@ -1337,7 +1337,7 @@
             var q = query.toLowerCase();
             var found = apps.filter(function (x) { return x.name.toLowerCase().indexOf(q) >= 0 || (x.description || '').toLowerCase().indexOf(q) >= 0 || (x.author || '').toLowerCase().indexOf(q) >= 0; });
             if (found.length && found.indexOf(hover) < 0) hover = found[0];
-            h += '<div class="hero"><div class="greet"><h1>Search</h1><p>' + esc(found.length ? found.length + (found.length === 1 ? ' app matches' : ' apps match') + ' \u201c' + query + '\u201d, by name, description or developer.' : 'Nothing matches \u201c' + query + '\u201d.') + '</p></div>' + selCard(found.length ? hover : null) + '</div><div class="rows vscroll" id="rows">';
+            h += '<div class="hero"><div class="greet"><h1>Search</h1><p>' + esc(found.length ? found.length + (found.length === 1 ? ' app matches' : ' apps match') + ' \u201c' + query + '\u201d, by name, description or developer.' : 'Nothing matches \u201c' + query + '\u201d.') + '</p></div>' + selCard(found.length ? hover : null) + '</div><div class="fade"></div><div class="rows vscroll" id="rows">';
             // Apps the catalog took out (#87) answer too, after the results, without an install.
             var gq = goneMatches(q);
             h += found.length ? section('search', 'Results for “' + query + '”', found, true, false)
@@ -1701,6 +1701,7 @@
     // the page token lets this screen send or take: other apps on the TV reach the port too.
     var browserBusy = false, browserError = null;   // the Settings switch, as for the relay
     var storeSent = '', storeBusy = false;          // the picture the service has, as JSON
+    var lastKey = 0;                                // when the remote was last pressed
     var browserTaken = {};                          // request id -> true, taken once
     var browserReq = {};                            // app key -> the request id it was installed for
     function browserOn() { return !!(ready && ready.browser && ready.browser.enabled); }
@@ -1763,10 +1764,15 @@
     }
     // Every tick, and right after an install starts or ends: the whole picture when it changed, else
     // only "still open". The answer brings the requests from browsers.
-    function pushStore() {
+    function pushStore(tick) {
         if (loading || problem || !ready || !uploadToken || storeBusy || !browserOn()) return;
-        var snap = JSON.stringify(storeSnapshot()), body = { token: uploadToken };
-        if (snap !== storeSent) body.state = JSON.parse(snap);
+        // While the remote is in use the tick only says "still open": building the whole picture for
+        // every app held the screen up every 3 s. It follows once the remote rests.
+        var body = { token: uploadToken }, snap = null;
+        if (!(tick && storeSent && Date.now() - lastKey < 3000)) {
+            var now = storeSnapshot(); snap = JSON.stringify(now);
+            if (snap !== storeSent) body.state = now;
+        }
         storeBusy = true;
         xhr('POST', '/store/state', body, function (err, res) {
             storeBusy = false;
@@ -2140,6 +2146,7 @@
 
     document.addEventListener('keydown', function (e) {
         var k = e.keyCode, inInput = typing();
+        lastKey = Date.now();
         if (inInput && (k === KEY.ENTER || k === KEY.IME_DONE || k === KEY.IME_CANCEL || k === KEY.RETURN || k === KEY.ESC)) { e.preventDefault(); stopTyping(); return; }
         if (k === KEY.RETURN || k === KEY.ESC || (k === KEY.BACK && !inInput)) { e.preventDefault(); back(); return; }
         if (inInput && (k === KEY.LEFT || k === KEY.RIGHT) && searchEl.value) return;   // the caret
@@ -2204,7 +2211,7 @@
         nextOffer();
         if (!armed()) xhr('GET', '/ping', null, function (err, res) { if (!err) setReady(res); });
         refreshRelay();
-        pushStore();
+        pushStore(true);
         xhr('GET', '/uploads', null, function (err, res) {
             if (err || !res) { if (++missed >= 3) revive(); return; }
             missed = 0;
