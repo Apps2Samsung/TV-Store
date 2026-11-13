@@ -1077,7 +1077,17 @@
     }
 
     // What the platform says about this very app: null off a TV.
-    function selfInfo() { try { return tizen.application.getCurrentApplication().appInfo || null; } catch (e) { return null; } }
+    // Asked once: the call into the platform blocks the page for some 15 ms on a TV, and the picture
+    // for the browser store page asks it for every app, every 3 s. The answer cannot change while
+    // this page lives (an update of TV-Store starts it again).
+    var selfKnown = false, selfIs = null;
+    function selfInfo() {
+        if (!selfKnown) {
+            selfKnown = true;
+            try { var i = tizen.application.getCurrentApplication().appInfo; selfIs = i ? { id: i.id, packageId: i.packageId, version: i.version } : null; } catch (e) { selfIs = null; }
+        }
+        return selfIs;
+    }
     // TV-Store's own catalog entry: by its package id, or, when a head installed it under another id
     // (Apps2Samsung's "Install under a new package id" rewrites the package part only), by the
     // application part of the id, which the rename keeps, plus the entry's name.
