@@ -2,7 +2,9 @@
  * fake sdbd whose installer stops TV-Store the way the TV's does. TV-Store's own package (the
  * test's A2S_PACKAGE_ID) is refused without the Settings switch and as a replace, a refusal by the
  * TV leaves no marker, and an install that stops the service leaves one, which the next start
- * reports on /ping with the dead run's log lines until the page acknowledges it. */
+ * reports on /ping with the dead run's log lines until the page acknowledges it. The update is
+ * signed with the profile that installed the running copy (its author-signature.xml), whatever the
+ * default is, and refused with nothing sent when the TV holds no such profile. */
 'use strict';
 var fs = require('fs'), os = require('os'), path = require('path'), http = require('http'), cp = require('child_process');
 var zip = require('../tizen-app/service/zip.js');
@@ -26,6 +28,15 @@ if (su.outcome(mk, '0.3.21') !== 'landed' || su.outcome(mk, '0.3.20') !== 'not-l
 // ---- the service --------------------------------------------------------------------------------
 var SDB = 26198, F = path.join(__dirname, 'fixtures'), OWN = 'A2SProbeS1';
 function pem(f) { return fs.readFileSync(path.join(F, f), 'utf8'); }
+var PAR = { name: 'PC - Partner', authorKeyPem: pem('partner-author.key'), authorCertPem: pem('partner-author.crt'), distributorKeyPem: pem('partner-distributor.key'), distributorCertPem: pem('partner-distributor.crt') };
+// An author-signature.xml as a signer writes it: the author leaf, then a CA certificate.
+function b64(f) { return /-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----/.exec(pem(f))[1].replace(/\s+/g, ''); }
+function signatureXml(leaf) { return '<Signature xmlns="http://www.w3.org/2000/09/xmldsig#" Id="AuthorSignature"><KeyInfo><X509Data><X509Certificate>\n' + b64(leaf) + '\n</X509Certificate><X509Certificate>' + b64('distributor.crt') + '</X509Certificate></X509Data></KeyInfo></Signature>'; }
+var certsLib = require('../tizen-app/service/certs.js');
+var ids = su.authors(signatureXml('partner-author.crt'));
+if (ids.length !== 2 || ids[0] !== certsLib.fingerprint(pem('partner-author.crt')) || su.authors('').length !== 0 || su.authors('<ds:X509Certificate>' + b64('author.crt') + '</ds:X509Certificate>')[0] !== certsLib.fingerprint(pem('author.crt'))) fail('authors: ' + JSON.stringify(ids));
+var profs = [{ id: certsLib.fingerprint(pem('author.crt')), name: 'pub' }, { id: ids[0], name: 'par' }];
+if (su.signer(profs, ids).cert.name !== 'par' || su.signer(profs.slice(0, 1), ids).missing !== true || su.signer(profs, []) !== null) fail('signer');
 var PUB = { name: 'PC - Public', authorKeyPem: pem('author.key'), authorCertPem: pem('author.crt'), distributorKeyPem: pem('public-distributor.key'), distributorCertPem: pem('public-distributor.crt') };
 var dir = path.join(os.tmpdir(), 'a2s-selfupdate-' + process.pid + '-' + Date.now()); fs.mkdirSync(dir);
 var SELF = zip.write([{ name: 'index.html', data: Buf.from('<html></html>') },
@@ -35,10 +46,10 @@ var OK = 'install ' + OWN + '.Store installing[100] install completed\n';
 var mode = 'refuse', shells = [], child = null, err = '', handle = null;
 var WD = setTimeout(function () { fail('watchdog (60 s)' + (err ? '\n' + err : '')); }, 60000);
 function stop() { clearTimeout(WD); if (child) child.kill(); if (handle) try { handle.server.close(); } catch (e) {} }
-var MARK = path.join(dir, '.a2s-self-update.json');
+var MARK = path.join(dir, '.a2s-self-update.json'), OWN_SIG = path.join(dir, 'own-author-signature.xml');
 
 function start(cb) {
-    child = cp.spawn(process.execPath, [path.join(__dirname, '..', 'tizen-app', 'service', 'index.js')], { env: { HOME: dir, TMPDIR: dir, TMP: dir, TEMP: dir, PATH: process.env.PATH, A2S_SDB_PORT: String(SDB), A2S_PACKAGE_ID: OWN }, stdio: ['ignore', 'ignore', 'pipe'] });
+    child = cp.spawn(process.execPath, [path.join(__dirname, '..', 'tizen-app', 'service', 'index.js')], { env: { HOME: dir, TMPDIR: dir, TMP: dir, TEMP: dir, PATH: process.env.PATH, A2S_SDB_PORT: String(SDB), A2S_PACKAGE_ID: OWN, A2S_OWN_SIGNATURE: OWN_SIG }, stdio: ['ignore', 'ignore', 'pipe'] });
     child.stderr.on('data', function (d) { err += d; });
     var tries = 0;
     (function waitUp() {
@@ -95,11 +106,20 @@ function run(ping) {
                 installSelf({ selfUpdate: true, fromVersion: '0.3.20' }, function (e, j, n) {
                     if (e || j.ok || j.code !== 'CERT_MISMATCH' || n !== 1) fail('refused by the TV: ' + JSON.stringify(j) + ' ' + n);
                     if (fs.existsSync(MARK)) fail('a refused self-update leaves no marker');
-                    // 4. The installer stops the service mid-install.
-                    mode = 'kill';
-                    installSelf({ selfUpdate: true, fromVersion: '0.3.20' }, function () {
-                        var waited = 0;
-                        (function dead() { if (child.exitCode === null && child.signalCode === null) { if (++waited > 50) fail('the service was not stopped'); return setTimeout(dead, 100); } afterKill(); })();
+                    // 4. The running copy was installed with a certificate this TV does not hold:
+                    // refused before anything reaches the installer, which would stop TV-Store first.
+                    fs.writeFileSync(OWN_SIG, signatureXml('partner-author.crt'));
+                    installSelf({ selfUpdate: true, fromVersion: '0.3.20' }, function (e, j, n) {
+                        if (e || j.ok || j.code !== 'SELF_CERT_MISSING' || n !== 0 || fs.existsSync(MARK)) fail('a certificate the TV does not hold: ' + JSON.stringify(j) + ' ' + n);
+                        // 5. The TV holds it, as its second profile: the update is signed with that
+                        // one, not the default, and the installer stops the service mid-install.
+                        call('POST', '/cert', JSON.stringify({ certificates: [PUB, PAR] }), function () {
+                            mode = 'kill';
+                            installSelf({ selfUpdate: true, fromVersion: '0.3.20' }, function () {
+                                var waited = 0;
+                                (function dead() { if (child.exitCode === null && child.signalCode === null) { if (++waited > 50) fail('the service was not stopped'); return setTimeout(dead, 100); } afterKill(); })();
+                            });
+                        });
                     });
                 });
             });
@@ -108,7 +128,7 @@ function run(ping) {
 }
 function afterKill() {
     var mark = JSON.parse(fs.readFileSync(MARK, 'utf8'));
-    if (mark.from !== '0.3.20' || mark.to !== '0.3.21' || mark.certificate !== 'PC - Public' || !mark.at) fail('the marker: ' + JSON.stringify(mark));
+    if (mark.from !== '0.3.20' || mark.to !== '0.3.21' || mark.certificate !== 'PC - Partner' || !mark.at) fail('the marker: ' + JSON.stringify(mark));
     // The next start (the user opens TV-Store again): /ping reports it with the dead run's lines.
     start(function (ping) {
         var s = ping.selfUpdate;
@@ -122,7 +142,7 @@ function afterKill() {
                     if (text.indexOf('self-update: the last run sent an update of TV-Store to v0.3.21') < 0 || text.indexOf('self-update: the update to v0.3.21 sent at ' + mark.at + ' landed') < 0) fail('the log:\n' + text);
                     stop();
                     try { fs.readdirSync(dir).forEach(function (f) { try { fs.unlinkSync(path.join(dir, f)); } catch (x) {} }); fs.rmdirSync(dir); } catch (x) {}
-                    console.log('PASS: self-update: refused without the switch and as a replace, no marker after a TV refusal, a marker after the installer stops the service, reported on /ping with the dead run\'s lines until acknowledged');
+                    console.log('PASS: self-update: refused without the switch and as a replace, no marker after a TV refusal, refused when the TV does not hold the certificate that installed it, signed with the one that did, a marker after the installer stops the service, reported on /ping with the dead run\'s lines until acknowledged');
                     process.exit(0);
                 });
             });

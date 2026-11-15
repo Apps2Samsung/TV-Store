@@ -180,6 +180,13 @@ function writeSelfMark(entry) {
     try { fs.writeFileSync(SELF_MARK, JSON.stringify(m)); } catch (e) { log('self-update: could not write the marker: ' + e.message); }
 }
 function clearSelfMark() { SELF_UPDATE = null; unlinkQuiet(SELF_MARK); }
+// The running copy's author-signature.xml, next to the service folder in the installed package
+// (A2S_OWN_SIGNATURE stands in for it in a test): which certificate installed this copy.
+var OWN_SIGNATURE = process.env.A2S_OWN_SIGNATURE || (typeof __dirname === 'string' ? path.resolve(__dirname, '..', 'author-signature.xml') : null);
+function ownAuthors() {
+    try { return selfupdate.authors(fs.readFileSync(OWN_SIGNATURE, 'utf8')); }
+    catch (e) { log('self-update: could not read which certificate installed this copy (' + e.message + ')'); return []; }
+}
 function unlinkQuiet(f) { if (f) { try { fs.unlinkSync(f); } catch (e) {} } }
 // An install of TV-Store's own package: refused unless the page asked for it (the Settings switch),
 // and never as a replace. Marks the entry so the rest of the pipeline keeps to sdbd.
@@ -1079,10 +1086,20 @@ function missingLevel(want, store) {
 function signAndInstall(entry, remoteName, inFile, outFile, cb) {
     var store = loadCerts(), remembered = entry.packageId ? certByPackage()[entry.packageId] : null;
     if (!certs.order(store).length) { var none = coded('NO_CERT', 'No signing certificate available on this TV yet (#844 cert hand-over).'); log('install: ' + none.message); return cb(none); }
-    var lvl = wantedLevel(entry, store, remembered);
+    // TV-Store's own package: only the certificate this copy was installed with can update it, and
+    // a wrong one costs the running TV-Store (selfupdate.js), so no level wish and no rotation.
+    var own = entry.self ? selfupdate.signer(certs.order(store), ownAuthors()) : null;
+    if (own && own.missing) {
+        var gone = coded('SELF_CERT_MISSING', 'TV-Store on this TV was installed with a certificate this TV does not hold (it holds ' + certs.order(store).map(certLabel).join(', ') + '), so it cannot update itself: the TV would close TV-Store and then refuse the update. Update it from Apps2Samsung on a phone or PC (On the TV, Update) and arm it again.');
+        log('self-update: none of the certificates on this TV installed this copy; not installing');
+        return cb(gone);
+    }
+    if (own) log('self-update: this copy was installed with ' + certLabel(own.cert) + '; signing the update with it');
+    else if (entry.self) log('self-update: signing with the usual first choice');
+    var lvl = own ? {} : wantedLevel(entry, store, remembered);
     if (lvl.missing) { var miss = missingLevel(lvl.want, store); log('install: ' + lvl.why + ', but the TV holds no ' + levelName(lvl.want) + ' certificate; not installing'); return cb(miss); }
     if (lvl.want || lvl.prefer) log('install: signing with a ' + levelName(lvl.want || lvl.prefer) + ' certificate: ' + lvl.why);
-    var tries = certs.order(store, remembered, lvl.want, lvl.prefer), tried = [], i = 0, mismatch = null;
+    var tries = own ? [own.cert] : certs.order(store, remembered, lvl.want, lvl.prefer), tried = [], i = 0, mismatch = null;
     function finish(err, r) { try { fs.unlinkSync(inFile); } catch (e) {} try { fs.unlinkSync(outFile); } catch (e) {} cb(err, r); }
     removeOld(entry, function (err) { if (err) { log('install: ' + err.message); return cb(err); } (function attempt() {
         var cert = tries[i++], started = Date.now();
