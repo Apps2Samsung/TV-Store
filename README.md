@@ -545,7 +545,12 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
   saw where it stopped (the log then lived in memory), and Apps2Samsung#1005 showed `sdbd`
   finishing an update of TV-Store after the service that sent it was stopped. The service installs
   its own package through `sdbd` only (never `wascmd`, which runs as its child) and never with
-  "remove the old copy first". Just before `0 vd_appinstall` it writes a marker to its data
+  "remove the old copy first". It signs with the certificate the running copy was installed with,
+  read from that copy's own `author-signature.xml`, whatever the default or **Sign with** says:
+  the installer stops TV-Store before it looks at the certificate, so a wrong one closes TV-Store
+  and leaves the old version, and the usual "try the next certificate" never gets to run. When
+  the TV holds no such certificate, the update is refused with TV-Store still open
+  (`SELF_CERT_MISSING`): update from Apps2Samsung and arm again. Just before `0 vd_appinstall` it writes a marker to its data
   folder, which an update keeps. TV-Store then closes; open it again after a minute. The next
   start finds the marker and shows whether the update landed, with the last log lines of the run
   that sent it on `/ping` (`selfUpdate: { from, to, at, certificate, lines }`) until **Got it**

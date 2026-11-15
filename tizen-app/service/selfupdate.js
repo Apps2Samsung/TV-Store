@@ -9,8 +9,15 @@
  * "remove the old copy first" (that removes TV-Store before anything can install it), and with a
  * marker in the data folder (which an update keeps) written just before the command, so the next
  * start can tell whether the update landed and show the last log lines of the run that sent it.
+ * The installer stops TV-Store before it looks at the certificate, so the usual "the TV refused
+ * this certificate, try the next one" never runs for TV-Store's own package: the service is gone
+ * before the refusal arrives, and the next try starts with the same certificate. So the update is
+ * signed with the profile whose author certificate is in the running copy's author-signature.xml,
+ * and refused up front, with TV-Store left running, when this TV holds no such profile.
  * Pure helpers here; the I/O is in index.js. ES5, Node 4: test/selfupdate.test.js. */
 'use strict';
+var crypto = require('crypto');
+var Buf = require('./compat.js');
 
 // Whether an install is TV-Store's own package: by package id, or by the package part of the
 // application id when the page sent no package id.
@@ -54,4 +61,23 @@ function outcome(mark, running) {
     return 'unknown';
 }
 
-module.exports = { isOwn: isOwn, refusal: refusal, marker: marker, linesSince: linesSince, outcome: outcome };
+// The SHA-256 (hex) of every certificate in an author-signature.xml. The author leaf is one of
+// them, and its fingerprint is the id a signing profile is known by (certs.js).
+function authors(xml) {
+    var re = /<(?:\w+:)?X509Certificate>([\s\S]*?)<\/(?:\w+:)?X509Certificate>/g, out = [], m;
+    while ((m = re.exec(String(xml || '')))) {
+        var der = Buf.from(m[1].replace(/\s+/g, ''), 'base64');
+        if (der.length) out.push(crypto.createHash('sha256').update(der).digest('hex'));
+    }
+    return out;
+}
+
+// Which of the TV's profiles signed the running copy: { cert } when the TV holds it, { missing:
+// true } when it holds none of them, null when the running copy's signature could not be read.
+function signer(profiles, ownAuthors) {
+    if (!ownAuthors || !ownAuthors.length) return null;
+    var hit = (profiles || []).filter(function (c) { return ownAuthors.indexOf(c.id) >= 0; })[0];
+    return hit ? { cert: hit } : { missing: true };
+}
+
+module.exports = { authors: authors, signer: signer, isOwn: isOwn, refusal: refusal, marker: marker, linesSince: linesSince, outcome: outcome };
