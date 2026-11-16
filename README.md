@@ -578,6 +578,16 @@ The header counts what the switches hide ("12 apps · 3 hidden").
   apart by the TV. TV-Store remembers which file it installed itself; for an app installed from
   a phone or PC, pin the build you have and TV-Store treats that as the installed one, on the
   On the TV page and for updates.
+- **Jellyfin builds** (#124) all declare version `0.1.0`, the wrapper's own, so the TV cannot tell
+  a 12.4 from a 12.5. The catalog gives each build's jellyfin-web version as `web_version`
+  (Apps2Samsung#1117), and TV-Store shows and compares that one: it writes it down when it installs
+  a build, and a higher one in the catalog is an update that joins **Update all**. Only the version
+  counts, not the build date: upstream rebuilds several times a day. A Jellyfin that TV-Store did
+  not install itself (from a phone or PC, or before 0.3.33) has nothing written down: its version
+  reads as not known with the catalog's next to it, and no update is offered, since TV-Store's
+  plain package would replace a copy Apps2Samsung built with your server, sign-in and plugins.
+  Installing it from TV-Store once settles it. The record is kept per package id and leaves with
+  the app; a build without a `web_version` is compared as before.
 - The search box opens the TV keyboard only on OK, so moving past it (to Settings, say) leaves
   the keyboard closed. Done, Cancel or Back closes the keyboard and keeps the text; Back again
   clears the search.
@@ -651,6 +661,7 @@ node test/relay-default.test.js   # the relay turns itself on when sdbd takes lo
 node test/certs.test.js     # signing profiles: payload shapes, merge, order, levels, expiry and DUIDs from the DER, default and remove on the TV (#78)
 node test/selfupdate.test.js  # TV-Store updating itself (#41): refused without the switch, the marker, reported after the installer stops the service
 node test/pkgid.test.js     # another app's package id (#84): the derived id against values computed apart, catalog keys, when to rename, whole-token rewrite
+node test/web-version.test.js  # Jellyfin on the catalog's web_version (#124), on the real page script: update, not known, Update all, the record
 node test/rename.test.js    # a fork installed beside the app whose id it kept, its update on that copy, a .tpk refused until Replace, an older page as before
 ```
 

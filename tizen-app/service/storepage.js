@@ -89,6 +89,7 @@ function client() {
     function meta(a) {
         var p = [];
         if (a.installed !== null && a.update) p.push((a.installed ? 'v' + a.installed + ' to ' : 'Update to ') + 'v' + a.latest);
+        else if (a.installed !== null && a.unknown) p.push('Version on the TV not known' + (a.latest ? ', v' + a.latest + ' in the catalog' : ''));
         else if (a.installed !== null) p.push(a.installed ? 'v' + a.installed : 'Installed');
         else if (a.latest) p.push('v' + a.latest);
         if (a.author) p.push('by ' + a.author);

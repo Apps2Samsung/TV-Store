@@ -119,6 +119,35 @@
         installedFile[pkg] = v.file;
         try { window.localStorage.setItem(VARIANTS_KEY, JSON.stringify(installedFile)); } catch (e) {}
     }
+    // The jellyfin-web version TV-Store installed per package id (#124): { key, file, web }. Every
+    // Jellyfin build declares 0.1.0, the wrapper's own version, so the TV cannot tell a 12.4 from a
+    // 12.5; the catalog's web_version can, and only for a build TV-Store installed itself is the
+    // one on the TV known. `key` is the app it belongs to: the Jellyfin apps share one package id.
+    var WEB_KEY = 'a2s.tvstore.webversions';
+    var installedWeb = (function () { try { var w = JSON.parse(window.localStorage.getItem(WEB_KEY)); return w && typeof w === 'object' && !Array.isArray(w) ? w : {}; } catch (e) { return {}; } })();
+    function saveWeb() { try { window.localStorage.setItem(WEB_KEY, JSON.stringify(installedWeb)); } catch (e) {} }
+    // After an install from here: what went on the TV under pkg. A build without a web_version
+    // takes the record away, since it replaced whatever the record was about.
+    function rememberWeb(x, v, pkg) {
+        if (!pkg) return;
+        if (v.webVersion && !v.upload) installedWeb[pkg] = { key: x.key, file: v.file, web: v.webVersion };
+        else if (installedWeb.hasOwnProperty(pkg)) delete installedWeb[pkg];
+        else return;
+        saveWeb();
+    }
+    // The record of package pkg when it is about app x, else null.
+    function webRecord(x, pkg) {
+        var r = installedWeb.hasOwnProperty(pkg) ? installedWeb[pkg] : null;
+        return r && r.key === x.key && typeof r.web === 'string' && r.web ? r : null;
+    }
+    // A package that left the TV takes its record along: what comes back under that id may be
+    // another build, from a phone or PC.
+    function pruneWeb(map) {
+        var gone = Object.keys(installedWeb).filter(function (p) { return !map.hasOwnProperty(p); });
+        if (!gone.length) return;
+        gone.forEach(function (p) { delete installedWeb[p]; });
+        saveWeb();
+    }
     // Sign with (#50): packageId -> 'public' | 'partner', only when chosen by hand; Automatic is no entry.
     var CERT_CHOICE_KEY = 'a2s.tvstore.certchoice';
     var certChoice = (function () { try { return JSON.parse(window.localStorage.getItem(CERT_CHOICE_KEY)) || {}; } catch (e) { return {}; } })();
@@ -743,10 +772,15 @@
     }
 
     // ---- the catalog ------------------------------------------------------------------------------
-    function variant(label, file, url, version, appId, packageId, tizen, certLevel, icon) {
+    function variant(label, file, url, version, appId, packageId, tizen, certLevel, icon, webVersion) {
         return { label: label || file.replace(/\.(wgt|tpk)$/i, ''), file: file, url: url, version: version || '', appId: appId || '', packageId: packageId || '', tizen: tizen || '',
-                 certLevel: String(certLevel || '').toLowerCase() === 'partner' ? 'partner' : '', icon: icon || '' };
+                 certLevel: String(certLevel || '').toLowerCase() === 'partner' ? 'partner' : '', icon: icon || '', webVersion: webOf(webVersion) };
     }
+    // The catalog's web_version (#124), on Jellyfin builds only: the jellyfin-web version inside.
+    // Anything that is not a plain version is left out, and the build compares as before.
+    function webOf(w) { return typeof w === 'string' && /^\d+(?:\.\d+){0,3}$/.test(w) ? w : ''; }
+    // The version a build is shown and compared with: its web_version when the catalog gives one.
+    function verOf(v) { return v.webVersion || v.version; }
     // The icon a package file names in the catalog (#66), as the lower-case hex SHA-256 the service
     // serves it under (GET /icon/<hash>): only with its hash, the service shows nothing else.
     function iconOf(a) {
@@ -788,7 +822,7 @@
                 // The community bundle: the catalog is the truth, the release gives the download.
                 p.catalog.apps.forEach(function (e) {
                     var a = byFile[e.file]; if (!a) return;
-                    var v = variant(e.variant, e.file, a.browser_download_url, e.version || a.package_version, e.app_id || a.app_id, e.package_id || a.package_id, e.required_version || a.required_version, e.cert_level || p.cert_level, iconOf(a));
+                    var v = variant(e.variant, e.file, a.browser_download_url, e.version || a.package_version, e.app_id || a.app_id, e.package_id || a.package_id, e.required_version || a.required_version, e.cert_level || p.cert_level, iconOf(a), a.web_version);
                     var x = app('c:' + (e.group || e.name), e.group || e.name, e.category, e.description, ownerOf(e.repo));
                     v.app = x;
                     var mt = e.moved_to;
@@ -817,7 +851,7 @@
             if (src && p.adult === true) x.adult = true;
             if (src && (p.flags || []).indexOf('root') >= 0) x.root = true;
             assets.forEach(function (a) {
-                var v = variant(null, a.name, a.browser_download_url, a.package_version, a.app_id, a.package_id, a.required_version, p.cert_level, iconOf(a));
+                var v = variant(null, a.name, a.browser_download_url, a.package_version, a.app_id, a.package_id, a.required_version, p.cert_level, iconOf(a), a.web_version);
                 v.app = x;
                 if (!a.digest) v.needsHead = NO_HASH;
                 else if (x.root) v.needsHead = 'gains root on the TV and needs Host PC IP changed afterwards';
@@ -1034,12 +1068,15 @@
                         if (!exact && v.version && v.version === installed[p]) exact = x;
                     });
                 });
+                // The Jellyfin apps all declare 0.1.0 (#124): the one TV-Store installed is the one it wrote down.
+                var rec = installedWeb.hasOwnProperty(p) ? byKey(installedWeb[p].key) : null;
+                if (rec && rec.source === from && !renamedApp(rec, p) && rec.variants.some(function (v) { return v.packageId === p; })) exact = rec;
                 if (first) claims[p] = (exact || first).key;
             });
         }
         return claims[pkg];
     }
-    function setInstalled(map) { installed = map; claims = null; }
+    function setInstalled(map) { installed = map; claims = null; if (Object.keys(map).length) pruneWeb(map); }
 
     // Installed / update state of an app: from the variants whose package id the TV lists. Several
     // can match (#17); then the installed application id narrows it down where the builds differ in
@@ -1062,9 +1099,25 @@
             var pinnedHits = hits.filter(function (i) { return isPinned(x, i); });
             if (pinnedHits.length === 1) { pick = pinnedHits[0]; known = true; byPin = true; }
         }
-        var pv = x.variants[pick], have = installed[tvPkg(pv)];
-        return { installed: true, version: have, update: newer(pv.version, have), variant: pick, known: known, byPin: byPin, latest: pv.version };
+        var c = versions(x, x.variants[pick]);
+        return { installed: true, version: c.version, update: c.update, variant: pick, known: known, byPin: byPin, latest: c.latest, unknown: c.unknown };
     }
+    // The version of build v on the TV against the catalog's: { version, latest, update, unknown }.
+    // A build with a web_version (#124) is compared on that, with the one TV-Store wrote down when
+    // it installed the app. Nothing written down (it came from a phone or PC, or from before this)
+    // is `unknown`: no version to show and no update, since TV-Store's plain package would replace
+    // a Jellyfin the desktop app built with the user's server, sign-in and plugins.
+    function versions(x, v) {
+        var pkg = tvPkg(v);
+        if (v.webVersion) {
+            var rec = webRecord(x, pkg), have = rec ? rec.web : '';
+            return { version: have, latest: v.webVersion, update: newer(v.webVersion, have), unknown: !have };
+        }
+        return { version: installed[pkg], latest: v.version, update: newer(v.version, installed[pkg]), unknown: false };
+    }
+    // How the version on the TV reads: "v12.4.0", or that it is not known.
+    function haveText(st) { return st.unknown ? 'version not known' : st.version ? 'v' + st.version : ''; }
+    var WEB_UNKNOWN = 'TV-Store did not install this copy, so it cannot tell which version is on the TV and offers no update. Installing it from here once settles that; a copy built by Apps2Samsung on a PC with your server, sign-in or plugins would be replaced by the plain package.';
 
     // The state of one build of an app, for its pinned card (#29): installed when the TV has that
     // build's package and nothing says it is another build; `other` when the TV is known to have a
@@ -1073,7 +1126,8 @@
         var st = state(x), v = x.variants[i];
         if (!st.installed || x.variants[st.variant].packageId !== v.packageId) return { installed: false };
         if (st.known && st.variant !== i) return { installed: false, other: true };
-        return { installed: true, version: st.version, update: newer(v.version, st.version), latest: v.version, exact: st.known };
+        var c = versions(x, v);
+        return { installed: true, version: c.version, update: c.update, latest: c.latest, exact: st.known, unknown: c.unknown };
     }
 
     // What the platform says about this very app: null off a TV.
@@ -1175,7 +1229,7 @@
         return '<div class="tile s' + size + '" style="background:' + bg + '">' + img + '<span class="lt">' + esc(m ? m[0].toUpperCase() : '?') + '</span></div>';
     }
     function badge(cls, text) { return '<span class="badge ' + cls + '">' + esc(text) + '</span>'; }
-    function subline(x) { return x.variants.length > 1 ? x.variants.length + ' variants' : (x.variants[0].version ? 'v' + x.variants[0].version : x.variants[0].file); }
+    function subline(x) { return x.variants.length > 1 ? x.variants.length + ' variants' : (verOf(x.variants[0]) ? 'v' + verOf(x.variants[0]) : x.variants[0].file); }
     function cardBadges(x) {
         var st = state(x), b = srcBadge(x);
         if (st.installed) b += st.update ? badge('b-warn', 'Update') : badge('b-ok', 'Installed');
@@ -1188,9 +1242,10 @@
     }
     function pinBadges(x, i) {
         var vs = variantState(x, i), v = x.variants[i], b = srcBadge(x);
-        if (vs.installed) b += vs.update ? badge('b-warn', 'Update to v' + vs.latest) : badge('b-ok', 'Installed' + (vs.version ? ' · v' + vs.version : ''));
+        if (vs.installed) b += vs.update ? badge('b-warn', 'Update to v' + vs.latest) : badge('b-ok', 'Installed' + (haveText(vs) ? ' · ' + haveText(vs) : ''));
         else if (vs.other) b += badge('b-mute', 'Other build on the TV');
-        else if (v.version) b += badge('b-mute', 'v' + v.version);
+        else if (verOf(v)) b += badge('b-mute', 'v' + verOf(v));
+        if (vs.installed && vs.unknown) b += badge('b-mute', 'v' + vs.latest + ' in the catalog');
         if (!fits(v)) b += badge('b-warn', 'Needs Tizen ' + v.tizen);
         if (x.adult) b += badge('b-warn', '18+');
         if (x.root) b += badge('b-warn', 'root');
@@ -1229,9 +1284,10 @@
     function selCard(x) {
         if (!x) return '<div class="selcard" id="selcard"><div class="selbody"><div class="eyebrow">Selected</div><div class="selname">Pick an app</div></div></div>';
         var st = state(x), b = srcBadge(x);
-        if (st.installed) b += st.update ? badge('b-warn', 'Update to v' + st.latest) : badge('b-ok', 'Installed' + (st.version ? ' · v' + st.version : ''));
+        if (st.installed) b += st.update ? badge('b-warn', 'Update to v' + st.latest) : badge('b-ok', 'Installed' + (haveText(st) ? ' · ' + haveText(st) : ''));
+        if (st.installed && st.unknown) b += badge('b-mute', 'v' + st.latest + ' in the catalog');
         if (x.variants.length > 1) b += badge('b-mute', x.variants.length + ' variants');
-        else if (x.variants[0].version && !st.installed) b += badge('b-mute', 'v' + x.variants[0].version);
+        else if (verOf(x.variants[0]) && !st.installed) b += badge('b-mute', 'v' + verOf(x.variants[0]));
         if (tooNew(x)) b += badge('b-warn', 'Needs Tizen ' + lowestTizen(x));
         if (x.adult) b += badge('b-warn', '18+');
         if (x.needsHead) b += badge('b-mute', 'Phone or PC');
@@ -1258,7 +1314,7 @@
     function pinCard(x, i) {
         var v = x.variants[i];
         return '<div class="card f' + (v.needsHead || !fits(v) ? ' dim' : '') + '" tabindex="0" data-k="card:pinned:' + esc(x.key) + ':' + i + '" data-app="' + esc(x.key) + '" data-vi="' + i + '">'
-            + tile(x, 68, v.icon) + '<div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(x.variants.length > 1 ? v.label : (v.version ? 'v' + v.version : v.file)) + '</div><div class="badges">' + pinBadges(x, i) + '</div></div>';
+            + tile(x, 68, v.icon) + '<div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(x.variants.length > 1 ? v.label : (verOf(v) ? 'v' + verOf(v) : v.file)) + '</div><div class="badges">' + pinBadges(x, i) + '</div></div>';
     }
 
     function section(id, title, list, grid, more) {
@@ -1392,10 +1448,11 @@
     }
     function tvRow(x) {
         var st = state(x), v = x.variants[st.variant];
-        var mt = st.update ? 'v' + st.version + ' installed · v' + st.latest + ' in ' + (x.source === 'official' ? 'the catalog' : x.sourceName) : 'v' + (st.version || v.version) + (x.variants.length > 1 ? ' · ' + (st.known ? v.label : 'variant not known') : '') + (sourcesOn() ? ' · ' + x.sourceName : '');
+        var inCat = ' in ' + (x.source === 'official' ? 'the catalog' : x.sourceName);
+        var mt = st.update ? 'v' + st.version + ' installed · v' + st.latest + inCat : (st.unknown ? 'Version not known · v' + st.latest + inCat : 'v' + (st.version || v.version)) + (x.variants.length > 1 ? ' · ' + (st.known ? v.label : 'variant not known') : '') + (sourcesOn() ? ' · ' + x.sourceName : '');
         return '<div class="lrow f" tabindex="0" data-k="tv:' + esc(x.key) + '" data-app="' + esc(x.key) + '">' + tile(x, 66)
             + '<div class="txt"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(mt) + '</div></div>'
-            + (isPinned(x, st.variant) ? badge('b-pin', 'Pinned') : '') + (st.update ? badge('b-warn', 'Update') : badge('b-ok', 'Up to date')) + CHEV + '</div>';
+            + (isPinned(x, st.variant) ? badge('b-pin', 'Pinned') : '') + (st.update ? badge('b-warn', 'Update') : st.unknown ? badge('b-mute', 'Version not known') : badge('b-ok', 'Up to date')) + CHEV + '</div>';
     }
 
     function renderTv() {
@@ -1424,7 +1481,7 @@
         if (x.gone) return gonePanel(x);
         var st = state(x), v = x.variants[st.variant];
         var h = '<div class="panel" id="tvpanel"><div class="phead">' + tile(x, 96, v.icon) + '<div style="min-width:0"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(catName(x.category) + (v.appId ? ' · ' + v.appId : '')) + '</div></div></div>'
-            + '<div class="table kv" style="margin-top:0"><div class="trow"><span class="k">Installed</span><span class="v">v' + esc(st.version) + '</span></div>'
+            + '<div class="table kv" style="margin-top:0"><div class="trow"><span class="k">Installed</span><span class="v">' + esc(st.unknown ? 'Not known' : 'v' + st.version) + '</span></div>'
             + (sourcesOn() ? '<div class="trow"><span class="k">Source</span><span class="v">' + esc(x.sourceName) + '</span></div>' : '')
             + '<div class="trow"><span class="k">' + (x.source === 'official' ? 'In the catalog' : 'In ' + esc(x.sourceName)) + '</span><span class="v"' + (st.update ? ' style="color:#F0A020"' : '') + '>v' + esc(st.latest || v.version) + '</span></div>'
             + (x.variants.length > 1 ? '<div class="trow"><span class="k">Variant</span><span class="v">' + esc(st.known ? v.label + (st.byPin ? ' · pinned' : '') : 'Not known: the builds share one package') + '</span></div>' : '') + '</div>'
@@ -1441,6 +1498,7 @@
         else if (st.update && v.needsHead) h += '<div class="hint" style="text-align:left">' + esc(x.name + ' ' + v.needsHead + ': update it with Apps2Samsung on a phone or PC.') + '</div>';
         else if (st.update && settingsBlock(x, v, st)) h += '<div class="hint" style="text-align:left">' + esc(settingsBlock(x, v, st) + ' Open Details for how to fill them in.') + '</div>';
         else if (!st.known && x.variants.length > 1) h += '<div class="hint" style="text-align:left">' + esc('TV-Store cannot tell which build of ' + x.name + ' this is: the builds share one package. Open Details, pick your build and pin it; the pinned build is the one that gets updated.') + '</div>';
+        else if (st.unknown) h += '<div class="hint" style="text-align:left">' + esc(WEB_UNKNOWN) + '</div>';
         return h + '</div>';
     }
 
@@ -1490,8 +1548,9 @@
             + (x.author ? ' · <span class="by f" tabindex="0" data-k="author" data-act="author" title="All apps by ' + esc(x.author) + '">by ' + esc(x.author) + ' ›</span>' : '') + '</div></div></div>';
         if (x.description) h += '<div class="sdesc">' + esc(x.description) + '</div>';
         var b = '';
-        if (st.installed) b += badge('b-ok', 'Installed' + (st.version ? ' · v' + st.version : ''));
+        if (st.installed) b += badge('b-ok', 'Installed' + (haveText(st) ? ' · ' + haveText(st) : ''));
         if (st.update) b += badge('b-warn', 'Update to v' + st.latest);
+        else if (st.installed && st.unknown) b += badge('b-mute', 'v' + st.latest + ' in the catalog');
         if (x.adult) b += badge('b-warn', 'Adults only (18+)');
         if (x.root) b += badge('b-warn', 'Gains root on the TV');
         if (v.tizen) b += badge(fits(v) ? 'b-mute' : 'b-warn', 'Tizen ' + v.tizen + ' or newer');
@@ -1507,12 +1566,12 @@
                     return '<div class="var f' + (i === sheet.v ? ' sel' : '') + '" tabindex="0" data-k="var:' + i + '" data-var="' + i + '"' + (i === sheet.v ? ' data-default' : '') + '>'
                         + '<span class="radio"></span><span class="vl">' + esc(vv.label) + '</span>'
                         + (inst ? badge('b-ok', 'on the TV') : '') + (isPinned(x, i) ? badge('b-pin', 'Pinned') : '') + (vv.needsHead ? badge('b-mute', 'Phone or PC') : '') + (fits(vv) ? '' : badge('b-warn', 'Needs Tizen ' + vv.tizen)) + (vv.certLevel === 'partner' ? badge('b-mute', 'Partner') : '')
-                        + '<span class="vv">' + esc(vv.version ? 'v' + vv.version : '') + '</span></div>';
+                        + '<span class="vv">' + esc(verOf(vv) ? 'v' + verOf(vv) : '') + '</span></div>';
                 }).join('') + '</div></div>';
             if (!sheet.all && x.variants.length > 4) h += '<span class="link f" tabindex="0" data-k="allvars" data-act="allvars">Show all ' + x.variants.length + ' variants ›</span>';
         }
 
-        var label = st.installed && st.known && st.variant === sheet.v ? (st.update ? 'Update to v' + v.version : 'Reinstall') : (st.installed ? 'Install this variant' : 'Install on this TV');
+        var label = st.installed && st.known && st.variant === sheet.v ? (st.update ? 'Update to v' + verOf(v) : 'Reinstall') : (st.installed ? 'Install this variant' : 'Install on this TV');
         // The same package came from another source (#82): installing this copy moves the app here,
         // and the button says so; that press is the explicit yes the service wants.
         var elsewhere = heldElsewhere(x, v);
@@ -1527,7 +1586,7 @@
         else if (plan.missing) h += '<div class="notice">' + esc(missingLevelText(x.name, plan)) + '</div>';
         var setBlock = !me && fits(v) && !v.needsHead ? settingsBlock(x, v, st) : '';
         if (!me && fits(v) && !v.needsHead) h += appSettingsHtml(x, v, st);
-        if (elsewhere && !me) h += '<div class="notice">' + esc(x.name + ' on this TV (v' + installed[tvPkg(v)] + ') came from ' + elsewhere + '. Installing this copy from ' + x.sourceName + ' replaces it, and its updates come from ' + x.sourceName + ' from then on.') + '</div>';
+        if (elsewhere && !me) h += '<div class="notice">' + esc(x.name + ' on this TV' + (v.webVersion ? '' : ' (v' + installed[tvPkg(v)] + ')') + ' came from ' + elsewhere + '. Installing this copy from ' + x.sourceName + ' replaces it, and its updates come from ' + x.sourceName + ' from then on.') + '</div>';
         var mv = movedInfo(x);
         if (mv && !mv.done) h += '<div class="notice row"><span>' + esc('The developer moved ' + x.name + ' to ' + (mv.source ? '\u2018' + mv.source.name + '\u2019' : 'their own repository at ' + mv.domain) + '. The official catalog stops updating it soon. ' + (st.installed ? (mv.source ? 'Take its updates from there.' : 'Add that repository to keep getting updates.') : 'Add that repository to install it from there.')) + '</span>'
             + '<button class="btn f" data-k="movedadd" data-act="movedadd" data-url="' + esc(mv.url) + '" data-fp="' + esc(mv.fingerprint) + '" data-name="' + esc(x.name) + '">' + (mv.source ? 'Take updates from there' : 'Add source') + '</button></div>';
@@ -1539,7 +1598,8 @@
         if (st.installed && x.variants[st.variant].appId) h += '<button class="btn f" data-k="open" data-act="open">Open</button>';
         // Pin this build to the top of the store (#29); for a one-build app the button pins the app.
         h += '<button class="btn f" data-k="pin" data-act="pin">' + (isPinned(x, sheet.v) ? 'Unpin' : 'Pin') + '</button>';
-        if (st.installed && !st.known && x.variants.length > 1) h = h.replace('<div class="sfoot">', '<div class="notice">' + esc('Your TV has ' + x.name + ' v' + st.version + ', but every build of it uses the same package, so TV-Store cannot tell which one. Pick yours above to reinstall or update it, or pin it so TV-Store knows.') + '</div><div class="sfoot">');
+        if (st.installed && !st.known && x.variants.length > 1) h = h.replace('<div class="sfoot">', '<div class="notice">' + esc('Your TV has ' + x.name + (st.version ? ' v' + st.version : '') + ', but every build of it uses the same package, so TV-Store cannot tell which one. Pick yours above to reinstall or update it, or pin it so TV-Store knows.') + '</div><div class="sfoot">');
+        if (st.installed && st.unknown && !me) h = h.replace('<div class="sfoot">', '<div class="notice">' + esc(WEB_UNKNOWN) + '</div><div class="sfoot">');
         // Came from a phone or PC (TV-Store never installed this package): the TV keeps that device's
         // certificate, and an update from here may need the old copy removed first (#44).
         var fromHead = can && st.installed && v.packageId && !installedFile.hasOwnProperty(tvPkg(v));
@@ -1610,7 +1670,7 @@
     function jobHtml() {
         var x = job.app, v = job.v, upd = job.update;
         var done = job.step, pct = Math.min(100, Math.round((done / 4) * 100 + (job.running && done < 3 ? 8 : 0)));
-        var h = '<div class="shd">' + tile(x, 88, v.icon) + '<div style="min-width:0"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(v.label + (v.version ? ' · v' + v.version : '')) + '</div></div></div>';
+        var h = '<div class="shd">' + tile(x, 88, v.icon) + '<div style="min-width:0"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(v.label + (verOf(v) ? ' · v' + verOf(v) : '')) + '</div></div></div>';
         h += '<div class="prog"><div class="top"><b>' + (job.error ? (upd ? 'Update failed' : 'Install failed') : (upd ? 'Updating…' : 'Installing…')) + '</b><span>' + (job.error ? '' : 'step ' + Math.min(done + 1, 4) + ' of 4') + '</span></div>'
             + '<div class="bar' + (job.error ? ' bad' : '') + '"><i style="width:' + (job.error ? 100 : pct) + '%"></i></div></div>';
         h += '<div class="table">' + STEPS.map(function (s, i) {
@@ -1641,7 +1701,7 @@
         var x = job.app, v = job.v, secs = Math.max(1, Math.round((job.ended - job.started) / 1000));
         var more = updates();
         var h = '<div class="donehead"><div class="tw">' + tile(x, 150) + '<span class="ico done bigok">' + CHECK.replace('width="18" height="18"', 'width="30" height="30"') + '</span></div>'
-            + '<h2>' + esc(x.name) + ' is on your TV</h2><p>' + esc((job.update ? 'Updated to v' : 'Installed v') + (v.version || '') + '. You will find it in the Apps row' + (job.update ? ', right where it was.' : '.')) + '</p></div>';
+            + '<h2>' + esc(x.name) + ' is on your TV</h2><p>' + esc((job.update ? 'Updated to v' : 'Installed v') + (verOf(v) || '') + '. You will find it in the Apps row' + (job.update ? ', right where it was.' : '.')) + '</p></div>';
         // Installed beside another app that has its package id (#84): say so, or it looks like that app went.
         if (job.renamed && job.renamed.why === 'collision') h += '<div class="notice info" style="margin-top:24px">' + esc('Installed as a separate app, because ' + (job.renamed.other || 'another app') + ' already uses this id.') + '</div>';
         h += '<div class="table kv" style="margin-top:' + (job.renamed && job.renamed.why === 'collision' ? 16 : 38) + 'px"><div class="trow"><span class="k">Variant</span><span class="v">' + esc(v.label) + '</span></div>'
@@ -1764,7 +1824,7 @@
                 var current = st.installed && !st.update;
                 return { key: x.key, url: v.url || '', file: v.file || '', name: x.name, cat: knownCategory(x.category), author: x.author || '', desc: String(x.description || '').slice(0, 300),
                          source: x.source === 'official' ? '' : x.sourceName || '', icon: x.icon || '', installed: st.installed ? st.version || '' : null,
-                         update: !!st.update, latest: st.installed ? st.latest || '' : v.version || '', variant: x.variants.length > 1 ? v.label : '',
+                         update: !!st.update, latest: st.installed ? st.latest || '' : verOf(v) || '', unknown: !!(st.installed && st.unknown), variant: x.variants.length > 1 ? v.label : '',
                          adult: !!x.adult, root: !!x.root, partner: !!x.partner, can: !current && !why, why: why };
             }),
             job: job ? { key: job.app.key, name: job.app.name, update: !!job.update, step: job.step, running: !!job.running, ok: !!job.ok, error: job.error || null,
@@ -1897,7 +1957,7 @@
                 var pkg = rr.packageId || v.packageId, aid = rr.appId || v.appId;
                 me.appId = aid; me.renamed = rr.renamed || null;
                 if (rr.renamed && rr.renamed.to && v.url && !pkgIds[v.url]) pkgIds[v.url] = rr.renamed.to;
-                if (pkg) { installed[pkg] = v.version; claims = null; rememberVariant(v, pkg); }
+                if (pkg) { installed[pkg] = v.version; claims = null; rememberVariant(v, pkg); rememberWeb(x, v, pkg); }
                 if (pkg && ready) { ready.sourceOf = ready.sourceOf || {}; if (v.upload) delete ready.sourceOf[pkg]; else ready.sourceOf[pkg] = rr.source || x.source || 'official'; }
                 if (aid) appIds[aid] = true;
                 ackBrowser(me.app, 'done');
