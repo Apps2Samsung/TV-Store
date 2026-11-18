@@ -59,19 +59,26 @@
   .greet{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;padding-right:28px}
   .greet h1{font-size:46px;font-weight:700;letter-spacing:-.01em;line-height:1.1;margin:0 0 10px}
   .greet p{font-size:22px;color:#9FB0C6;line-height:1.45;max-width:760px;margin:0}
-  .selcard{width:820px;flex:none;display:flex;align-items:center;background:rgba(244,247,251,.08);border:1px solid rgba(244,247,251,.12);border-radius:24px;padding:22px 26px;min-height:196px}
+  /* The Selected card is one height whatever the app under the focus has to say (#126): every line in it
+     has a fixed height, the description keeps room for its two lines and the badges for one row. It grew
+     and shrank by up to 11 px with the description, the name's script and the badges, and the rows under
+     it moved along on every step of the remote. */
+  .selcard{width:820px;flex:none;display:flex;align-items:center;background:rgba(244,247,251,.08);border:1px solid rgba(244,247,251,.12);border-radius:24px;padding:22px 26px;height:208px}
   .selcard .tile{margin-right:22px}
   .selbody{flex:1;min-width:0}
-  .eyebrow{font-size:17px;color:#9FB0C6;text-transform:uppercase;letter-spacing:.06em}
-  .selname{font-size:30px;font-weight:700;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .seldesc{font-size:18px;color:#9FB0C6;line-height:1.45;margin-top:6px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .eyebrow{font-size:17px;color:#9FB0C6;text-transform:uppercase;letter-spacing:.06em;line-height:22px;height:22px;white-space:nowrap;overflow:hidden}
+  .selname{font-size:30px;font-weight:700;margin-top:2px;line-height:38px;height:38px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .seldesc{font-size:18px;color:#9FB0C6;line-height:26px;height:52px;margin-top:6px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .selcard .badges{height:32px;overflow:hidden}
   .selok{display:flex;flex-direction:column;align-items:flex-end;flex:none;margin-left:16px;font-size:17px;color:#9FB0C6}
   .selok svg{margin-top:8px}
 
   /* tiles: the letter on the category colour (Core's AppTiles) */
   .tile{display:flex;align-items:center;justify-content:center;color:#FFF;font-weight:700;flex:none;position:relative;overflow:hidden}
   /* The app's icon from the service (#66) over the letter; shown once it has loaded. */
-  .tile .ic{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover;opacity:0}
+  /* The icon carries the tile's rounding itself, so its corners do not depend on the tile's clip while
+     the card under the focus is being scaled (#126). */
+  .tile .ic{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover;opacity:0;border-radius:inherit}
   .tile.has{background:#1C2735}.tile.has .ic{opacity:1}.tile.has .lt{visibility:hidden}
   .tile.s68{width:68px;height:68px;border-radius:17px;font-size:32px}
   .tile.s88{width:88px;height:88px;border-radius:22px;font-size:42px}

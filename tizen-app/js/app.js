@@ -1225,7 +1225,11 @@
         var m = String(x.name || '').match(/[A-Za-z0-9]/), c = knownCategory(x.category);
         var bg = c !== 'other' ? CATEGORY_COLORS[c] : x.name ? PALETTE[hashOf(String(x.name)) % PALETTE.length] : CATEGORY_COLORS.other;
         icon = icon || x.icon;
-        var img = icon ? '<img class="ic" alt="" src="' + esc(BASE + '/icon/' + icon) + '" onload="this.parentNode.className+=\' has\'" onerror="if(this.parentNode)this.parentNode.removeChild(this)">' : '';
+        // decoding="sync" (#126): a browser that decodes large images off the frame (Chromium 65 and up)
+        // first paints the tile without its icon and adds it a frame later, again every time the focus
+        // scales a card or the Selected card is rebuilt: the icon blinked between the bare rounded tile
+        // and its own shape. An older browser ignores the attribute and decodes in the frame anyway.
+        var img = icon ? '<img class="ic" alt="" decoding="sync" src="' + esc(BASE + '/icon/' + icon) + '" onload="this.parentNode.className+=\' has\'" onerror="if(this.parentNode)this.parentNode.removeChild(this)">' : '';
         return '<div class="tile s' + size + '" style="background:' + bg + '">' + img + '<span class="lt">' + esc(m ? m[0].toUpperCase() : '?') + '</span></div>';
     }
     function badge(cls, text) { return '<span class="badge ' + cls + '">' + esc(text) + '</span>'; }
