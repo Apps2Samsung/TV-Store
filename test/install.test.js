@@ -23,6 +23,7 @@ var wgt = zip.write([{ name: 'index.html', data: Buf.from('<html></html>') },
 var MISMATCH = 'install A2SProbe01.Probe package_path /x was_install_app return WAS_TRUE app_id[A2SProbe01.Probe] install start installing[7] app_id[A2SProbe01.Probe] install failed[118, -12], reason: Check certificate error : :Package with the same id and different certificate has been already installed.:<-12>\n';
 var OK = 'install A2SProbe01.Probe package_path /x was_install_app return WAS_TRUE installing[100] app_id[A2SProbe01.Probe] install completed\n';
 // A profile whose distributor does not cover this set (a PC's bundled one on a 2024 TV): a certificate refusal with another reason.
+var NO_ROOM = ' install A2SProbe01.Probe package_path /x app_id[A2SProbe01.Probe] install start app_id[A2SProbe01.Probe] download failed[116] spend\n';
 var CHAIN = 'install A2SProbe01.Probe package_path /x was_install_app return WAS_TRUE app_id[A2SProbe01.Probe] install failed[118, -12], reason: Check certificate error : :Invalid certificate chain.:<-3>\n';
 var replies = [], shells = [];
 var child = null, err = '', handle = null;
@@ -107,7 +108,13 @@ function run() {
                                     replies = [CHAIN, CHAIN];
                                     installUpload({}, function (j) {
                                         if (j.ok || j.code !== 'CERT_REJECTED') fail('only chain refusals must answer the rejection: ' + JSON.stringify(j));
-                                        step4();
+                                        // 3c. "download failed[116]" (#129): not a success, and no other profile is tried.
+                                        replies = [NO_ROOM, OK];
+                                        installUpload({}, function (j, calls) {
+                                            if (j.ok || j.code !== 'NO_SPACE' || j.error.indexOf('storage is full') < 0) fail('download failed[116] must answer NO_SPACE: ' + JSON.stringify(j));
+                                            if (calls.filter(function (c) { return c.indexOf('vd_appinstall') >= 0; }).length !== 1) fail('download failed[116] must not be retried with another profile: ' + JSON.stringify(calls));
+                                            step4();
+                                        });
                                     });
                                 });
                             });

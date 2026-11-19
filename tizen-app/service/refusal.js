@@ -15,6 +15,9 @@
  *   [118, -19]  the installer's "parsing error" on the manifest: in practice a package that asks for
  *               a newer Tizen than the set runs (#44); [118, -4] is the newer sets' spelling of that,
  *               next to "load archive info fail" for a bad package id.
+ *   [116]       "download failed[116]", before "install start" is followed by anything else: the
+ *               installer could not take the package in, which is a TV without room for it (#129).
+ *               Another certificate does not help, so nothing is retried (NO_SPACE).
  */
 'use strict';
 
@@ -23,12 +26,18 @@ function tizenVersionOf(entry) { var m = /^\s*(\d+(?:\.\d+)?)/.exec(String((entr
 
 function appName(entry) { return (entry && (entry.name || (entry.file && String(entry.file).replace(/\.(wgt|tpk)$/i, '')))) || 'This app'; }
 
-// -> { code, message }. code is CERT_MISMATCH, CERT_REJECTED or INSTALL_FAILED.
+// The installer's failure line in a reply, for either stage: [1] the code, [2] the reason when the
+// set gives one. No g flag, so exec and test keep no state between replies.
+var FAILED = /(?:install|download) failed\[([^\]]*)\](?:,\s*reason:\s*([^\n]*))?/i;
+
+// -> { code, message }. code is CERT_MISMATCH, CERT_REJECTED, NO_SPACE or INSTALL_FAILED.
 function refusal(code, reason, entry) {
     entry = entry || {};
     var c = String(code || '').replace(/\s/g, ''), why = String(reason || '').trim();
     var m = 'The TV refused the package [' + code + ']' + (why ? ': ' + why : '');
     var tv = tizenVersionOf(entry), req = entry.requiredVersion || '';
+    if (/^116(,|$)/.test(c))
+        return { code: 'NO_SPACE', message: 'The TV could not take the package in [' + code + ']' + (why ? ': ' + why : '') + ', so ' + appName(entry) + ' was not installed' + (entry.installed ? ' and the copy on this TV is unchanged' : '') + '. This is what a TV answers when its storage is full: remove an app or two you do not use (Apps, Settings on the TV), restart the TV and try again.' };
     if (/^(118,-19|118019|118,-4|118004)$/.test(c)) {
         if (req) return { code: 'INSTALL_FAILED', message: m + '. It asks for Tizen ' + req + ' or newer' + (tv ? ', and this TV runs Tizen ' + tv : '') + '.' };
         return { code: 'INSTALL_FAILED', message: m + '. The TV could not read the package, which usually means it asks for a newer Tizen than this set runs.' };
@@ -45,4 +54,4 @@ function refusal(code, reason, entry) {
     return { code: 'INSTALL_FAILED', message: m };
 }
 
-module.exports = { refusal: refusal, tizenVersionOf: tizenVersionOf };
+module.exports = { refusal: refusal, tizenVersionOf: tizenVersionOf, FAILED: FAILED };

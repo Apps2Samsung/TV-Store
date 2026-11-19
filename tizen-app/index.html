@@ -14,7 +14,9 @@
   *{box-sizing:border-box}
   body{color:#F4F7FB;font-family:"SamsungOne","Tizen Sans",Inter,"Segoe UI",Roboto,Arial,sans-serif;font-size:20px}
   .app{position:relative;width:1920px;height:1080px;padding:36px 64px 28px;display:flex;flex-direction:column;overflow:hidden}
-  .light{position:absolute;left:-10%;top:-40%;width:60%;height:180%;background:linear-gradient(115deg,rgba(255,255,255,.08),rgba(255,255,255,.02));transform:rotate(8deg);pointer-events:none}
+  /* The band of light fades out to nothing on its right: with an edge there, a slanted line ran
+     down the screen and through the cards it crossed (#126). */
+  .light{position:absolute;left:-10%;top:-40%;width:60%;height:180%;background:linear-gradient(90deg,rgba(255,255,255,.08),rgba(255,255,255,0));transform:rotate(8deg);pointer-events:none}
   .app.behind .hdr,.app.behind .page,.app.behind .foot{opacity:.28}
 
   /* focus: one look everywhere */
@@ -79,7 +81,10 @@
   /* The icon carries the tile's rounding itself, so its corners do not depend on the tile's clip while
      the card under the focus is being scaled (#126). */
   .tile .ic{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover;opacity:0;border-radius:inherit}
-  .tile.has{background:#1C2735}.tile.has .ic{opacity:1}.tile.has .lt{visibility:hidden}
+  /* The dark plate behind an icon with see-through parts sits 1px inside the tile: as the tile's
+     own background it showed as a dark rim around the icon's rounded edge (#126). */
+  .tile.has{background:none !important}.tile.has .ic{opacity:1}.tile.has .lt{visibility:hidden}
+  .tile.has:before{content:"";position:absolute;left:1px;top:1px;right:1px;bottom:1px;background:#1C2735;border-radius:inherit}
   .tile.s68{width:68px;height:68px;border-radius:17px;font-size:32px}
   .tile.s88{width:88px;height:88px;border-radius:22px;font-size:42px}
   .tile.s110{width:110px;height:110px;border-radius:26px;font-size:52px}
@@ -124,7 +129,14 @@
   .card{width:283px;height:202px;flex:none;margin-right:18px;display:flex;flex-direction:column;background:rgba(244,247,251,.08);border-radius:20px;padding:18px;color:#F4F7FB;cursor:pointer;transition:transform .12s}
   .grid .card{margin-bottom:18px}
   .grid .card:nth-child(6n){margin-right:0}
-  .card.dim{opacity:.5}
+  /* Dimmed without opacity on the card: a Tizen 6 TV drew such a card in two halves, one darker
+     (#126). The fill, the text and a veil over the icon are each dimmed by their own colour. */
+  .card.dim{background:rgba(244,247,251,.04);color:rgba(244,247,251,.5)}
+  .card.vetro.dim{background:rgba(124,58,237,.11)}
+  .card.dim .mt{color:rgba(159,176,198,.5)}
+  .card.dim .badge{opacity:.5}
+  .card.dim .tile:after{content:"";position:absolute;left:0;top:0;right:0;bottom:0;background:rgba(13,27,42,.5);border-radius:inherit}
+  .card.dim:focus{color:#F4F7FB}.card.dim:focus .mt{color:#9FB0C6}.card.dim:focus .badge{opacity:1}.card.dim:focus .tile:after{display:none}
   .card:focus{background:rgba(244,247,251,.14);box-shadow:inset 0 0 0 4px #2DD4BF,0 16px 40px rgba(0,0,0,.35);transform:scale(1.05);opacity:1}
   .card .nm{font-size:21px;font-weight:600;line-height:1.25;margin-top:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .card .mt{font-size:16px;color:#9FB0C6;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
