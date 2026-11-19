@@ -27,6 +27,7 @@ function fail(m) { stop(); console.error('FAIL: ' + m); process.exit(1); }
     if (i('spend time for wascmd is [12]ms\nappInstall return : [0]\n') !== 'ok') fail('interpret: "appInstall return : [0]" is ok');
     if (i('install X was_install_app return WAS_TRUE app_id[X] install failed[118, -12], reason: x') !== 'refused') fail('interpret: "install failed[" is refused');
     if (i('install X install failed[118012]') !== 'refused') fail('interpret: a six-digit code is refused');
+    if (i('install X app_id[X] install start app_id[X] download failed[116] spend') !== 'refused') fail('interpret: "download failed[" is refused');
     if (i('appInstall return : [-1]') !== 'unusable' || i('wascmd cannot working in released image') !== 'unusable' || i('') !== 'unusable' || i(null) !== 'unusable') fail('interpret: anything else is unusable');
 })();
 var SDB = 26189, F = path.join(__dirname, 'fixtures');

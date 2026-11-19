@@ -101,12 +101,12 @@ function exec(args, timeoutMs, cb) {
     cb(null, text, r.status);
 }
 
-// What wascmd said: 'refused' (the installer's own "install failed[...]", to be read as with
-// vd_appinstall), 'ok' ("install completed" on a 2019 set, "appInstall return : [0]" on an older
+// What wascmd said: 'refused' (the installer's own "install failed[...]" or "download failed[...]",
+// to be read as with vd_appinstall), 'ok' ("install completed" on a 2019 set, "appInstall return : [0]" on an older
 // one), or 'unusable' (anything else: it never got to install, so sdbd is the way after all).
 function interpret(out) {
     var t = String(out || '');
-    if (/install failed\[/i.test(t)) return 'refused';
+    if (/(?:install|download) failed\[/i.test(t)) return 'refused';
     if (/install completed|appInstall return\s*:\s*\[0\]/i.test(t)) return 'ok';
     return 'unusable';
 }

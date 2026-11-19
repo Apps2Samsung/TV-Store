@@ -26,6 +26,13 @@ check('118, -19', 'Parsing error', { requiredVersion: '6.0' }, 'INSTALL_FAILED',
 check('118, -4', 'Operation not allowed', {}, 'INSTALL_FAILED', 'could not read the package');
 // Anything else is passed on as the TV said it.
 check('118, -22', 'Security error : :Invalid function parameter was given:<2>', { installed: true }, 'INSTALL_FAILED', 'The TV refused the package [118, -22]: Security error');
-check('116', '', {}, 'INSTALL_FAILED', '[116]');
+// "download failed[116]": the TV has no room for the package (#129).
+check('116', '', { name: 'Moonfin', installed: true }, 'NO_SPACE', 'Moonfin was not installed and the copy on this TV is unchanged');
+check('116', '', { file: 'Moonfin.wgt' }, 'NO_SPACE', 'storage is full');
+var dl = r.FAILED.exec(' install MoonfinApp.moonfin package_path /x app_id[MoonfinApp.moonfin] install start app_id[MoonfinApp.moonfin] download failed[116] spend');
+if (!dl || dl[1] !== '116' || dl[2]) fail('FAILED: "download failed[116]" is a failure with code 116 and no reason');
+var inst = r.FAILED.exec('app_id[X] install failed[118, -12], reason: Check certificate error : :x:<-12>\n');
+if (!inst || inst[1] !== '118, -12' || inst[2].indexOf('Check certificate error') !== 0) fail('FAILED: "install failed[118, -12], reason" keeps its code and reason');
+if (r.FAILED.test('install X installing[100] app_id[X] install completed\n')) fail('FAILED: "install completed" is no failure');
 if (r.tizenVersionOf({ tizen: '6.5.0' }) !== '6.5' || r.tizenVersionOf({ tizen: 'x' }) !== '' || r.tizenVersionOf(null) !== '') fail('tizenVersionOf');
 console.log('PASS: refusals read as another certificate (removable), a rejected certificate, a Tizen version too low, or as the TV said');

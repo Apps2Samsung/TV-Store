@@ -1112,8 +1112,9 @@ function signAndInstall(entry, remoteName, inFile, outFile, cb) {
             installSigned(entry, remoteName, outFile, size, function (err, out, via) {
                         if (err) return finish(err);
                         // The installer's own words say whether it worked, whichever way the package
-                        // reached it ("install failed[118, -12], reason: ..." on a refused package).
-                        var failed = /install failed\[([^\]]*)\](?:,\s*reason:\s*([^\n]*))?/i.exec(out);
+                        // reached it ("install failed[118, -12], reason: ..." on a refused package,
+                        // "download failed[116]" when it could not even take the package in, #129).
+                        var failed = refusals.FAILED.exec(out);
                         if (failed) {
                             var r = refusals.refusal(failed[1], failed[2], entry);
                             if (r.code === 'CERT_MISMATCH') mismatch = r;
@@ -1179,7 +1180,7 @@ function installSigned(entry, remoteName, outFile, size, cb) {
                     // Still running: a refusal or a lost connection means nothing was replaced, so the
                     // marker goes; "install completed" keeps it, for the next start to confirm the version.
                     if (entry.self) {
-                        var refused = !!err || /install failed/i.test(out);
+                        var refused = !!err || refusals.FAILED.test(out);
                         if (refused) unlinkQuiet(SELF_MARK);
                         log('self-update: still running after vd_appinstall ' + (err ? 'failed: ' + err.message : refused ? 'refused it' : 'answered; TV-Store may still be restarted'));
                     }
