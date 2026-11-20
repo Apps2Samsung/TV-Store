@@ -13,10 +13,11 @@
   html,body{margin:0;width:1920px;height:1080px;overflow:hidden;background:#0D1B2A}
   *{box-sizing:border-box}
   body{color:#F4F7FB;font-family:"SamsungOne","Tizen Sans",Inter,"Segoe UI",Roboto,Arial,sans-serif;font-size:20px}
-  .app{position:relative;width:1920px;height:1080px;padding:36px 64px 28px;display:flex;flex-direction:column;overflow:hidden}
-  /* The band of light fades out to nothing on its right: with an edge there, a slanted line ran
-     down the screen and through the cards it crossed (#126). */
-  .light{position:absolute;left:-10%;top:-40%;width:60%;height:180%;background:linear-gradient(90deg,rgba(255,255,255,.08),rgba(255,255,255,0));transform:rotate(8deg);pointer-events:none}
+  /* The light from the left is the app's own background (#126). It was a separate, rotated element
+     over the ground: a Tizen 6 TV drew that one in pieces, with a seam where two pieces met, as a
+     slanted line down the screen at first and later as a darker strip along the right edge of the
+     cards in one column. */
+  .app{position:relative;width:1920px;height:1080px;padding:36px 64px 28px;display:flex;flex-direction:column;overflow:hidden;background:linear-gradient(98deg,rgba(255,255,255,.07),rgba(255,255,255,0) 50%)}
   .app.behind .hdr,.app.behind .page,.app.behind .foot{opacity:.28}
 
   /* focus: one look everywhere */
@@ -299,7 +300,6 @@
 </head>
 <body>
 <div class="app" id="app">
-  <div class="light"></div>
   <div class="hdr">
     <div class="logo"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="#042F2E" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></div>
     <div class="brand">Apps2Samsung <span class="dot">&middot;</span> TV-Store</div>
