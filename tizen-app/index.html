@@ -126,6 +126,10 @@
   .link{margin-left:auto;font-size:19px;font-weight:600;color:#2DD4BF;border-radius:8px;padding:2px 8px;cursor:pointer}
   .strip{position:relative;overflow:hidden;margin:-14px -12px -26px -18px;padding:14px 12px 26px 18px}
   .cards{display:flex;flex-wrap:nowrap}
+  /* Something after the last card, so the row can scroll past it: a TV browser that leaves the last
+     card's margin and the strip's padding out of what scrolls stopped with that card against the
+     edge, where its focus ring and its larger size were cut off (#126). */
+  .strip .cards:after{content:"";flex:none;width:1px;height:1px}
   .grid .cards{flex-wrap:wrap}
   .card{width:283px;height:202px;flex:none;margin-right:18px;display:flex;flex-direction:column;background:rgba(244,247,251,.08);border-radius:20px;padding:18px;color:#F4F7FB;cursor:pointer;transition:transform .12s}
   .grid .card{margin-bottom:18px}
