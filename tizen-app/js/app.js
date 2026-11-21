@@ -2139,9 +2139,16 @@
     function reveal(el) {
         var strip = closest(el, 'strip');
         if (strip) {
-            var sr = strip.getBoundingClientRect(), er = el.getBoundingClientRect(), pad = 24;
-            if (er.left < sr.left + pad) strip.scrollLeft -= (sr.left + pad - er.left);
-            else if (er.right > sr.right - pad) strip.scrollLeft += (er.right - sr.right + pad);
+            // The card at its resting size: the focused one is scaled up, and measured that way (or
+            // halfway through the transition) the sixth card of a row that fits six looked as if it
+            // stuck out, so the whole row moved a little (#126). The scale keeps the centre in place.
+            // The room kept at each side is the strip's own padding, which is where a row at rest
+            // has its first and its sixth card.
+            var sr = strip.getBoundingClientRect(), er = el.getBoundingClientRect(), cs = window.getComputedStyle(strip);
+            var mid = (er.left + er.right) / 2, half = el.offsetWidth / 2, left = mid - half, right = mid + half;
+            var padL = parseFloat(cs.paddingLeft) || 0, padR = parseFloat(cs.paddingRight) || 0;
+            if (left < sr.left + padL) strip.scrollLeft -= (sr.left + padL - left);
+            else if (right > sr.right - padR) strip.scrollLeft += (right - sr.right + padR);
         }
         var boxes = [closest(el, 'vscroll'), closest(el, 'page')];
         boxes.forEach(function (box) {
