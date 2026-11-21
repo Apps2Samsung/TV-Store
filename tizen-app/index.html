@@ -13,11 +13,11 @@
   html,body{margin:0;width:1920px;height:1080px;overflow:hidden;background:#0D1B2A}
   *{box-sizing:border-box}
   body{color:#F4F7FB;font-family:"SamsungOne","Tizen Sans",Inter,"Segoe UI",Roboto,Arial,sans-serif;font-size:20px}
-  /* The light from the left is the app's own background (#126). It was a separate, rotated element
-     over the ground: a Tizen 6 TV drew that one in pieces, with a seam where two pieces met, as a
-     slanted line down the screen at first and later as a darker strip along the right edge of the
-     cards in one column. */
-  .app{position:relative;width:1920px;height:1080px;padding:36px 64px 28px;display:flex;flex-direction:column;overflow:hidden;background:linear-gradient(98deg,rgba(255,255,255,.07),rgba(255,255,255,0) 50%)}
+  /* The ground is one flat colour (#126). There was a faint light from the left over it, first as
+     a rotated element and then as the app's own gradient: a Tizen 6 TV drew it as a slanted line,
+     then as a darker strip along the cards, then in visible steps that ended halfway the screen
+     and left the cards there darker than the ones to their left. */
+  .app{position:relative;width:1920px;height:1080px;padding:36px 64px 28px;display:flex;flex-direction:column;overflow:hidden}
   .app.behind .hdr,.app.behind .page,.app.behind .foot{opacity:.28}
 
   /* focus: one look everywhere */
