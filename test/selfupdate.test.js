@@ -4,7 +4,10 @@
  * TV leaves no marker, and an install that stops the service leaves one, which the next start
  * reports on /ping with the dead run's log lines until the page acknowledges it. The update is
  * signed with the profile that installed the running copy (its author-signature.xml), whatever the
- * default is, and refused with nothing sent when the TV holds no such profile. */
+ * default is, and refused with nothing sent when the TV holds no such profile. Last, the installer
+ * that leaves the service running (a TV with node v18 did): /ping has the new marker and not an
+ * older one, the service lets go of its port, and the next one, started while the port is still
+ * taken, waits for it. */
 'use strict';
 var fs = require('fs'), os = require('os'), path = require('path'), http = require('http'), cp = require('child_process');
 var zip = require('../tizen-app/service/zip.js');
@@ -43,13 +46,14 @@ var SELF = zip.write([{ name: 'index.html', data: Buf.from('<html></html>') },
     { name: 'config.xml', data: Buf.from('<widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets" version="0.3.21"><name>TV-Store</name><tizen:application id="' + OWN + '.Store" package="' + OWN + '" required_version="3.0"/></widget>') }]);
 var REFUSED = 'install ' + OWN + '.Store package_path /x was_install_app return WAS_TRUE app_id[' + OWN + '.Store] install failed[118, -12], reason: Check certificate error : :Package with the same id and different certificate has been already installed.:<-12>\n';
 var OK = 'install ' + OWN + '.Store installing[100] install completed\n';
-var mode = 'refuse', shells = [], child = null, err = '', handle = null;
+var mode = 'refuse', shells = [], child = null, children = [], err = '', handle = null;
 var WD = setTimeout(function () { fail('watchdog (60 s)' + (err ? '\n' + err : '')); }, 60000);
-function stop() { clearTimeout(WD); if (child) child.kill(); if (handle) try { handle.server.close(); } catch (e) {} }
+function stop() { clearTimeout(WD); children.forEach(function (c) { c.kill(); }); if (handle) try { handle.server.close(); } catch (e) {} }
 var MARK = path.join(dir, '.a2s-self-update.json'), OWN_SIG = path.join(dir, 'own-author-signature.xml');
 
 function start(cb) {
     child = cp.spawn(process.execPath, [path.join(__dirname, '..', 'tizen-app', 'service', 'index.js')], { env: { HOME: dir, TMPDIR: dir, TMP: dir, TEMP: dir, PATH: process.env.PATH, A2S_SDB_PORT: String(SDB), A2S_PACKAGE_ID: OWN, A2S_OWN_SIGNATURE: OWN_SIG }, stdio: ['ignore', 'ignore', 'pipe'] });
+    children.push(child);
     child.stderr.on('data', function (d) { err += d; });
     var tries = 0;
     (function waitUp() {
@@ -64,6 +68,7 @@ fake.start(SDB, {
         shells.push(cmd);
         if (cmd.indexOf('vd_appinstall') < 0) return 'ok\n';
         if (mode === 'refuse') return REFUSED;
+        if (mode === 'survive') return OK;
         // The TV's installer stops every process of the package it replaces: here, the service.
         child.kill('SIGKILL');
         return OK;
@@ -140,12 +145,44 @@ function afterKill() {
                 if (j.selfUpdate !== null) fail('acknowledged, the marker is gone from /ping');
                 logs(function (text) {
                     if (text.indexOf('self-update: the last run sent an update of TV-Store to v0.3.21') < 0 || text.indexOf('self-update: the update to v0.3.21 sent at ' + mark.at + ' landed') < 0) fail('the log:\n' + text);
-                    stop();
-                    try { fs.readdirSync(dir).forEach(function (f) { try { fs.unlinkSync(path.join(dir, f)); } catch (x) {} }); fs.rmdirSync(dir); } catch (x) {}
-                    console.log('PASS: self-update: refused without the switch and as a replace, no marker after a TV refusal, refused when the TV does not hold the certificate that installed it, signed with the one that did, a marker after the installer stops the service, reported on /ping with the dead run\'s lines until acknowledged');
-                    process.exit(0);
+                    survive();
                 });
             });
         });
+    });
+}
+// 6. The installer answers and leaves the service running, with an older marker never acknowledged.
+function survive() {
+    fs.writeFileSync(MARK, JSON.stringify({ from: '0.3.18', to: '0.3.19', at: '2026-11-01T00:00:00.000Z', lines: [] }));
+    mode = 'survive';
+    installSelf({ selfUpdate: true, fromVersion: '0.3.20' }, function (e, j) {
+        if (e || !j || !j.ok) fail('the install that leaves the service running: ' + JSON.stringify(j));
+        call('GET', '/ping', null, function (e, code, j) {
+            var s = j && j.selfUpdate;
+            if (!s || s.from !== '0.3.20' || s.to !== '0.3.21' || !s.lines || !s.lines.some(function (l) { return l.indexOf('self-update: still running after vd_appinstall answered') >= 0; })) fail('/ping of the service that was left running: ' + JSON.stringify(s));
+            // The new copy's service starts while the old one still has the port.
+            start(function () {
+                var waited = 0;
+                (function mine() {
+                    logs(function (text) {
+                        if (text.indexOf('service: port 8077 is taken') < 0 || text.indexOf('service: port 8077 came free after') < 0) { if (++waited > 100) fail('the new service never took the port over:\n' + text); return setTimeout(mine, 100); }
+                        call('GET', '/ping', null, function (e, code, j) {
+                            var s = j && j.selfUpdate;
+                            if (!s || s.to !== '0.3.21' || !s.lines || !s.lines.length) fail('/ping of the new service: ' + JSON.stringify(s));
+                            finish();
+                        });
+                    });
+                })();
+            });
+        });
+    });
+}
+function finish() {
+    call('POST', '/selfupdate/ack', JSON.stringify({ version: '0.3.21' }), function (e, code, j) {
+        if (e || !j || !j.ok || fs.existsSync(MARK)) fail('ack after the hand-over: ' + JSON.stringify(j));
+        stop();
+        try { fs.readdirSync(dir).forEach(function (f) { try { fs.unlinkSync(path.join(dir, f)); } catch (x) {} }); fs.rmdirSync(dir); } catch (x) {}
+        console.log('PASS: self-update: refused without the switch and as a replace, no marker after a TV refusal, refused when the TV does not hold the certificate that installed it, signed with the one that did, a marker after the installer stops the service, reported on /ping with the dead run\'s lines until acknowledged, and a service the installer leaves running reports the new marker and hands its port to the next one');
+        process.exit(0);
     });
 }

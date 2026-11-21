@@ -175,9 +175,33 @@ if (SELF_UPDATE && !Array.isArray(SELF_UPDATE.lines)) {
     SELF_UPDATE.lines = selfupdate.linesSince(prevLog, new Date(Date.parse(SELF_UPDATE.at) - 10 * 60 * 1000).toISOString(), 40);
     try { fs.writeFileSync(SELF_MARK, JSON.stringify(SELF_UPDATE)); } catch (e) {}
 }
+// In memory as well as on disk: a service the installer leaves running (below) answers /ping with
+// this marker, not with one an earlier update left unacknowledged.
 function writeSelfMark(entry) {
     var m = selfupdate.marker(entry, new Date().toISOString());
+    SELF_UPDATE = m;
     try { fs.writeFileSync(SELF_MARK, JSON.stringify(m)); } catch (e) { log('self-update: could not write the marker: ' + e.message); }
+}
+// The installer answered and this service still runs. A TV with node v18 did exactly that (#41):
+// the service of the replaced copy kept port 8077, the new copy's service could not listen, and
+// the new page talked to the old service. So this one lets go of its ports once the answer is out,
+// and the new one keeps trying until it has them (listen, at the end of this file). The process is
+// not ended by hand, since on newer TVs it may not be this service's alone; where it is, it ends
+// by itself with nothing left to listen on. The lines go into the marker here,
+// since the new service moves the log aside while this one may still write to it.
+var HANDED_OVER = false, HAND_OVER_MS = 2000;
+function selfSurvived() {
+    if (SELF_UPDATE) {
+        SELF_UPDATE.lines = LOGS.slice(-40);
+        try { fs.writeFileSync(SELF_MARK, JSON.stringify(SELF_UPDATE)); } catch (e) {}
+    }
+    setTimeout(function () {
+        log('self-update: this service belongs to the copy that was replaced; it lets go of port ' + PORT + ' and the relay, so the service of the new copy can start');
+        HANDED_OVER = true;
+        try { SERVER.close(); } catch (e) {}
+        SOCKETS.slice().forEach(function (s) { try { s.destroy(); } catch (e) {} });
+        try { relay.stop(); } catch (e) {}
+    }, HAND_OVER_MS);
 }
 function clearSelfMark() { SELF_UPDATE = null; unlinkQuiet(SELF_MARK); }
 // The running copy's author-signature.xml, next to the service folder in the installed package
@@ -1181,8 +1205,9 @@ function installSigned(entry, remoteName, outFile, size, cb) {
                     // marker goes; "install completed" keeps it, for the next start to confirm the version.
                     if (entry.self) {
                         var refused = !!err || refusals.FAILED.test(out);
-                        if (refused) unlinkQuiet(SELF_MARK);
+                        if (refused) clearSelfMark();
                         log('self-update: still running after vd_appinstall ' + (err ? 'failed: ' + err.message : refused ? 'refused it' : 'answered; TV-Store may still be restarted'));
+                        if (!refused) selfSurvived();
                     }
                     if (err) return cb(err);
                     INSTALLER_LAST = 'sdb';
@@ -1537,7 +1562,7 @@ function haveCerts() { var c = loadCerts(); return !!(c && c.certificates && c.c
 function certLabel(c) { return '\u2018' + (c.name || c.id.slice(0, 12)) + '\u2019' + (c.level === 'partner' ? ' (Partner)' : c.level === 'public' ? ' (Public)' : ''); }
 function levelName(l) { return l === 'partner' ? 'Partner' : 'Public'; }
 
-http.createServer(function (req, res) {
+var SERVER = http.createServer(function (req, res) {
     if (req.method === 'OPTIONS') { cors(res, 204, 'text/plain'); return res.end(); }
     var route = url.parse(req.url).pathname;
     // The page polls /ping and /logs all the time; those would drown the rest.
@@ -1681,7 +1706,28 @@ http.createServer(function (req, res) {
         (b.upload ? installUpload : install)(b, function (err, r) { if (err) { log('install: failed' + (err.code ? ' [' + err.code + ']' : '') + ': ' + err.message); return json(res, 200, { ok: false, error: err.message, code: err.code || null }); } json(res, 200, { ok: true, result: r }); });
     });
     cors(res, 404, 'text/plain'); res.end('not found');
-}).listen(PORT, '0.0.0.0', function () {
+});
+// The open connections, so a service that hands its port over (selfSurvived) can end them: close()
+// alone waits for a keep-alive connection of the page.
+var SOCKETS = [];
+SERVER.on('connection', function (s) {
+    SOCKETS.push(s);
+    s.on('close', function () { var i = SOCKETS.indexOf(s); if (i >= 0) SOCKETS.splice(i, 1); });
+});
+// A port that is taken is most likely held by the service of the TV-Store copy an update just
+// replaced (#41). It says so in the log and keeps trying: every second for half a minute, then
+// every ten seconds, since an older service never lets go and only ends with a restart of the TV.
+var LISTEN_TRIES = 0, LISTEN_SINCE = Date.now(), LISTENING = false;
+SERVER.on('error', function (e) {
+    if (HANDED_OVER) return;
+    if (e.code !== 'EADDRINUSE' || LISTENING) return log('service: ' + (e.code ? e.code + ' ' : '') + e.message);
+    if (LISTEN_TRIES === 0) log('service: port ' + PORT + ' is taken, most likely by the service of the TV-Store copy that was just updated; trying again until it lets go (a restart of the TV ends it too)');
+    setTimeout(listen, ++LISTEN_TRIES <= 30 ? 1000 : 10000);
+});
+function listen() { SERVER.listen(PORT, '0.0.0.0'); }
+SERVER.on('listening', function () {
+    LISTENING = true;
+    if (LISTEN_TRIES) log('service: port ' + PORT + ' came free after ' + Math.round((Date.now() - LISTEN_SINCE) / 1000) + ' s');
     log('TV-Store service on port ' + PORT + ', node ' + process.version + ' ' + process.arch + ', this TV ' + ownIp() + ', data ' + DATA_DIR + (VERBOSE ? ', verbose logging on' : ''));
     // A marker from the last run: it ended inside a wascmd call (the Tizen 9 start-up crash of
     // #67 and #68, or TV-Store closed mid-install), so this TV keeps to sdbd until Settings says
@@ -1693,6 +1739,7 @@ http.createServer(function (req, res) {
     if (RELAY_CFG.enabled) { log('relay: enabled, starting on port ' + RELAY_CFG.port); startRelay(); }
     if ((!RELAY_CFG.chosen && !RELAY_CFG.enabled) || !DUID) setTimeout(probeLoopback, 1000);
 });
+listen();
 
 module.exports.onStart = function () { log('service onStart'); };
 module.exports.onRequest = function () { log('service onRequest'); };
