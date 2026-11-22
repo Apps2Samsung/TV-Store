@@ -555,8 +555,8 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
   start finds the marker and shows whether the update landed, with the last log lines of the run
   that sent it on `/ping` (`selfUpdate: { from, to, at, certificate, lines }`) until **Got it**
   (`POST /selfupdate/ack`). It is never part of **Update all**, and not offered for a copy
-  Apps2Samsung installed under another package id. Results on GitHub issue #41 help, above all
-  from Tizen 9 sets, where 0.3.5 failed.
+  Apps2Samsung installed under another package id. An update that landed says so in one line;
+  only one that did not land, or whose outcome is unknown, asks for the log on GitHub issue #41.
 
 Below the switches, **Signing certificates** (above) and **Sources**
 ([independent repositories](#settings-sources)) list what the TV holds.

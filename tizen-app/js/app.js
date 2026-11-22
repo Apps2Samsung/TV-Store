@@ -1179,7 +1179,7 @@
     function selfResultHtml() {
         if (!selfResult) return '';
         var m = selfResult.mark, o = selfResult.outcome, last = m.lines && m.lines.length ? m.lines[m.lines.length - 1].replace(/^\S+\s+/, '') : '';
-        var text = o === 'landed' ? 'TV-Store updated itself to v' + VERSION + '. Thanks for trying the experiment; a word on GitHub issue #41 helps.'
+        var text = o === 'landed' ? 'TV-Store updated itself to v' + VERSION + '.'
             : o === 'not-landed' ? 'The update to v' + (m.to || '?') + ' did not land; this is still v' + VERSION + '.' + (last ? ' Last log line before TV-Store closed: ' + last + '.' : '') + ' Please add the TV-Store log (Settings) to GitHub issue #41, and update from Apps2Samsung on a phone or PC.'
             : 'TV-Store sent an update of itself' + (m.to ? ' to v' + m.to : '') + ' and now runs v' + VERSION + '. Please add the TV-Store log (Settings) to GitHub issue #41.';
         return '<div class="notice row' + (o === 'landed' ? ' info' : o === 'not-landed' ? ' bad' : '') + '" style="margin:0 0 26px"><span>' + esc(text) + '</span><button class="btn f" data-k="selfack" data-act="selfack">Got it</button></div>';
@@ -1731,7 +1731,7 @@
             + opt('showNeedsHead', 'Show apps that need a phone or PC', 'Some apps need Apps2Samsung on a phone or PC to install. Turn this off to keep them out of the store.')
             + opt('verboseLog', 'Verbose logging', 'Writes much more detail to the TV-Store log. Turn it on when a bug report asks for it, and off again afterwards.')
             + browserRow() + relayRow() + devicesRows() + installerRow()
-            + opt('selfUpdate', 'Let TV-Store update itself (experiment)', 'Off: update TV-Store from Apps2Samsung on a phone or PC. On: TV-Store offers its own update under On the TV. It closes during the install; open it again after a minute and it says whether the update landed. Results help GitHub issue #41.') + '</div>' + browserNotice() + relayNotice() + installerNotice();
+            + opt('selfUpdate', 'Let TV-Store update itself (experiment)', 'Off: update TV-Store from Apps2Samsung on a phone or PC. On: TV-Store offers its own update under On the TV. It closes during the install; open it again after a minute and it says whether the update landed.') + '</div>' + browserNotice() + relayNotice() + installerNotice();
         if (confirmingAdult) h += '<div class="notice">These apps are meant for adults only. Turn them on only if you are 18 or older.</div>'
             + '<div class="btns" style="margin-top:16px"><button class="btn primary grow f" data-k="adultyes" data-act="adultyes" data-default>I am 18 or older</button><button class="btn f" data-k="adultno" data-act="adultno">Cancel</button></div>';
         var certList = (ready && ready.certificates ? ready.certificates.map(function (c) { return c.name + (c.level === 'partner' || c.level === 'public' ? ' (' + levelName(c.level) + ')' : ''); }) : (ready && ready.certNames) || []);
@@ -2119,7 +2119,7 @@
     }
     function focus(el) {
         if (!el) return;
-        el.focus();
+        focusOnly(el);
         reveal(el);
         if (el.getAttribute && el.getAttribute('data-app') && view === 'install' && !sheet) {
             var x = byKey(el.getAttribute('data-app'));
@@ -2134,6 +2134,47 @@
             if (!tvSel || tvSel.key !== gk) { var gs = goneOnTv().filter(function (g) { return g.key === gk; })[0]; if (gs) { tvSel = gs; var gp = $('tvpanel'); if (gp) gp.outerHTML = tvPanel(gs); } }
         }
     }
+    // Give the element the focus without the browser scrolling to it: a TV browser brings a focused
+    // element that is cut off to the middle of its row, so the seventh card of a row moved the row
+    // three and a half cards instead of one, and reveal() below then found nothing left to do
+    // (#126). preventScroll asks for that; browsers that do not know it (Tizen 5 and older) get
+    // every scroll offset above the element put back.
+    function focusOnly(el) {
+        var boxes = [], n;
+        for (n = el.parentNode; n && n.nodeType === 1; n = n.parentNode) boxes.push([n, n.scrollLeft, n.scrollTop]);
+        try { el.focus({ preventScroll: true }); } catch (e) { el.focus(); }
+        boxes.forEach(function (b) {
+            if (b[0].scrollLeft !== b[1]) b[0].scrollLeft = b[1];
+            if (b[0].scrollTop !== b[2]) b[0].scrollTop = b[2];
+        });
+    }
+    // Whether a row shows this element: a card scrolled out of its row is still in the page, at a
+    // place left or right of what the row shows.
+    function inRow(el) {
+        var strip = closest(el, 'strip');
+        if (!strip) return true;
+        var sr = strip.getBoundingClientRect(), r = el.getBoundingClientRect(), mid = (r.left + r.right) / 2;
+        return mid > sr.left && mid < sr.right;
+    }
+    // Left and right inside a row of cards, and around its "Show all" (#126). A row is a line: the
+    // next card is the next one in it, shown or not. At its last card, right goes to the row's
+    // "Show all" when it has one, and from there right goes nowhere and left goes back to the last
+    // card the row shows. Returns the element to focus, null to stay, undefined when the element is
+    // not in a row (the grid of one category and everything else go by position).
+    function rowStep(cur, dir) {
+        var sect = closest(cur, 'sect');
+        if (!sect || sect.classList.contains('grid')) return undefined;
+        var cards = Array.prototype.slice.call(sect.querySelectorAll('.strip .card.f')), link = sect.querySelector('.shead .link.f');
+        if (cur === link) {
+            if (dir === 'right') return null;
+            var shown = cards.filter(inRow);
+            return shown.length ? shown[shown.length - 1] : null;
+        }
+        var i = cards.indexOf(cur);
+        if (i < 0) return undefined;
+        if (dir === 'left') return i > 0 ? cards[i - 1] : undefined;
+        return i < cards.length - 1 ? cards[i + 1] : (link || null);
+    }
     // Scroll whatever clips the element so that it shows: a row of cards sideways, the page and the
     // variant list vertically. Rows and the page have overflow hidden; their scroll offsets still work.
     function reveal(el) {
@@ -2147,8 +2188,11 @@
             var sr = strip.getBoundingClientRect(), er = el.getBoundingClientRect(), cs = window.getComputedStyle(strip);
             var mid = (er.left + er.right) / 2, half = el.offsetWidth / 2, left = mid - half, right = mid + half;
             var padL = parseFloat(cs.paddingLeft) || 0, padR = parseFloat(cs.paddingRight) || 0;
-            if (left < sr.left + padL) strip.scrollLeft -= (sr.left + padL - left);
-            else if (right > sr.right - padR) strip.scrollLeft += (right - sr.right + padR);
+            // A row moves by whole cards, so the first card it shows always stands where the first
+            // card of a row at rest stands, and nothing of the card before it shows at the edge.
+            var pitch = el.offsetWidth + (parseFloat(window.getComputedStyle(el).marginRight) || 0);
+            if (left < sr.left + padL) strip.scrollLeft = el.offsetLeft - padL;
+            else if (right > sr.right - padR) strip.scrollLeft = Math.ceil((strip.scrollLeft + right - sr.right + padR) / pitch - 0.01) * pitch;
         }
         var boxes = [closest(el, 'vscroll'), closest(el, 'page')];
         boxes.forEach(function (box) {
@@ -2177,9 +2221,12 @@
             if (dir === 'right' && closest(cur, 'tvlist')) { var pb = all.filter(function (el) { return closest(el, 'tvpanel'); }); if (pb.length) return focus(pb[0]); }
             if (dir === 'left' && closest(cur, 'tvpanel') && tvSel) { var row = pageEl.querySelector('[data-k="tv:' + tvSel.key.replace(/"/g, '\\"') + '"]'); if (row) return focus(row); }
         }
+        if (!sheet && (dir === 'left' || dir === 'right')) { var step = rowStep(cur, dir); if (step !== undefined) { if (step) focus(step); return; } }
         var a = cur.getBoundingClientRect(), ax = (a.left + a.right) / 2, ay = (a.top + a.bottom) / 2, best = null, bestScore = 1e9;
         all.forEach(function (el) {
-            if (el === cur) return;
+            // A card its row does not show is not a place to go to from outside that row: from
+            // "Show all" the nearest thing to the right was such a card in another row (#126).
+            if (el === cur || !inRow(el)) return;
             var b = el.getBoundingClientRect(), bx = (b.left + b.right) / 2, by = (b.top + b.bottom) / 2, main, cross;
             if (dir === 'left') { if (b.right > a.left + 4 && bx >= ax) return; main = a.left - b.right; cross = Math.abs(by - ay); }
             else if (dir === 'right') { if (b.left < a.right - 4 && bx <= ax) return; main = b.left - a.right; cross = Math.abs(by - ay); }
