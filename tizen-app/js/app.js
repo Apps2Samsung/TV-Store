@@ -886,6 +886,51 @@
         return sortApps(all);
     }
     function rebuild() { catalogApps = buildAll(); apps = visible(catalogApps); claims = null; }
+
+    // ---- the catalog, kept current ------------------------------------------------------------------
+    // The store used to show the catalog as it was when TV-Store opened, for as long as it stayed
+    // open: days, on a TV that is only put to sleep. An app taken out of the catalog was still on
+    // screen, and a new version was not. Now the 3 s tick asks the service again every ten minutes
+    // (the service keeps its own copy that long) and after two when that failed. The screen is drawn
+    // again only when something changed, and then only when no sheet is open and nobody is typing
+    // in the search box; until then the change waits.
+    var CATALOG_EVERY = 10 * 60 * 1000, CATALOG_RETRY = 2 * 60 * 1000;
+    var catalogDue = 0, catalogBusy = false, catalogChanged = false;
+    // What the store is built from, as one short string. The times a catalog was signed or fetched
+    // are left out: the workflow signs again every half hour, mostly with the same apps in it.
+    var CATALOG_TIMES = { generatedAt: 1, lastGeneratedAt: 1, lastOkAt: 1, lastErrorAt: 1 };
+    function catalogState() {
+        var t = JSON.stringify([officialCat, sources, pkgIds, removedIds], function (k, v) { return CATALOG_TIMES.hasOwnProperty(k) ? undefined : v; });
+        return t.length + ':' + hashOf(t);
+    }
+    function useCatalog(cat) {
+        var community = (cat.providers || []).filter(function (p) { return p.catalog && p.catalog.categories; })[0];
+        if (community) applyCategories(community.catalog);
+        officialCat = cat;
+        catalogNewer = newerFormat(cat);
+        catalogDue = Date.now() + CATALOG_EVERY;
+    }
+    function refreshCatalog() {
+        if (catalogBusy) return;
+        catalogBusy = true;
+        var before = catalogState();
+        xhr('GET', '/catalog', null, function (err, cat) {
+            // A catalog that does not come keeps the one on screen, and installing still checks.
+            if (err || !cat || typeof cat !== 'object' || cat.ok === false) { catalogBusy = false; catalogDue = Date.now() + CATALOG_RETRY; return; }
+            useCatalog(cat);
+            loadSources(false, function () {
+                catalogBusy = false;
+                if (catalogState() !== before) catalogChanged = true;
+                showCatalog();
+            });
+        }, null, 60000);
+    }
+    function showCatalog() {
+        if (!catalogChanged || sheet || loading || problem || document.activeElement === searchEl) return;
+        catalogChanged = false;
+        var at = document.activeElement && document.activeElement.getAttribute('data-k');
+        rebuild(); renderPage(); focusKey(at) || focusFirst();
+    }
     // The repositories, verified by the service; cb() when they are in, or when there are none.
     function loadSources(fresh, cb) {
         xhr('GET', '/sources/catalog' + (fresh ? '?fresh=1' : ''), null, function (err, res) {
@@ -2339,6 +2384,8 @@
         nextOffer();
         if (!armed()) xhr('GET', '/ping', null, function (err, res) { if (!err) setReady(res); });
         refreshRelay();
+        if (!document.hidden && Date.now() >= catalogDue) refreshCatalog();
+        showCatalog();
         pushStore(true);
         xhr('GET', '/uploads', null, function (err, res) {
             if (err || !res) { if (++missed >= 3) revive(); return; }
@@ -2418,10 +2465,7 @@
             setInstalled(map);
             xhr('GET', '/catalog', null, function (err, cat) {
                 if (err) { loading = false; problem = { title: 'The catalog did not load', short: 'No catalog', text: err.message + '.' }; renderPage(); focusFirst(); return; }
-                var community = (cat.providers || []).filter(function (p) { return p.catalog && p.catalog.categories; })[0];
-                if (community) applyCategories(community.catalog);
-                officialCat = cat;
-                catalogNewer = newerFormat(cat);
+                useCatalog(cat);
                 loading = false; rebuild(); renderPage(); focusFirst();
                 openRequested();
                 // The independent repositories (#82) after the official catalog, which shows meanwhile:

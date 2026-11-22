@@ -11,12 +11,10 @@
  * the one that claims the shared package id; a record leaves with its package. Without web_version
  * everything is as before. */
 'use strict';
-var fs = require('fs'), path = require('path'), vm = require('vm');
-var SRC = fs.readFileSync(path.join(__dirname, '..', 'tizen-app', 'js', 'app.js'), 'utf8');
+var harness = require('./page-harness.js'), page = harness.page, fail = harness.fail;
 var WEB_KEY = 'a2s.tvstore.webversions', VARIANTS_KEY = 'a2s.tvstore.variants';
 var JF = 'AprZAARz4r';
 
-function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
 function eq(a, b, what) { if (JSON.stringify(a) !== JSON.stringify(b)) fail(what + ': expected ' + JSON.stringify(b) + ', got ' + JSON.stringify(a)); }
 
 function asset(name, pkg, version, web) {
@@ -36,96 +34,6 @@ function catalog(web, latest) {
     ] };
 }
 
-// One page: opts { catalog, installed: { pkg: version }, storage: { key: object } }.
-function page(opts) {
-    var store = {}, posts = [], installs = [], acks = [], requests = [], intervals = [], onTv = opts.installed;
-    Object.keys(opts.storage || {}).forEach(function (k) { store[k] = JSON.stringify(opts.storage[k]); });
-    // An element that takes whatever the page does to it.
-    function el() {
-        var e = { style: {}, className: '', innerHTML: '', textContent: '', value: '', children: [], scrollTop: 0, scrollLeft: 0, offsetWidth: 0, offsetHeight: 0 };
-        ['addEventListener', 'removeEventListener', 'appendChild', 'removeChild', 'focus', 'blur', 'setAttribute', 'scrollIntoView'].forEach(function (n) { e[n] = function () {}; });
-        e.getAttribute = function () { return null; };
-        e.querySelector = function () { return null; };
-        e.querySelectorAll = function () { return []; };
-        e.getBoundingClientRect = function () { return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }; };
-        return e;
-    }
-    var els = {}, doc = el(), listeners = {};
-    doc.addEventListener = function (type, f) { listeners[type] = f; };
-    doc.getElementById = function (id) { return els[id] || (els[id] = el()); };
-    doc.createElement = el; doc.body = el(); doc.documentElement = el(); doc.activeElement = null;
-
-    function answer(method, p, body) {
-        if (p === '/ping') return { ok: true, certReady: true, certificates: [{ name: 'PC', level: 'public' }], browser: { enabled: true }, sourceOf: {}, remembered: {}, userSettings: {} };
-        if (p === '/catalog') return opts.catalog;
-        if (p.indexOf('/sources/catalog') === 0) return { ok: true, sources: [] };
-        if (p === '/pkgids') return { ok: true, ids: {}, removed: {} };
-        if (p === '/uploads') return { ok: true, pending: null };
-        if (p === '/store/state') { if (body.state) posts.push(body.state); var r = requests; requests = []; return { ok: true, requests: r }; }
-        if (p === '/store/ack') { acks.push(body); return { ok: true }; }
-        if (p === '/install') { installs.push(body); onTv[body.packageId] = '0.1.0'; return { ok: true, result: { packageId: body.packageId, appId: body.appId } }; }
-        return { ok: true };
-    }
-    function XHR() { this.readyState = 0; this.status = 0; this.responseText = ''; }
-    XHR.prototype.open = function (m, url) { this.m = m; this.p = url.replace(/^https?:\/\/[^\/]+/, ''); };
-    XHR.prototype.setRequestHeader = function () {};
-    XHR.prototype.send = function (body) {
-        var r = this;
-        setImmediate(function () {
-            r.responseText = JSON.stringify(answer(r.m, r.p, body ? JSON.parse(body) : null));
-            r.status = 200; r.readyState = 4;
-            if (r.onreadystatechange) r.onreadystatechange();
-        });
-    };
-
-    var win = {
-        document: doc, XMLHttpRequest: XHR, console: { log: function () {}, error: function () {}, warn: function () {} },
-        localStorage: { getItem: function (k) { return store.hasOwnProperty(k) ? store[k] : null; }, setItem: function (k, v) { store[k] = String(v); }, removeItem: function (k) { delete store[k]; } },
-        location: { search: '', href: 'file:///index.html' }, navigator: { userAgent: 'test' },
-        addEventListener: function () {}, removeEventListener: function () {},
-        // The page's own clocks are run by hand: the 3 s tick through tick(), a timeout right away.
-        setInterval: function (f) { intervals.push(f); return intervals.length; }, clearInterval: function () {},
-        setTimeout: function (f) { return setTimeout(f, 0); }, clearTimeout: clearTimeout,
-        Math: Math, Date: Date, JSON: JSON, parseInt: parseInt, Object: Object, Array: Array, String: String, Error: Error, RegExp: RegExp, isNaN: isNaN,
-        tizen: {
-            application: {
-                getCurrentApplication: function () { return { appInfo: { id: 'A2STVStore.Store', packageId: 'A2STVStore', version: '0.0.0' }, getRequestedAppControl: function () { return null; } }; },
-                getAppsInfo: function (ok) { ok(Object.keys(onTv).map(function (p) { return { packageId: p, id: p + '.App', version: onTv[p], name: p }; })); },
-                launch: function (id, ok) { if (ok) ok(); }, launchAppControl: function (c, id, ok) { if (ok) ok(); }
-            },
-            ApplicationControl: function () {},
-            systeminfo: { getCapability: function () { return '6.5'; }, getPropertyValue: function () {} },
-            filesystem: { resolve: function (n, ok) { ok({ resolve: function () { return { readAsText: function (got) { got('token'); } }; } }); } },
-            tvinputdevice: { registerKey: function () {}, registerKeyBatch: function () {} }
-        }
-    };
-    win.window = win; win.self = win;
-    vm.runInNewContext(SRC, win, { filename: 'app.js' });
-
-    var api = {
-        // Lets the page's requests and timeouts run out, then calls back.
-        settle: function (cb) { var n = 0; (function turn() { if (++n > 40) return cb(); setTimeout(turn, 1); })(); },
-        tick: function (cb) { intervals.forEach(function (f) { f(); }); api.settle(cb); },
-        // The picture the page last posted, one app of it by key.
-        app: function (key) {
-            if (!posts.length) fail('the page posted no picture of the store');
-            var list = posts[posts.length - 1].apps.filter(function (a) { return a.key === key; });
-            if (list.length !== 1) fail('no app ' + key + ' in the picture');
-            return list[0];
-        },
-        ask: function (r) { requests.push(r); },
-        // A press on a focusable element with this id or these data- attributes.
-        press: function (id, attrs) {
-            var t = el(); t.id = id || ''; t.classList = { contains: function (c) { return c === 'f'; } };
-            t.getAttribute = function (k) { return attrs && attrs.hasOwnProperty(k) ? attrs[k] : null; };
-            listeners.click({ target: t });
-        },
-        html: function (id) { return els[id] ? els[id].innerHTML : ''; },
-        stored: function (k) { return store.hasOwnProperty(k) ? JSON.parse(store[k]) : null; },
-        installs: installs, acks: acks
-    };
-    return api;
-}
 function has(html, text, what) { if (html.indexOf(text) < 0) fail(what + ': "' + text + '" is not on it'); }
 function hasNot(html, text, what) { if (html.indexOf(text) >= 0) fail(what + ': "' + text + '" is on it'); }
 function ready(opts, then) { var p = page(opts); p.settle(function () { p.tick(function () { then(p); }); }); }

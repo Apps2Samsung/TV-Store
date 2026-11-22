@@ -108,7 +108,8 @@ acts as the TV's own PC:
 The TVs cannot check today's HTTPS certificates (their certificate store is too old), so TV-Store
 trusts the content instead: the catalog (`resolved.json.signed`) is signed by the Apps2Samsung
 catalog workflow and checked against the key built into TV-Store, and a package installs only when
-its hash matches that catalog.
+its hash matches that catalog. While TV-Store stays open it reads the catalog again every ten
+minutes, so a new app or version shows, and an app that left the catalog goes, without closing it.
 
 App icons (#66) take the same road. The catalog names an icon per package file with its SHA-256
 (`icon`, `icon_digest`, published by the Apps2Samsung catalog snapshot next to `resolved.json`),
