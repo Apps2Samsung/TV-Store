@@ -1634,6 +1634,10 @@ function uninstall(b, cb) {
 // person at the TV. In: a browser sends a file (POST /backup/restore), or the screen hands one over
 // (POST /backup/take); it waits, checked and rebuilt, until the screen applies it with the token
 // (POST /backup/apply) or drops it (POST /backup/discard).
+// Without anybody at the TV (#149): GET /backup/public gives a device on the LAN the backup without
+// its secrets, for the copy Apps2Samsung keeps of a TV by itself. The screen's part of it lives in
+// the screen's storage, so the screen hands it over when it starts and when it changes
+// (POST /backup/page, with the token) and the service keeps the last one on disk.
 var BACKUP_OFFER = null;       // { page, app, code, until, wrong, taken: { from, at } | null }
 var BACKUP_CODE_MS = 10 * 60 * 1000, BACKUP_WRONG_MAX = 5;
 var RESTORE = null;            // { id, from, at, backup }: the backup waiting for a yes on the TV
@@ -1643,6 +1647,46 @@ function backupParts(page, app) {
              // A relay that turned itself on is no choice to carry over: the next TV decides again.
              relay: RELAY_CFG.chosen ? { enabled: RELAY_CFG.enabled, port: RELAY_CFG.port, allow: RELAY_CFG.allow, chosen: true } : null,
              browser: { enabled: BROWSER_CFG.enabled } };
+}
+var PAGE_FILE = DATA_DIR ? path.join(DATA_DIR, '.a2s-page.json') : null;
+var PUBLIC_MARK_FILE = DATA_DIR ? path.join(DATA_DIR, '.a2s-backup-public.json') : null;
+var PAGE_KEPT = null;          // { page, app: { version, device }, at }: what the screen last handed over
+var PUBLIC_MARK = null;        // { hash, madeAt }: the public backup as it was last made, and since when
+function metaPart(a) { return { version: a && typeof a.version === 'string' ? a.version.slice(0, 20) : '', device: a && typeof a.device === 'string' ? a.device.slice(0, 80) : '' }; }
+try {
+    if (PAGE_FILE && fs.existsSync(PAGE_FILE)) {
+        var pk = JSON.parse(fs.readFileSync(PAGE_FILE, 'utf8'));
+        if (pk && typeof pk === 'object' && pk.page && typeof pk.page === 'object') PAGE_KEPT = { page: backup.pagePart(pk.page), app: metaPart(pk.app), at: typeof pk.at === 'string' ? pk.at : '' };
+    }
+} catch (e) { log('backup: cannot read ' + PAGE_FILE + ': ' + e.message); }
+try {
+    if (PUBLIC_MARK_FILE && fs.existsSync(PUBLIC_MARK_FILE)) {
+        var pm = JSON.parse(fs.readFileSync(PUBLIC_MARK_FILE, 'utf8'));
+        if (pm && typeof pm.hash === 'string' && typeof pm.madeAt === 'string' && !isNaN(new Date(pm.madeAt).getTime())) PUBLIC_MARK = { hash: pm.hash, madeAt: pm.madeAt };
+    }
+} catch (e) { log('backup: cannot read ' + PUBLIC_MARK_FILE + ': ' + e.message); }
+// POST /backup/page { token, page, app } from the screen: kept when it differs from the last one.
+function keepPage(b) {
+    var page = backup.pagePart(b.page), app = metaPart(b.app);
+    if (PAGE_KEPT && JSON.stringify([PAGE_KEPT.page, PAGE_KEPT.app]) === JSON.stringify([page, app])) return { ok: true, changed: false };
+    PAGE_KEPT = { page: page, app: app, at: new Date().toISOString() };
+    if (PAGE_FILE) { try { fs.writeFileSync(PAGE_FILE, JSON.stringify(PAGE_KEPT)); } catch (e) { log('backup: cannot save the screen\u2019s part: ' + e.message); } }
+    logv('backup: the screen handed over its part (' + (page.pins || []).length + ' pinned)');
+    backupPublic();            // so that madeAt is this moment, not the next time somebody asks
+    return { ok: true, changed: true };
+}
+// The backup GET /backup/public gives, or null while the screen has handed nothing over. madeAt is
+// the moment its content last changed: it is compared with the one before on every call, since what
+// the service keeps changes in many places.
+function backupPublic() {
+    if (!PAGE_KEPT) return null;
+    var made = backup.make(backupParts(PAGE_KEPT.page, PAGE_KEPT.app), { secrets: false, shortenUrls: true }), hash = backup.contentHash(made);
+    if (!PUBLIC_MARK || PUBLIC_MARK.hash !== hash) {
+        PUBLIC_MARK = { hash: hash, madeAt: made.madeAt };
+        if (PUBLIC_MARK_FILE) { try { fs.writeFileSync(PUBLIC_MARK_FILE, JSON.stringify(PUBLIC_MARK)); } catch (e) { log('backup: cannot save the mark of the backup without keys: ' + e.message); } }
+    }
+    made.madeAt = PUBLIC_MARK.madeAt;
+    return made;
 }
 function backupLine(b) {
     var s = backup.summary(b);
@@ -1712,6 +1756,9 @@ function restoreApply(b, cb) {
         if (changed) { try { fs.writeFileSync(path.join(DATA_DIR, CERT_BY_PKG_NAME), JSON.stringify(byPkg)); } catch (e) { log('restore: cannot save which certificate each package took: ' + e.message); } }
     }
     s.sources.forEach(function (src) { if (sourceById(src.repositoryId)) return; SOURCES.push(src); applied.sources++; });
+    // A source whose address the backup cut short (#149) is not added as half an address: the screen names it.
+    applied.sourcesReenter = (s.sourcesReenter || []).filter(function (src) { return !sourceById(src.repositoryId); }).map(function (src) { return { name: src.name, domain: src.domain }; });
+    if (applied.sourcesReenter.length) log('restore: not added, to enter again under Sources (the backup left out the key in the address): ' + applied.sourcesReenter.map(function (x) { return x.name + ' (' + x.domain + ')'; }).join(', '));
     if (applied.sources) saveSources();
     var of = sourceOfPackage(), ofChanged = false;
     for (k in here.sourceOf) if (here.sourceOf.hasOwnProperty(k) && !of.hasOwnProperty(k) && (here.sourceOf[k] === 'official' || sourceById(here.sourceOf[k]))) { of[k] = here.sourceOf[k]; ofChanged = true; }
@@ -1746,19 +1793,27 @@ var SERVER = http.createServer(function (req, res) {
     if (route === '/upload' && req.method === 'GET') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(uploadPage()); }
     if (route === '/upload' && (req.method === 'PUT' || req.method === 'POST')) return receiveUpload(req, res);
     // The relay's state is for the phone or PC that could not get through it (#58).
-    if (route === '/relay' && req.method === 'GET') return json(res, 200, { ok: true, relay: relayPublic() });
+    // backupPublic says that GET /backup/public exists (#149): /ping is not for the LAN.
+    if (route === '/relay' && req.method === 'GET') return json(res, 200, { ok: true, relay: relayPublic(), backupPublic: true });
     // The store in a browser (#101): the page, what the screen shows, and Install as a request to the
     // screen. Read and asked for from the LAN; never with CORS for other sites, never by a public name.
     var iconHex = /^\/icon\/([0-9a-fA-F]{64})$/.exec(route);
     var storeRoute = ((route === '/' || route === '/store') && req.method === 'GET') || (route === '/store/state' && req.method === 'GET') || (route === '/store/install' && req.method === 'POST');
-    // The backup page (#146), its download (with the code the TV shows) and a file to restore.
-    var backupRoute = (route === '/backup' && req.method === 'GET') || ((route === '/backup/download' || route === '/backup/restore') && req.method === 'POST');
+    // The backup page (#146), its download (with the code the TV shows) and a file to restore; and
+    // the backup without keys, which needs no code (#149).
+    var backupRoute = ((route === '/backup' || route === '/backup/public') && req.method === 'GET') || ((route === '/backup/download' || route === '/backup/restore') && req.method === 'POST');
     if (storeRoute || backupRoute || (iconHex && req.method === 'GET' && !fromThisTv(req))) {
         var peer = relayMod.peerIp(req.socket);
         if (!lanHost(req)) { res.writeHead(403, { 'Content-Type': 'text/plain' }); return res.end('open TV-Store by the TV\'s IP address'); }
         if (!browserAllowed(req)) { res.writeHead(403, { 'Content-Type': 'text/plain' }); return res.end(peer + ' is not one of the devices picked under "Devices that may connect" in TV-Store\'s Settings on the TV'); }
         if (backupRoute) {
             if (route === '/backup') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); return res.end(backup.page(ownIp())); }
+            if (route === '/backup/public') {
+                var pub = backupPublic();
+                if (!pub) return storeJson(res, 409, { ok: false, code: 'NO_SCREEN_STATE', error: 'TV-Store has not been opened on the TV since it was installed, so there is no backup yet. Open TV-Store on the TV once.' });
+                logv('backup: the one without keys read by ' + peer + ': ' + backupLine(pub));
+                return storeJson(res, 200, pub);
+            }
             if (!sameOrigin(req)) { req.resume(); log('backup: refused a request from another web site (' + req.headers.origin + ') via ' + peer); return storeJson(res, 403, { ok: false, error: 'only the backup page on this TV may do that' }); }
             if (route === '/backup/download') return body(req, function (err, b) {
                 if (err || !b || typeof b !== 'object') return storeJson(res, 400, { ok: false, error: 'need { code }' });
@@ -1815,12 +1870,13 @@ var SERVER = http.createServer(function (req, res) {
     if (route === '/uploads') return json(res, 200, { pending: publicUpload(), busy: UPLOAD_BUSY, backup: publicOffer(), restore: publicRestore() });
     // The screen's side of backup and restore (#146), each with the page token: other apps on the TV
     // reach this port too, and none of them gets the keys out or a backup in.
-    if (/^\/backup\/(make|offer|take|apply|discard)$/.test(route) && req.method === 'POST') return bodyText(req, backup.MAX_BYTES + 65536, function (err, text) {
+    if (/^\/backup\/(make|offer|take|apply|discard|page)$/.test(route) && req.method === 'POST') return bodyText(req, backup.MAX_BYTES + 65536, function (err, text) {
         var b = null; try { if (!err) b = JSON.parse(text); } catch (e) {}
         if (!b || typeof b !== 'object') return json(res, 400, { ok: false, error: 'need { token, ... }' });
         if (!pageToken(b)) { log('backup: refused ' + route + ' without the token'); return json(res, 403, { ok: false, error: 'only the TV-Store screen may do that', code: 'NO_TOKEN' }); }
         if (route === '/backup/make') { var made = backup.make(backupParts(b.page, b.app), { secrets: b.secrets !== false }); log('backup: handed to the TV-Store screen (for Apps2Samsung): ' + backupLine(made)); return json(res, 200, { ok: true, backup: made }); }
         if (route === '/backup/offer') return json(res, 200, backupOffer(b));
+        if (route === '/backup/page') return json(res, 200, keepPage(b));
         if (route === '/backup/take') return json(res, 200, restoreTake(b.backup, 'Apps2Samsung'));
         if (route === '/backup/discard') { if (RESTORE && (!b.id || b.id === RESTORE.id)) { log('restore: the backup from ' + RESTORE.from + ' was not restored (declined on the TV)'); RESTORE = null; } return json(res, 200, { ok: true }); }
         restoreApply(b, function (err, r) { if (err) { log('restore: failed' + (err.code ? ' [' + err.code + ']' : '') + ': ' + err.message); return json(res, 200, { ok: false, error: err.message, code: err.code || null }); } json(res, 200, { ok: true, applied: r.applied, page: r.page }); });

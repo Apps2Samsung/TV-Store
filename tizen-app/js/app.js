@@ -118,6 +118,7 @@
         if (!pkg) return;
         installedFile[pkg] = v.file;
         try { window.localStorage.setItem(VARIANTS_KEY, JSON.stringify(installedFile)); } catch (e) {}
+        handPage();
     }
     // The jellyfin-web version TV-Store installed per package id (#124): { key, file, web }. Every
     // Jellyfin build declares 0.1.0, the wrapper's own version, so the TV cannot tell a 12.4 from a
@@ -125,7 +126,7 @@
     // one on the TV known. `key` is the app it belongs to: the Jellyfin apps share one package id.
     var WEB_KEY = 'a2s.tvstore.webversions';
     var installedWeb = (function () { try { var w = JSON.parse(window.localStorage.getItem(WEB_KEY)); return w && typeof w === 'object' && !Array.isArray(w) ? w : {}; } catch (e) { return {}; } })();
-    function saveWeb() { try { window.localStorage.setItem(WEB_KEY, JSON.stringify(installedWeb)); } catch (e) {} }
+    function saveWeb() { try { window.localStorage.setItem(WEB_KEY, JSON.stringify(installedWeb)); } catch (e) {} handPage(); }
     // After an install from here: what went on the TV under pkg. A build without a web_version
     // takes the record away, since it replaced whatever the record was about.
     function rememberWeb(x, v, pkg) {
@@ -155,6 +156,7 @@
         var k = v.packageId || v.file; if (!k) return;
         if (level === 'public' || level === 'partner') certChoice[k] = level; else delete certChoice[k];
         try { window.localStorage.setItem(CERT_CHOICE_KEY, JSON.stringify(certChoice)); } catch (e) {}
+        handPage();
     }
     function certChoiceOf(v) { var c = certChoice[v.packageId || v.file]; return c === 'public' || c === 'partner' ? c : ''; }
     // The levels this TV holds, from the service: { public, partner }. A chain from elsewhere counts as public.
@@ -187,7 +189,7 @@
         try { var p = JSON.parse(window.localStorage.getItem(PINS_KEY)); return Array.isArray(p) ? p.filter(function (e) { return e && e.key && e.file; }) : []; }
         catch (e) { return []; }
     })();
-    function savePins() { try { window.localStorage.setItem(PINS_KEY, JSON.stringify(pins)); } catch (e) {} }
+    function savePins() { try { window.localStorage.setItem(PINS_KEY, JSON.stringify(pins)); } catch (e) {} handPage(); }
     function pinAt(x, i) { var f = x.variants[i].file; for (var n = 0; n < pins.length; n++) if (pins[n].key === x.key && pins[n].file === f) return n; return -1; }
     function isPinned(x, i) { return pinAt(x, i) >= 0; }
     function togglePin(x, i) {
@@ -274,7 +276,7 @@
         } catch (e) {}
         return s;
     })();
-    function saveSettings() { try { window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {} }
+    function saveSettings() { try { window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {} handPage(); }
     // The service keeps its own copy (it logs before the page is up); this page's setting wins.
     function syncVerbose() {
         if (ready && ready.verbose === settings.verboseLog) return;
@@ -627,6 +629,17 @@
     // What this screen keeps itself (its localStorage); the service adds what it keeps.
     function pageState() { return { settings: settings, pins: pins, certChoice: certChoice, movedSeen: movedSeen, variants: installedFile, webVersions: installedWeb }; }
     function backupMeta() { return { version: VERSION, device: device }; }
+    // The service gives a device on the LAN the backup without keys by itself (GET /backup/public,
+    // #149), and this screen's part of it lives in this screen's storage: hand it over when
+    // TV-Store starts and whenever one of its parts is saved. The service keeps the last one.
+    var pageHandTimer = null;
+    function handPage() {
+        if (pageHandTimer) return;
+        pageHandTimer = setTimeout(function () {
+            pageHandTimer = null;
+            withUploadToken(function () { if (!uploadTokenError) xhr('POST', '/backup/page', { token: uploadToken, page: pageState(), app: backupMeta() }, function () {}); });
+        }, 1000);
+    }
     function backupBlock() {
         return '<div class="vhead"><span class="t">Backup</span><span class="h">For after a reset or a firmware update</span></div><div class="opts">'
             + '<div class="opt f" tabindex="0" data-k="backupopen" data-act="backupopen"><div class="ot"><div class="ont">Back up or restore</div>'
@@ -676,8 +689,10 @@
             if (d.sources) got.push(d.sources + (d.sources === 1 ? ' source' : ' sources'));
             if (d.userSettings) got.push('the settings of ' + d.userSettings + (d.userSettings === 1 ? ' app' : ' apps'));
             got.push('your pinned apps and Settings');
+            var again = d.sourcesReenter || [];
             return '<div class="shd"><div style="min-width:0"><div class="nm">Restored</div><div class="mt">TV-Store starts again to show it</div></div></div>'
                 + '<div class="notice info">' + esc('Back on this TV: ' + got.join(', ') + '.' + (armed() || d.certificates ? '' : ' The backup held no signing certificates: press Arm TV-Store in this TV’s Toolbox in Apps2Samsung once.')) + '</div>'
+                + (again.length ? '<div class="notice">' + esc('Not added: ' + again.map(function (x) { return x.name + ' (' + x.domain + ')'; }).join(', ') + '. The backup left out the key in ' + (again.length === 1 ? 'its address' : 'their addresses') + ', so send ' + (again.length === 1 ? 'it' : 'them') + ' to this TV again with Send sources to TV in Apps2Samsung.') + '</div>' : '')
                 + '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="restoredone" data-act="restoredone" data-default>Start TV-Store again</button></div></div>';
         }
         if (!r) return '<div class="shd"><div><div class="nm">Nothing waiting</div><div class="mt">The backup is no longer on the TV.</div></div></div>'
@@ -691,6 +706,8 @@
             + '<div class="trow"><span class="k">Sources</span><span class="v">' + esc(m.sources.length ? m.sources.map(function (x) { return x.name + ' (' + x.domain + ')'; }).join(', ') : 'none') + '</span></div>'
             + '<div class="trow"><span class="k">Signing certificates</span><span class="v">' + esc(certText) + '</span></div>'
             + '<div class="trow"><span class="k">Settings typed for apps</span><span class="v">' + esc(!m.secrets ? 'left out of this backup' : m.userSettings ? m.userSettings + (m.userSettings === 1 ? ' app' : ' apps') : 'none') + '</span></div></div>';
+        var reenter = m.sourcesReenter || [];
+        if (reenter.length) h += '<div class="notice">' + esc((reenter.length === 1 ? 'One source is' : reenter.length + ' sources are') + ' not in this backup with a full address: ' + reenter.map(function (x) { return x.name + ' (' + x.domain + ')'; }).join(', ') + '. The address held a key, which a backup made without anybody at the TV leaves out. After the restore, send ' + (reenter.length === 1 ? 'it' : 'them') + ' to this TV again with Send sources to TV in Apps2Samsung.') + '</div>';
         if (st.error) h += '<div class="notice bad">' + esc('Could not restore it: ' + st.error) + '</div>';
         if (r.otherTv && m.secrets && m.certificates.length) h += '<div class="notice">' + esc('This backup was made on another TV. A signing certificate only installs on the TVs it lists; Settings shows per certificate whether it covers this one.') + '</div>';
         h += '<div class="notice">' + esc('Restore it only if the file is yours' + (m.sources.length || m.certificates.length ? ': its sources and certificates decide what TV-Store installs and signs, and are added without another question.' : '.')) + '</div>'
@@ -907,6 +924,7 @@
         try {
             tizen.systeminfo.getPropertyValue('BUILD', function (b) {
                 device = b && b.model ? b.model : '';
+                handPage();
                 renderFoot();
             }, function () {});
         } catch (e) {}
@@ -2449,7 +2467,7 @@
             case 'srcyes': answerOffer(true); return;
             case 'movedadd': var mu = el.getAttribute('data-url'), mf = el.getAttribute('data-fp'), mn = el.getAttribute('data-name');
                 if (sheet) closeSheet(function () { renderPage(); addMoved(mu, mf, mn); }); else addMoved(mu, mf, mn); return;
-            case 'movedlater': movedSeen.push(el.getAttribute('data-url')); try { window.localStorage.setItem(MOVED_SEEN_KEY, JSON.stringify(movedSeen)); } catch (e) {} renderPage(); focusFirst(); return;
+            case 'movedlater': movedSeen.push(el.getAttribute('data-url')); try { window.localStorage.setItem(MOVED_SEEN_KEY, JSON.stringify(movedSeen)); } catch (e) {} handPage(); renderPage(); focusFirst(); return;
             case 'srcno': answerOffer(false); return;
             case 'srctoggle': var cur = null; ((ready && ready.sources) || []).forEach(function (t) { if (t.repositoryId === srcSel) cur = t; });
                 sourceAction('/sources/enable', { enabled: !!(cur && cur.enabled === false) }, function (id) { renderSheet(); focusKey('srcrow:' + id); }); return;
@@ -2801,7 +2819,7 @@
             reviving = false;
             if (err) { problem = { title: 'The TV-Store service stopped', short: 'Service stopped', text: err.message + ' Close TV-Store and open it again; if it keeps happening, reinstall it from Apps2Samsung.' }; if (sheet) closeSheet(); renderPage(); focusFirst(); return; }
             withUploadToken(function () {});
-            setReady(ping); syncVerbose();
+            setReady(ping); syncVerbose(); handPage();
         });
     }
     document.addEventListener('visibilitychange', function () {
@@ -2852,7 +2870,7 @@
     withUploadToken(function () {});
     startService(function (err, ping) {
         if (err) { loading = false; problem = { title: 'The TV-Store service did not start', short: 'Service stopped', text: err.message + ' Close TV-Store and open it again; if it keeps happening, reinstall it from Apps2Samsung.' }; renderPage(); focusFirst(); return; }
-        ready = ping; renderFoot(); syncVerbose();
+        ready = ping; renderFoot(); syncVerbose(); handPage();
         if (ping && ping.selfUpdate) selfResult = { mark: ping.selfUpdate, outcome: selfOutcome(ping.selfUpdate) };
         readInstalled(function (map) {
             setInstalled(map);

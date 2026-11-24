@@ -665,6 +665,16 @@ press **Restore**. **Don't restore** is under the remote. TV-Store starts again 
 - **Try the TV's own installer** is not in a backup: what that experiment learned belongs to the
   firmware it ran on.
 - A backup made by a newer TV-Store than the one on the TV is refused; update TV-Store first.
+- A source that the backup holds without its full address (see below) is not added. The question on
+  the TV names it, and so does the result: send it to the TV again from Apps2Samsung.
+
+**The copy Apps2Samsung keeps by itself.** A device on the LAN can also read the backup without the
+signing certificates and without the apps' settings, at `http://<TV IP>:8077/backup/public`, with no
+code and nobody at the TV: that is what lets Apps2Samsung keep a recent copy next to the TV's app
+list. It holds the pinned apps, the Settings switches, **Sign with** per app, the sources, the relay
+and **Install from a browser**. The same devices get it that get the store page (**Devices that may
+connect**), by the TV's address only. Since no code guards it, a source whose address carries a key
+(`?token=...`) is in it with its host only, and has to be sent to the TV again after a restore.
 
 ### For Apps2Samsung (Backup & restore)
 
@@ -680,11 +690,33 @@ A2SStore.restore(backup)               // the object, or its JSON text
 // -> { ok: false, error }                                                           not a backup TV-Store reads
 ```
 
+Without the screen (the debug attach starts TV-Store again on the TV), from any device on the LAN
+that may connect:
+
+```
+GET http://<TV IP>:8077/relay          -> { ok: true, relay: {...}, backupPublic: true }   the route below exists
+GET http://<TV IP>:8077/backup/public  -> 200, the backup itself, made with secrets: false
+                                       -> 409 { ok: false, code: 'NO_SCREEN_STATE', error }  TV-Store was not opened yet
+                                       -> 403, plain text: not one of the devices, or not by the TV's address
+```
+
+- `madeAt` is the moment the content last changed, not the moment of the request: it stays the same
+  from one request to the next until a pin, a switch, a source or another part of it changes. A
+  source's `lastGeneratedAt` alone does not move it.
+- A source whose address carried a key has `url` cut back to `https://<host>/` and
+  `urlShortened: true`. A backup with such a source is `version: 2`, every other one stays
+  `version: 1`; TV-Store 0.3.41 refuses version 2 instead of adding half an address.
+- The screen's part is what the TV-Store screen last handed to the service (`POST /backup/page`,
+  when it starts and when one of its parts is saved), kept in the service's data folder.
+- `A2SStore.restore()` takes this backup as any other; `applied.sourcesReenter` is then
+  `[{ name, domain }]` for the sources that were not added.
+
 `restore` resolves when the person at the TV has answered. Keep the object as it is;
 `tizen-app/service/backup.js` has the format, and reads every part of a file again before any of it
 is used. In the service: `POST /backup/make`, `/backup/offer`, `/backup/take`, `/backup/apply` and
-`/backup/discard` take the page token and only come from the TV itself; `GET /backup`,
-`POST /backup/download { code, secrets }` and `POST /backup/restore` are for a browser on the LAN,
+`/backup/discard` and `/backup/page` take the page token and only come from the TV itself;
+`GET /backup`, `GET /backup/public`, `POST /backup/download { code, secrets }` and
+`POST /backup/restore` are for a browser on the LAN,
 under the same rules as the store page (the TV's address, not another web site, the devices list).
 
 ## Layout
@@ -747,6 +779,7 @@ node test/tvapps.test.js    # the TV's own app list (#142): a real vd_applist re
 node test/uninstall.test.js # removing an app against a fake sdbd: the token, by id or package, gone only when the list says so, an app the TV keeps, TV-Store itself refused
 node test/tv-uninstall.test.js  # Uninstall on the On the TV page, on the real page script: other apps and built-in ones, the question, the outcome, a refusal
 node test/backup.test.js    # backup and restore (#146): the file read back, without secrets, junk and newer formats refused; against the service: token or code, five wrong codes, one download, a restore after a reset
+node test/backup-public.test.js # the backup without keys (#149): NO_SCREEN_STATE before the screen's hand-over, a source with a key in its address shortened and not restored, madeAt moving with the content only
 node test/backup-page.test.js   # the same on the real page script: the code sheet, the restore question and its default, what lands in the screen's storage, A2SStore.backup and restore
 node test/certlevel.test.js # Public or Partner per install: refused up front, picked by privilege, chosen by hand
 node test/sdbhosts.test.js  # the order of addresses to try sdbd on

@@ -23,15 +23,25 @@
  * from http://<TV IP>:8077/backup with the code the TV shows. It comes back the same two ways, and
  * nothing of it is used until the person at the TV has seen what it holds and pressed Restore.
  *
+ * A third way out needs nobody at the TV (#149): GET /backup/public hands a device on the LAN the
+ * backup without secrets, for the copy Apps2Samsung keeps of a TV by itself. No code guards it, so
+ * a source whose address carries a key (a query such as ?token=...) is cut back to its host and
+ * marked urlShortened: true. Such a source is not added on a restore: the TV says that it has to be
+ * entered again. A backup with a shortened source is version 2, so that a TV-Store that does not
+ * know the mark refuses the file instead of adding half an address; every other backup stays
+ * version 1. madeAt of that backup only moves when what it holds changes (contentHash).
+ *
  * parse() takes nothing on trust: every part is checked and rebuilt, what is not understood is left
  * out, and a file from a newer TV-Store is refused. Pure, ES5, Node 4: test/backup.test.js. */
 'use strict';
+var crypto = require('crypto');
 var certs = require('./certs.js');
 var repos = require('./repos.js');
 var relayMod = require('./relay.js');
 
 var FORMAT = 'a2s-tvstore-backup';
-var VERSION = 1;
+var VERSION = 2;                  // the newest format parse() reads
+var VERSION_PLAIN = 1;            // what make() writes unless a source's address was shortened
 var MAX_BYTES = 4 * 1024 * 1024;
 
 function isObj(o) { return !!o && typeof o === 'object' && !Array.isArray(o); }
@@ -55,13 +65,17 @@ function count(o) { return isObj(o) ? Object.keys(o).length : 0; }
 // ---- making one -----------------------------------------------------------------------------------
 // parts: { page, tvStore, tv, duid, certificates (the store), certByPackage, sources (as stored),
 // sourceOf, renames, userSettings, relay, browser }; opts.secrets === false leaves the
-// certificates and the apps' settings out.
+// certificates and the apps' settings out, opts.shortenUrls cuts a source address with a key in it
+// back to its host (urlShortened: true), opts.madeAt is the moment to write instead of now.
+function urlHasKey(u) { return /[?#]/.test(u) || /^[a-z][a-z0-9+.-]*:\/\/[^\/?#]*@/i.test(u); }
+function urlHostOnly(u) { var m = /^([a-z][a-z0-9+.-]*:\/\/)(?:[^\/?#@]*@)?([^\/?#]*)/i.exec(u); return m ? m[1] + m[2] + '/' : ''; }
 function make(parts, opts) {
-    var secrets = !(opts && opts.secrets === false), p = parts || {};
+    var secrets = !(opts && opts.secrets === false), p = parts || {}, shortened = false;
     var service = {
         certByPackage: p.certByPackage || {},
         sources: (p.sources || []).map(function (s) {
             var o = { url: s.url, repositoryId: s.repositoryId, fingerprint: s.fingerprint, name: s.name || '', enabled: s.enabled !== false };
+            if (opts && opts.shortenUrls && urlHasKey(String(s.url))) { o.url = urlHostOnly(String(s.url)); o.urlShortened = true; shortened = true; }
             if (s.maintainer) o.maintainer = s.maintainer;
             if (s.publicKeyPem) o.publicKeyPem = s.publicKeyPem;
             if (s.addedAt) o.addedAt = s.addedAt;
@@ -77,8 +91,27 @@ function make(parts, opts) {
         if (p.certificates && p.certificates.certificates && p.certificates.certificates.length) service.certificates = p.certificates;
         service.userSettings = p.userSettings || {};
     }
-    return { format: FORMAT, version: VERSION, madeAt: new Date().toISOString(), tvStore: text(p.tvStore, 20), tv: text(p.tv, 80), duid: text(p.duid, 40),
+    return { format: FORMAT, version: shortened ? VERSION : VERSION_PLAIN, madeAt: (opts && opts.madeAt) || new Date().toISOString(), tvStore: text(p.tvStore, 20), tv: text(p.tv, 80), duid: text(p.duid, 40),
              secrets: secrets, page: pagePart(p.page), service: service };
+}
+
+// What a backup holds, as one SHA-256: the same for the same content whatever the order of the
+// keys. madeAt is left out, and so is a source's lastGeneratedAt: that mark moves every time a
+// repository publishes, which is no change to what the user set up.
+function canon(v) {
+    if (Array.isArray(v)) return '[' + v.map(canon).join(',') + ']';
+    if (isObj(v)) return '{' + Object.keys(v).sort().filter(function (k) { return v[k] !== undefined; }).map(function (k) { return JSON.stringify(k) + ':' + canon(v[k]); }).join(',') + '}';
+    return JSON.stringify(v === undefined ? null : v);
+}
+function contentHash(b) {
+    var o = {}, k;
+    for (k in b) if (has(b, k) && k !== 'madeAt') o[k] = b[k];
+    if (isObj(b.service) && Array.isArray(b.service.sources)) {
+        o.service = {};
+        for (k in b.service) if (has(b.service, k)) o.service[k] = b.service[k];
+        o.service.sources = b.service.sources.map(function (s) { var e = {}; for (var f in s) if (has(s, f) && f !== 'lastGeneratedAt') e[f] = s[f]; return e; });
+    }
+    return crypto.createHash('sha256').update(canon(o)).digest('hex');
 }
 
 // ---- reading one ----------------------------------------------------------------------------------
@@ -105,18 +138,21 @@ function pagePart(p) {
     }
     return out;
 }
+// { sources, reenter }: a source whose address was shortened (urlShortened) is no source to add,
+// only a name to show: [{ name, repositoryId, domain, fingerprint }].
 function sourcesPart(list) {
-    var out = [], seen = {};
+    var out = [], reenter = [], seen = {};
     (Array.isArray(list) ? list : []).slice(0, 100).forEach(function (s) {
         var n = repos.normalizeSource(s);
         if (!n.source || seen[n.source.repositoryId]) return;
         seen[n.source.repositoryId] = true;
         var e = n.source;
+        if (s.urlShortened === true) { reenter.push({ name: e.name || e.repositoryId, repositoryId: e.repositoryId, domain: repos.hostOf(e.url), fingerprint: e.fingerprint }); return; }
         ['maintainer', 'addedAt', 'lastGeneratedAt'].forEach(function (k) { if (typeof s[k] === 'string' && s[k]) e[k] = s[k].slice(0, 200); });
         e.enabled = s.enabled !== false;
         out.push(e);
     });
-    return out;
+    return { sources: out, reenter: reenter };
 }
 function relayPart(r) {
     if (!isObj(r) || typeof r.enabled !== 'boolean') return null;
@@ -124,12 +160,13 @@ function relayPart(r) {
     return { enabled: r.enabled, port: port, allow: relayMod.normList(r.allow).slice(0, 50), chosen: r.chosen !== false };
 }
 function servicePart(s) {
-    var out = { certificates: null, certByPackage: {}, sources: [], sourceOf: {}, renames: [], userSettings: {}, relay: null, browser: null };
+    var out = { certificates: null, certByPackage: {}, sources: [], sourcesReenter: [], sourceOf: {}, renames: [], userSettings: {}, relay: null, browser: null };
     if (!isObj(s)) return out;
     out.certificates = certs.fromStored(s.certificates);
     if (out.certificates && !out.certificates.certificates.length) out.certificates = null;
     out.certByPackage = mapOf(s.certByPackage, function (v) { return typeof v === 'string' && /^[0-9a-f]{64}$/.test(v) ? v : undefined; }, 2000);
-    out.sources = sourcesPart(s.sources);
+    var src = sourcesPart(s.sources);
+    out.sources = src.sources; out.sourcesReenter = src.reenter;
     out.sourceOf = mapOf(s.sourceOf, function (v) { return typeof v === 'string' && v && v.length <= 128 ? v : undefined; }, 2000);
     out.renames = (Array.isArray(s.renames) ? s.renames : []).filter(function (r) { return isObj(r) && typeof r.originalPackageId === 'string' && typeof r.newPackageId === 'string' && r.newPackageId; }).slice(0, 500).map(function (r) {
         var e = {};
@@ -171,6 +208,7 @@ function summary(b) {
              pins: (p.pins || []).length, settings: settings,
              certificates: certs.summary(s.certificates).map(function (c) { return { name: c.name, level: c.level, deviceIds: c.deviceIds }; }),
              sources: (s.sources || []).map(function (x) { return { name: x.name || x.repositoryId, repositoryId: x.repositoryId, domain: repos.hostOf(x.url), fingerprint: x.fingerprint }; }),
+             sourcesReenter: (s.sourcesReenter || []).map(function (x) { return { name: x.name, repositoryId: x.repositoryId, domain: x.domain, fingerprint: x.fingerprint }; }),
              userSettings: count(s.userSettings) };
 }
 
@@ -257,4 +295,4 @@ function page(ip) {
         + '<script>(' + client.toString() + ')();</script></body></html>';
 }
 
-module.exports = { FORMAT: FORMAT, VERSION: VERSION, MAX_BYTES: MAX_BYTES, make: make, parse: parse, summary: summary, forInstalled: forInstalled, mergeCertificates: mergeCertificates, page: page };
+module.exports = { FORMAT: FORMAT, VERSION: VERSION, MAX_BYTES: MAX_BYTES, make: make, parse: parse, summary: summary, pagePart: pagePart, contentHash: contentHash, forInstalled: forInstalled, mergeCertificates: mergeCertificates, page: page };
