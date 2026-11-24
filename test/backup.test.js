@@ -61,7 +61,7 @@ if (lean.error || lean.backup.secrets !== false || lean.backup.service.certifica
 if (/BEGIN|s3cr3t/.test(JSON.stringify(backup.make(parts, { secrets: false })))) fail('a backup without secrets must not carry a key or a value');
 if (lean.backup.service.sources.length !== 1 || lean.backup.page.pins.length !== 1) fail('a backup without secrets keeps the rest');
 
-[['not json', /not JSON/], ['{"format":"something-else","version":1}', /not a TV-Store backup/], ['[1,2]', /not a TV-Store backup/], [JSON.stringify({ format: backup.FORMAT, version: 2 }), /newer TV-Store/],
+[['not json', /not JSON/], ['{"format":"something-else","version":1}', /not a TV-Store backup/], ['[1,2]', /not a TV-Store backup/], [JSON.stringify({ format: backup.FORMAT, version: backup.VERSION + 1 }), /newer TV-Store/],
  [JSON.stringify({ format: backup.FORMAT }), /no version/], [new Array(backup.MAX_BYTES + 2).join('x'), /too big/]].forEach(function (c) {
     var r = backup.parse(c[0]);
     if (!r.error || !c[1].test(r.error)) fail('must be refused with ' + c[1] + ': ' + JSON.stringify(r).slice(0, 200));
