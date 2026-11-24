@@ -30,6 +30,7 @@ var repos = require('./repos.js');
 var pkgid = require('./pkgid.js');
 var storePage = require('./storepage.js');
 var usersettings = require('./usersettings.js');
+var tvapps = require('./tvapps.js');
 
 var PORT = 8077;
 // sdbd's port; a test points the service at a fake sdbd (test/install.test.js).
@@ -1562,6 +1563,68 @@ function haveCerts() { var c = loadCerts(); return !!(c && c.certificates && c.c
 function certLabel(c) { return '\u2018' + (c.name || c.id.slice(0, 12)) + '\u2019' + (c.level === 'partner' ? ' (Partner)' : c.level === 'public' ? ' (Public)' : ''); }
 function levelName(l) { return l === 'partner' ? 'Partner' : 'Public'; }
 
+// The apps on this TV and their removal (#142), both over the TV's developer connection: sdbd
+// lists what is installed (0 vd_applist), with the TV's own word on whether an app can be removed,
+// and removes one (0 vd_appuninstall). Only an app the listing names is removed, by the id the
+// listing gives it, and the listing read again afterwards is what says whether it went: the words
+// of the answer differ from set to set. An app the TV lists as its own (is_removable 0) is tried
+// like any other when the person at the TV asks for it; the TV has the last word.
+function shortReply(out) { return String(out || '').replace(/\s+/g, ' ').trim().slice(0, 200); }
+function readTvApps(c, cb) {
+    c.shell('0 vd_applist', function (err, out) {
+        if (err) return cb(err);
+        if (!tvapps.isListing(out)) return cb(coded('NO_LISTING', 'The TV did not list its apps' + (shortReply(out) ? ' (it answered: ' + shortReply(out) + ')' : '') + '.'));
+        cb(null, tvapps.parse(out));
+    });
+}
+// sdbd takes one connection at a time: while TV-Store installs, a second one is dropped the way a
+// wrong Host PC IP is, and the advice for that would be wrong.
+function sdbBusy() { return SDB_ACTIVE > 0 ? coded('BUSY', 'TV-Store is using the TV\u2019s developer connection right now (an install is running). Try again when it is done.') : null; }
+function listTvApps(cb) {
+    var busy = sdbBusy();
+    if (busy) return cb(busy);
+    connectSdb(sdbHosts(), function (err, c) {
+        if (err) return cb(err);
+        readTvApps(c, function (err, apps) { c.end(); cb(err, apps); });
+    });
+}
+function uninstall(b, cb) {
+    var want = String((b && b.id) || '');
+    if (!tvapps.SAFE_ID.test(want)) return cb(coded('BAD_ID', 'need { id } with the app\u2019s id on this TV'));
+    var own = coded('SELF', 'TV-Store cannot remove itself. Remove it from the TV\u2019s own Apps menu (Apps, Settings, Delete).');
+    if (tvapps.belongs(want, OWN_PKG)) return cb(own);
+    var busy = sdbBusy();
+    if (busy) return cb(busy);
+    connectSdb(sdbHosts(), function (err, c) {
+        if (err) return cb(err);
+        readTvApps(c, function (err, apps) {
+            if (err) { c.end(); return cb(err); }
+            var app = tvapps.find(apps, want);
+            if (!app) { c.end(); log('uninstall: ' + want + ' is not on this TV (any more)'); return cb(null, { id: want, gone: true, already: true }); }
+            if (tvapps.belongs(app.id, OWN_PKG)) { c.end(); return cb(own); }
+            var name = app.title || app.id;
+            log('uninstall: removing ' + name + ' (' + app.id + ')' + (app.removable ? '' : ', which the TV lists as one of its own (is_removable 0)'));
+            c.shell('0 vd_appuninstall ' + app.id, function (err, out) {
+                var v = tvapps.verdict(err ? '' : out);
+                log('uninstall: vd_appuninstall reply: ' + (err ? err.message : v.text.slice(0, 200)));
+                readTvApps(c, function (lerr, after) {
+                    c.end();
+                    var still = lerr ? null : !!tvapps.find(after, app.id);
+                    if (still === false || (still === null && !err && v.ok)) {
+                        forgetSource(tvapps.packageOf(app.id));
+                        log('uninstall: ' + name + ' is off this TV' + (still === null ? ' by the TV\u2019s answer (the list could not be read again: ' + lerr.message + ')' : ''));
+                        return cb(null, { id: app.id, title: app.title, gone: true, freed: app.size });
+                    }
+                    var said = err ? err.message : v.text;
+                    log('uninstall: ' + name + ' is still on this TV');
+                    if (!app.removable) return cb(coded('TV_OWN_APP', 'The TV did not remove ' + name + '. It lists the app as one of its own, and those it keeps' + (said ? ' (it answered: ' + shortReply(said) + ')' : '') + '.'));
+                    cb(coded('UNINSTALL_FAILED', 'The TV did not remove ' + name + (said ? '. It answered: ' + shortReply(said) : ', and gave no reason') + '.'));
+                });
+            });
+        });
+    });
+}
+
 var SERVER = http.createServer(function (req, res) {
     if (req.method === 'OPTIONS') { cors(res, 204, 'text/plain'); return res.end(); }
     var route = url.parse(req.url).pathname;
@@ -1700,6 +1763,18 @@ var SERVER = http.createServer(function (req, res) {
         else { store = certs.remove(store, id); forgetCert(id); log('cert: ' + certLabel(c) + ' (' + id.slice(0, 12) + ') removed on the TV; ' + store.certificates.length + ' left'); }
         saveCerts(store);
         json(res, 200, { ok: true, certReady: haveCerts(), certCount: store.certificates.length, certificates: certs.summary(store) });
+    });
+    // What the TV has installed, for the On the TV page (#142).
+    if (route === '/tvapps' && req.method === 'GET') return listTvApps(function (err, apps) {
+        if (err) { log('tvapps: ' + (err.code ? '[' + err.code + '] ' : '') + err.message); return json(res, 200, { ok: false, error: err.message, code: err.code || null }); }
+        json(res, 200, { ok: true, apps: apps });
+    });
+    // Removing an app is for the person at the TV: with the page token, like an upload. This port
+    // is open to the LAN and to every other app on the TV.
+    if (route === '/uninstall' && req.method === 'POST') return body(req, function (err, b) {
+        if (err || !b || typeof b.id !== 'string') return json(res, 400, { ok: false, error: 'need { token, id }' });
+        if (!pageToken(b)) return json(res, 403, { ok: false, error: 'only the TV-Store screen may do that', code: 'NO_TOKEN' });
+        uninstall(b, function (err, r) { if (err) { log('uninstall: failed' + (err.code ? ' [' + err.code + ']' : '') + ': ' + err.message); return json(res, 200, { ok: false, error: err.message, code: err.code || null }); } json(res, 200, { ok: true, result: r }); });
     });
     if (route === '/install' && req.method === 'POST') return body(req, function (err, b) {
         if (err || !b || !(b.url || b.upload)) return json(res, 400, { ok: false, error: 'need { url, file, appId } or { upload, token }' });

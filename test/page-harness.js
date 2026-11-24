@@ -6,9 +6,10 @@ var SRC = fs.readFileSync(path.join(__dirname, '..', 'tizen-app', 'js', 'app.js'
 
 function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
 
-// One page: opts { catalog, installed: { pkg: version }, storage: { key: object } }.
+// One page: opts { catalog, installed: { pkg: version }, storage: { key: object }, tvApps: [the TV's own list],
+// uninstall: function (body) -> the service's answer }.
 function page(opts) {
-    var store = {}, posts = [], asked = [], installs = [], acks = [], requests = [], intervals = [], onTv = opts.installed;
+    var store = {}, posts = [], asked = [], installs = [], uninstalls = [], acks = [], requests = [], intervals = [], onTv = opts.installed;
     Object.keys(opts.storage || {}).forEach(function (k) { store[k] = JSON.stringify(opts.storage[k]); });
     // An element that takes whatever the page does to it.
     function el() {
@@ -34,6 +35,13 @@ function page(opts) {
         if (p === '/uploads') return { ok: true, pending: null };
         if (p === '/store/state') { if (body.state) posts.push(body.state); var r = requests; requests = []; return { ok: true, requests: r }; }
         if (p === '/store/ack') { acks.push(body); return { ok: true }; }
+        if (p === '/tvapps') return opts.tvApps ? { ok: true, apps: opts.tvApps } : { ok: false, error: 'no developer connection in this test' };
+        if (p === '/uninstall') {
+            uninstalls.push(body);
+            var said = opts.uninstall ? opts.uninstall(body) : { ok: true, result: { id: body.id, gone: true } };
+            if (said.ok) { Object.keys(onTv).forEach(function (pkg) { if (body.id === pkg || body.id.indexOf(pkg + '.') === 0) delete onTv[pkg]; }); if (opts.tvApps) opts.tvApps = opts.tvApps.filter(function (a) { return a.id !== body.id; }); }
+            return said;
+        }
         if (p === '/install') { installs.push(body); onTv[body.packageId] = '0.1.0'; return { ok: true, result: { packageId: body.packageId, appId: body.appId } }; }
         return { ok: true };
     }
@@ -93,7 +101,7 @@ function page(opts) {
         },
         html: function (id) { return els[id] ? els[id].innerHTML : ''; },
         stored: function (k) { return store.hasOwnProperty(k) ? JSON.parse(store[k]) : null; },
-        installs: installs, acks: acks,
+        installs: installs, uninstalls: uninstalls, acks: acks,
         // Every path the page asked the service for, and the document, to say what has the focus.
         asked: asked, posts: function () { return posts; }, doc: doc, el: function (id) { return doc.getElementById(id); }
     };
