@@ -230,6 +230,9 @@
     var job = null;            // the running or last install
     var queue = [];            // apps still to update after the current job ("Update all")
     var returnFocus = null;    // data-k to focus again when the sheet closes
+    var storeHtml = null;      // what the store page was last built from, null when the page shows something else
+    var selHtml = '';          // the Selected card as the page has it
+    var rowsFit = 0;           // how many rows of cards the store shows at once; 0 when it is not laid out in rows
     var confirmingAdult = false;
     var device = '';
     var tvIp = '';             // this TV's IP now, from systeminfo
@@ -1369,11 +1372,54 @@
     function section(id, title, list, grid, more) {
         return '<div class="sect' + (grid ? ' grid' : '') + '"><div class="shead"><span class="t">' + esc(title) + '</span><span class="n">' + list.length + '</span>'
             + (more ? '<span class="link f" tabindex="0" data-k="more:' + id + '" data-chip="' + id + '">Show all ›</span>' : '') + '</div>'
-            + '<div class="strip"><div class="cards">' + list.map(function (x) { return card(x, id); }).join('') + '</div></div></div>';
+            + '<div class="strip" data-row="' + id + '"><div class="cards">' + list.map(function (x) { return card(x, id); }).join('') + '</div></div></div>';
+    }
+
+    // The Selected card takes this place in the page as it is built: what the rest of the page is
+    // built from stays the same while the focus moves from app to app.
+    var SEL = '<!--selected-->';
+    function showSel(html) {
+        if (html === selHtml && $('selcard')) return;
+        var sc = $('selcard');
+        if (sc) { sc.outerHTML = html; selHtml = html; }
+    }
+    // Where the rows stand, to put them back after the page is built again: an install that ends
+    // changes a badge, and the row under the focus should not jump back to its first card for that.
+    function rowsPlace() {
+        var rows = $('rows'), at = { mode: chip + '|' + query, top: 0, strips: {} };
+        if (!rows) return null;
+        at.top = rows.scrollTop;
+        Array.prototype.forEach.call(rows.querySelectorAll('.strip'), function (s) { var id = s.getAttribute('data-row'); if (id && s.scrollLeft) at.strips[id] = s.scrollLeft; });
+        return at;
+    }
+    function putRowsBack(at) {
+        var rows = $('rows');
+        if (!rows || !at || at.mode !== chip + '|' + query) return;
+        Array.prototype.forEach.call(rows.querySelectorAll('.strip'), function (s) { var id = s.getAttribute('data-row'); if (id && at.strips[id]) s.scrollLeft = at.strips[id]; });
+        rows.scrollTop = at.top;
+    }
+    // The rows of cards show as whole rows (#126): the list is as high as the rows that fit, plus the
+    // heading of the next one when there is room for all of it. Left to the room there happened to be,
+    // the list ended anywhere: through the next row's heading on a TV with the "From" chips, which
+    // take a line of their own.
+    function fitRows() {
+        var rows = $('rows');
+        rowsFit = 0;
+        if (!rows) return;
+        rows.style.maxHeight = '';
+        var sects = rows.querySelectorAll('.sect');
+        if (sects.length < 2 || sects[0].classList.contains('grid')) return;
+        var pad = parseFloat(window.getComputedStyle(rows).paddingTop) || 0, pitch = sects[1].offsetTop - sects[0].offsetTop, room = rows.clientHeight - pad;
+        if (!(pitch > 0) || !(room > 0)) return;
+        var gap = pitch - sects[0].offsetHeight, head = sects[0].querySelector('.shead'), headH = head ? head.offsetHeight : 0;
+        var n = Math.max(1, Math.floor((room + gap / 2) / pitch)), left = room - n * pitch;
+        rowsFit = n;
+        rows.style.maxHeight = Math.round(pad + n * pitch + (headH && left >= headH + 6 ? headH + 4 : -gap / 2)) + 'px';
     }
 
     function renderStore() {
-        var h = '';
+        var h = '', was = storeHtml, sel = '';
+        storeHtml = null;
         if (problem) {
             h += '<div class="welcome"><div class="wmain"><h1>' + esc(problem.title) + '</h1><p>' + esc(problem.text) + '</p>'
                 + (tried.length ? '<div class="hint mono" style="margin-top:18px">' + tried.map(esc).join('<br>') + '</div>' : '')
@@ -1430,7 +1476,8 @@
         // The Selected card stays put (with the greeting and the chips) and the rows scroll under it,
         // so the description of the app under the remote always shows.
         if (!query) {
-            h += '<div class="hero"><div class="greet"><h1>' + greeting() + '</h1><p>Everything here installs straight onto this TV. Pick an app, press OK, and it shows up in your Apps row in about a minute.</p></div>' + selCard(hover) + '</div>';
+            h += '<div class="hero"><div class="greet"><h1>' + greeting() + '</h1><p>Everything here installs straight onto this TV. Pick an app, press OK, and it shows up in your Apps row in about a minute.</p></div>' + SEL + '</div>';
+            sel = selCard(hover);
             var cats = CATEGORY_ORDER.filter(function (c) { return apps.some(function (x) { return x.category === c; }); });
             h += '<div class="chips"><span class="chip f' + (chip === 'all' ? ' on' : '') + '" tabindex="0" data-k="chip:all" data-chip="all">All</span>'
                 + cats.map(function (c) { return '<span class="chip f' + (chip === c ? ' on' : '') + '" tabindex="0" data-k="chip:' + c + '" data-chip="' + c + '">' + esc(catName(c)) + '</span>'; }).join('') + '</div>';
@@ -1439,7 +1486,7 @@
                 var pinnedNow = pinned(), vetro = vetroOnTv();
                 if (pinnedNow.length || vetro) h += '<div class="sect"><div class="shead"><span class="t">Pinned</span><span class="n">' + (pinnedNow.length + (vetro ? 1 : 0)) + '</span>'
                     + '<span class="hintline">Pin an app from its page, or from On the TV</span></div>'
-                    + '<div class="strip"><div class="cards">' + (vetro ? vetroCard() : '') + pinnedNow.map(function (p) { return pinCard(p.app, p.v); }).join('') + '</div></div></div>';
+                    + '<div class="strip" data-row="pinned"><div class="cards">' + (vetro ? vetroCard() : '') + pinnedNow.map(function (p) { return pinCard(p.app, p.v); }).join('') + '</div></div></div>';
                 cats.forEach(function (c) {
                     var list = apps.filter(function (x) { return x.category === c; });
                     h += section(c, catName(c), list, false, list.length > 6);
@@ -1452,7 +1499,8 @@
             var q = query.toLowerCase();
             var found = apps.filter(function (x) { return x.name.toLowerCase().indexOf(q) >= 0 || (x.description || '').toLowerCase().indexOf(q) >= 0 || (x.author || '').toLowerCase().indexOf(q) >= 0; });
             if (found.length && found.indexOf(hover) < 0) hover = found[0];
-            h += '<div class="hero"><div class="greet"><h1>Search</h1><p>' + esc(found.length ? found.length + (found.length === 1 ? ' app matches' : ' apps match') + ' \u201c' + query + '\u201d, by name, description or developer.' : 'Nothing matches \u201c' + query + '\u201d.') + '</p></div>' + selCard(found.length ? hover : null) + '</div><div class="fade"></div><div class="rows vscroll" id="rows">';
+            h += '<div class="hero"><div class="greet"><h1>Search</h1><p>' + esc(found.length ? found.length + (found.length === 1 ? ' app matches' : ' apps match') + ' \u201c' + query + '\u201d, by name, description or developer.' : 'Nothing matches \u201c' + query + '\u201d.') + '</p></div>' + SEL + '</div><div class="fade"></div><div class="rows vscroll" id="rows">';
+            sel = selCard(found.length ? hover : null);
             // Apps the catalog took out (#87) answer too, after the results, without an install.
             var gq = goneMatches(q);
             h += found.length ? section('search', 'Results for “' + query + '”', found, true, false)
@@ -1461,7 +1509,17 @@
                 + '<div class="strip"><div class="cards">' + gq.map(goneCard).join('') + '</div></div></div>';
         }
         if (!apps.length) h += srcFilter !== 'all' && !query ? '<div class="empty">' + esc(sourceName(srcFilter) + ' has no apps to show here.') + '</div>' : '<div class="empty">No apps to show. The gear at the top has the Settings.</div>';
-        pageEl.innerHTML = h + '</div>';
+        // Room after the last row, so it can stand where every other row stands.
+        h += (!query && chip === 'all' ? '<div class="rowsend"></div>' : '') + '</div>';
+        // Nothing but the app under the focus differs from what the page shows: the page stays as
+        // it is. Building it again for every sheet that closes drew every icon anew and put the rows
+        // back at their start (#126).
+        if (h === was && $('rows')) { storeHtml = h; showSel(sel); return; }
+        var at = was === null ? null : rowsPlace();
+        storeHtml = h; selHtml = sel;
+        pageEl.innerHTML = h.replace(SEL, function () { return sel; });
+        fitRows();
+        putRowsBack(at);
     }
 
     function goneCard(g) {
@@ -1553,7 +1611,7 @@
 
     function renderPage() {
         renderHeader();
-        if (view === 'tv') renderTv(); else renderStore();
+        if (view === 'tv') { storeHtml = null; renderTv(); } else renderStore();
     }
 
     // ---- the sheet (C2, C3, C4, Settings) --------------------------------------------------------
@@ -2168,7 +2226,7 @@
         reveal(el);
         if (el.getAttribute && el.getAttribute('data-app') && view === 'install' && !sheet) {
             var x = byKey(el.getAttribute('data-app'));
-            if (x && x !== hover) { hover = x; var sc = $('selcard'); if (sc) sc.outerHTML = selCard(x); }
+            if (x && x !== hover) { hover = x; showSel(selCard(x)); }
         }
         if (el.getAttribute && el.getAttribute('data-app') && view === 'tv' && !sheet) {
             var y = byKey(el.getAttribute('data-app'));
@@ -2204,8 +2262,9 @@
     // Left and right inside a row of cards, and around its "Show all" (#126). A row is a line: the
     // next card is the next one in it, shown or not. At its last card, right goes to the row's
     // "Show all" when it has one, and from there right goes nowhere and left goes back to the last
-    // card the row shows. Returns the element to focus, null to stay, undefined when the element is
-    // not in a row (the grid of one category and everything else go by position).
+    // card the row shows. Left at its first card goes nowhere either: it went to whatever stood
+    // nearest, a category chip or another row. Returns the element to focus, null to stay, undefined
+    // when the element is not in a row (the grid of one category and everything else go by position).
     function rowStep(cur, dir) {
         var sect = closest(cur, 'sect');
         if (!sect || sect.classList.contains('grid')) return undefined;
@@ -2217,7 +2276,7 @@
         }
         var i = cards.indexOf(cur);
         if (i < 0) return undefined;
-        if (dir === 'left') return i > 0 ? cards[i - 1] : undefined;
+        if (dir === 'left') return i > 0 ? cards[i - 1] : null;
         return i < cards.length - 1 ? cards[i + 1] : (link || null);
     }
     // Scroll whatever clips the element so that it shows: a row of cards sideways, the page and the
@@ -2246,6 +2305,20 @@
             if (box === pageEl && !closest(el, 'sect') && !closest(el, 'group') && !closest(el, 'panel')) { box.scrollTop = 0; return; }
             // A card in the first line of its section brings the section's heading along.
             var sect = box !== pageEl && closest(el, 'sect'), top = r.top;
+            // The rows of the store stand in fixed places (#126): the list moves by whole rows, so
+            // the first row it shows always stands where the first row stands when the store opens,
+            // going down and going up. It used to move just far enough to show the card, which
+            // left the rows at one height going down and at another going up.
+            if (sect && rowsFit && box.id === 'rows') {
+                var all = Array.prototype.slice.call(box.querySelectorAll('.sect')), i = all.indexOf(sect), pad = parseFloat(window.getComputedStyle(box).paddingTop) || 0;
+                var below = function (s) { return s.getBoundingClientRect().top - br.top - pad; };
+                var first = 0, near = 1e9;
+                all.forEach(function (s, n) { var d = Math.abs(below(s)); if (d < near) { near = d; first = n; } });
+                if (i < first) first = i; else if (i > first + rowsFit - 1) first = i - rowsFit + 1;
+                var by = Math.round(below(all[first]));
+                if (by) box.scrollTop += by;
+                return;
+            }
             if (sect) { var sr2 = sect.getBoundingClientRect(); if (r.top - sr2.top < 90) top = sr2.top + m - 6; }
             if (top < br.top + m) box.scrollTop -= (br.top + m - top);
             else if (r.bottom > br.bottom - m) box.scrollTop += (r.bottom - br.bottom + m);
@@ -2267,12 +2340,21 @@
             if (dir === 'left' && closest(cur, 'tvpanel') && tvSel) { var row = pageEl.querySelector('[data-k="tv:' + tvSel.key.replace(/"/g, '\\"') + '"]'); if (row) return focus(row); }
         }
         if (!sheet && (dir === 'left' || dir === 'right')) { var step = rowStep(cur, dir); if (step !== undefined) { if (step) focus(step); return; } }
-        var a = cur.getBoundingClientRect(), ax = (a.left + a.right) / 2, ay = (a.top + a.bottom) / 2, best = null, bestScore = 1e9;
+        var a = cur.getBoundingClientRect(), ax = (a.left + a.right) / 2, ay = (a.top + a.bottom) / 2, best = null, bestScore = 1e9, curList = closest(cur, 'vscroll');
         all.forEach(function (el) {
             // A card its row does not show is not a place to go to from outside that row: from
             // "Show all" the nearest thing to the right was such a card in another row (#126).
             if (el === cur || !inRow(el)) return;
             var b = el.getBoundingClientRect(), bx = (b.left + b.right) / 2, by = (b.top + b.bottom) / 2, main, cross;
+            // Left and right stay on their own line: by distance alone, right from the Settings
+            // gear went down to a row's "Show all" and left from the first card of a grid went up
+            // to a category chip (#126).
+            if ((dir === 'left' || dir === 'right') && (b.bottom <= a.top || b.top >= a.bottom)) return;
+            // From outside a list, only what the list shows is a place to go to: a row that has
+            // scrolled up out of it lies behind the header and the chips, where it was the nearest
+            // thing to the gear and to a chip (#126). Inside the list the scroll follows the focus.
+            var list = closest(el, 'vscroll');
+            if (list && list !== curList) { var lr = list.getBoundingClientRect(); if (by < lr.top || by > lr.bottom) return; }
             if (dir === 'left') { if (b.right > a.left + 4 && bx >= ax) return; main = a.left - b.right; cross = Math.abs(by - ay); }
             else if (dir === 'right') { if (b.left < a.right - 4 && bx <= ax) return; main = b.left - a.right; cross = Math.abs(by - ay); }
             else if (dir === 'up') { if (b.bottom > a.top + 4 && by >= ay) return; main = a.top - b.bottom; cross = Math.abs(bx - ax); }
@@ -2282,8 +2364,9 @@
         });
         if (best) return focus(best);
         // Nothing left to move to: what follows may be text only (the tables and QR codes at the end
-        // of Settings), so the list itself scrolls on.
-        if (dir === 'down' || dir === 'up') { var box = closest(cur, 'vscroll'); if (box) box.scrollTop += dir === 'down' ? 260 : -260; }
+        // of Settings), so the list itself scrolls on. In a sheet only: under the last row of the
+        // store there is nothing to read, and the row moved up a little for it (#126).
+        if (sheet && (dir === 'down' || dir === 'up')) { var box = closest(cur, 'vscroll'); if (box) box.scrollTop += dir === 'down' ? 260 : -260; }
     }
 
     function back() {
