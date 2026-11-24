@@ -597,6 +597,31 @@ The header counts what the switches hide ("12 apps · 3 hidden").
 - On the TV page, **▶** from an app in the list goes to its panel on the right (Details or
   Update, Open) and **◀** comes back to the list.
 
+## Uninstalling apps
+
+**On the TV** lists every app the TV has, not only the catalog's (#142): under the catalog's apps
+come **Other apps** (installed from Samsung's own store, from a phone or PC, or with a file) and
+**Built into the TV**. The list is the TV's own, read over its developer connection
+(`0 vd_applist`), so it needs what an install through `sdbd` needs: Developer Mode on, Host PC IP
+at the TV's own address or `127.0.0.1`. Without it the catalog's apps still show and a note says
+why the rest does not.
+
+Every app has **Uninstall** in its panel, except TV-Store itself (remove that from the TV's Apps
+menu). It asks first, with Cancel under the remote, and says what goes: the app and everything it
+keeps on the TV. A catalog app can be installed again from the store; anything else cannot, and
+the question says so.
+
+- The TV says per app whether it can be removed (`is_removable`, what its own Apps menu offers
+  Delete for). On many sets that includes apps that came with the TV, Netflix among them.
+- An app the TV lists as its own is tried all the same when you ask: the TV has the last word. Its
+  refusal shows in its own words, and the app stays.
+- An app counts as removed when the TV's list, read again, no longer has it; the words of the
+  TV's answer differ from set to set.
+- The service removes only an app the TV's list names, with the id from that list, and only for
+  the TV-Store screen: `POST /uninstall { token, id }` takes the page token, like an upload's
+  install. `GET /tvapps` is the list.
+- Not while an install runs: the TV takes one developer connection at a time.
+
 ## Layout
 
 - `tizen-app/`: the package: `config.xml`, `index.html`, `js/app.js`, `icon.png`, `service/`
@@ -664,6 +689,10 @@ node test/selfupdate.test.js  # TV-Store updating itself (#41): refused without 
 node test/pkgid.test.js     # another app's package id (#84): the derived id against values computed apart, catalog keys, when to rename, whole-token rewrite
 node test/web-version.test.js  # Jellyfin on the catalog's web_version (#124), on the real page script: update, not known, Update all, the record
 node test/rename.test.js    # a fork installed beside the app whose id it kept, its update on that copy, a .tpk refused until Replace, an older page as before
+node test/tvapps.test.js    # the TV's own app list (#142): a real vd_applist reply, an app by id or package, the answers to a removal
+node test/uninstall.test.js # removing an app against a fake sdbd: the token, by id or package, gone only when the list says so, an app the TV keeps, TV-Store itself refused
+node test/tv-uninstall.test.js  # Uninstall on the On the TV page, on the real page script: other apps and built-in ones, the question, the outcome, a refusal
+node test/store-keep.test.js    # the store page is built once and kept: a sheet that closes and the 3 s tick leave it as it is (#126)
 ```
 
 Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching the version in
@@ -708,6 +737,7 @@ Only when that start fails too does the page say "The TV-Store service stopped".
 | The relay on by default when Host PC IP is `127.0.0.1` | built (0.3.28), proven on a 2019 Tizen 5.0 set |
 | The TV's real DUID for the certificate check | built (0.3.28): read from `sdbd` (`0 getduid`), since `webapis.productinfo` gives another id; the id in the certificate confirmed on a 2019 Tizen 5.0 set |
 | Picking which devices may connect | built (0.3.29): a switch per phone or PC that came by, in Settings |
+| Uninstalling apps, also ones that are not in the catalog (#142) | built: the TV's own list on the On the TV page, Uninstall with a question first; proven against a fake `sdbd` with a real set's listing, untested on a TV |
 | First real install from the TV | done, 2019 Tizen 5.0 set (0.3.4) |
 | Tizen 3.0 and 4.0 sets (2017, 2018) | untested |
 | Tizen 10 sets (2025) | done, retail set (0.3.9) |

@@ -557,7 +557,7 @@
     function offerSource(src, done) { offers.push({ src: src, done: done }); nextOffer(); }
     function nextOffer() {
         if (offer || !offers.length || loading || problem) return;
-        if (sheet && (sheet.mode === 'job' && job && job.running || sheet.mode === 'upload')) return;   // the 3 s tick asks again
+        if (sheet && (sheet.mode === 'job' && job && job.running || sheet.mode === 'upload' || sheet.mode === 'remove')) return;   // the 3 s tick asks again
         offer = offers.shift();
         offer.check = null; offer.error = null; offer.busy = false;
         openSheet({ mode: 'source' });
@@ -1469,6 +1469,118 @@
             + tile(g, 68) + '<div class="nm">' + esc(g.name) + '</div><div class="mt">' + esc(g.pkg ? 'On this TV' : catName(g.category)) + '</div><div class="badges">' + badge('b-warn', 'Removed') + '</div></div>';
     }
 
+    // ---- the TV's own list of its apps, and removing one (#142) -------------------------------------
+    // The service reads the list over the TV's developer connection (GET /tvapps): every app, also
+    // the ones that are not in the catalog and the ones that came with the TV, each with its size and
+    // the TV's own word on whether it can be removed. Removing goes the same way (POST /uninstall).
+    var tvApps = null;         // [{ id, title, version, installed, size, removable }], null until read
+    var tvAppsError = null;    // why it could not be read
+    var tvAppsAt = 0, tvAppsAsking = false;
+    function loadTvApps(force) {
+        if (tvAppsAsking || (!force && tvApps && Date.now() - tvAppsAt < 60000)) return;
+        tvAppsAsking = true;
+        xhr('GET', '/tvapps', null, function (err, res) {
+            tvAppsAsking = false; tvAppsAt = Date.now();
+            if (err || !res || !res.ok || !Array.isArray(res.apps)) tvAppsError = err ? err.message : (res && res.error) || 'the service sent no list';
+            else { tvApps = res.apps; tvAppsError = null; }
+            if (view !== 'tv' || sheet) return;
+            var at = document.activeElement && document.activeElement.getAttribute('data-k');
+            renderPage(); focusKey(at) || focusFirst();
+        }, null, 30000);
+    }
+    function sizeText(bytes) { return !(bytes > 0) ? '' : bytes < 1048576 ? Math.max(1, Math.round(bytes / 1024)) + ' KB' : bytes < 1073741824 ? (bytes / 1048576).toFixed(1) + ' MB' : (bytes / 1073741824).toFixed(1) + ' GB'; }
+    // The package an app of the TV's list is in: `AbCdEfGhIj.App` is in `AbCdEfGhIj`, an app that
+    // came with the TV (`org.tizen.netflix-app`) is its own.
+    function tvAppPkg(id) { var m = /^([A-Za-z0-9]{10})\.[^.]+$/.exec(id); return m ? m[1] : id; }
+    function tvAppOf(pkg) {
+        var list = tvApps || [];
+        for (var i = 0; i < list.length; i++) if (list[i].id === pkg || tvAppPkg(list[i].id) === pkg) return list[i];
+        return null;
+    }
+    // What the TV has besides the catalog's apps: the ones it lets go first, then its own.
+    function otherOnTv() {
+        var own = (selfInfo() || {}).packageId || '', gone = {}, out = [];
+        goneOnTv().forEach(function (g) { gone[g.pkg] = true; });
+        (tvApps || []).forEach(function (a) {
+            var p = tvAppPkg(a.id);
+            if (p === own || claimOf(p) || gone[p]) return;
+            out.push({ key: 'tvapp:' + a.id, other: true, id: a.id, name: a.title || a.id, category: 'other', version: a.version, size: a.size, installed: a.installed, removable: a.removable, appId: appIds.hasOwnProperty(a.id) ? a.id : '' });
+        });
+        return out.sort(function (a, b) { return a.removable !== b.removable ? (a.removable ? -1 : 1) : byName(a, b); });
+    }
+    function otherRow(o) {
+        return '<div class="lrow f" tabindex="0" data-k="tv:' + esc(o.key) + '" data-tvapp="' + esc(o.key) + '">' + tile(o, 66)
+            + '<div class="txt"><div class="nm">' + esc(o.name) + '</div><div class="mt">' + esc([o.version ? 'v' + o.version : '', sizeText(o.size)].filter(Boolean).join(' · ') || o.id) + '</div></div>'
+            + (o.removable ? '' : badge('b-mute', 'Built in')) + CHEV + '</div>';
+    }
+    function otherPanel(o) {
+        return '<div class="panel" id="tvpanel"><div class="phead">' + tile(o, 96) + '<div style="min-width:0"><div class="nm">' + esc(o.name) + '</div><div class="mt">' + esc(o.id) + '</div></div></div>'
+            + '<div class="table kv" style="margin-top:0">'
+            + (o.version ? '<div class="trow"><span class="k">Installed</span><span class="v">v' + esc(o.version) + '</span></div>' : '')
+            + (sizeText(o.size) ? '<div class="trow"><span class="k">Size</span><span class="v">' + sizeText(o.size) + '</span></div>' : '')
+            + (o.installed ? '<div class="trow"><span class="k">On this TV since</span><span class="v">' + esc(o.installed.slice(0, 10)) + '</span></div>' : '')
+            + '<div class="trow"><span class="k">In the catalog</span><span class="v">No</span></div></div>'
+            + '<div class="btns" style="margin-top:18px">' + (o.appId ? '<button class="btn f" data-k="tvappopen" data-act="tvappopen">Open</button>' : '')
+            + '<button class="btn grow danger f" data-k="tvremove" data-act="tvremove">Uninstall</button></div>'
+            + '<div class="hint" style="text-align:left">' + esc(o.removable ? o.name + ' is not in the catalog, so TV-Store cannot install it again.' : 'The TV lists ' + o.name + ' as one of its own apps. It may not let it go.') + '</div></div>';
+    }
+    // What Uninstall on the On the TV page is about: the selected row, whichever kind it is.
+    function removeTarget() {
+        var x = tvSel, a;
+        if (!x) return null;
+        if (x.other) return { id: x.id, name: x.name, tile: x, removable: x.removable, size: x.size, back: false };
+        if (x.gone) { a = tvAppOf(x.pkg); return x.pkg ? { id: a ? a.id : x.pkg, name: x.name, tile: x, removable: a ? a.removable : true, size: a ? a.size : 0, back: false } : null; }
+        if (isSelf(x)) return null;
+        var v = x.variants[state(x).variant], pkg = tvPkg(v);
+        a = tvAppOf(pkg);
+        return pkg ? { id: a ? a.id : pkg, name: x.name, tile: x, icon: v.icon, removable: a ? a.removable : true, size: a ? a.size : 0, back: true } : null;
+    }
+    function removeHtml() {
+        var t = sheet.target, st = sheet.state;
+        var h = '<div class="shd">' + tile(t.tile, 88, t.icon) + '<div style="min-width:0"><div class="nm">' + esc(t.name) + '</div><div class="mt">' + esc(t.id + (sizeText(t.size) ? ' · ' + sizeText(t.size) : '')) + '</div></div></div>';
+        if (st === 'busy') return h + '<div class="waiting"><span class="spin"></span>' + esc('Removing ' + t.name + ' from this TV…') + '</div><div class="sfoot"><div class="hint">This takes a few seconds.</div></div>';
+        if (st === 'done') return h + '<div class="notice info">' + esc(t.name + (sheet.already ? ' was no longer on this TV.' : ' is off this TV.') + (!sheet.already && sizeText(t.size) ? ' That frees ' + sizeText(t.size) + '.' : '')) + '</div>'
+            + '<div class="sfoot"><div class="btns"><button class="btn grow f" data-k="close" data-act="close" data-default>Back</button></div><div class="hint">RETURN goes back.</div></div>';
+        h += '<div class="sdesc">' + esc('Uninstall ' + t.name + ' from this TV? The app goes, with everything it keeps on the TV: sign-ins, settings and downloads.') + '</div>';
+        if (!t.removable) h += '<div class="notice">' + esc('The TV lists ' + t.name + ' as one of its own apps. It may refuse to remove it. If it does remove it, TV-Store cannot put it back: it would have to come from the TV\u2019s own Apps store again.') + '</div>';
+        else h += '<div class="notice info">' + esc(t.back ? 'You can install it again from the store.' : t.name + ' is not in the catalog, so TV-Store cannot install it again.') + '</div>';
+        if (st === 'failed') h += '<div class="notice bad">' + esc(sheet.error) + '</div>';
+        return h + '<div class="sfoot"><div class="btns"><button class="btn grow danger f" data-k="removeyes" data-act="removeyes">' + (st === 'failed' ? 'Try again' : 'Uninstall') + '</button>'
+            + '<button class="btn f" data-k="close" data-act="close" data-default>Cancel</button></div><div class="hint">RETURN goes back without removing anything.</div></div>';
+    }
+    function askRemove() {
+        var t = removeTarget();
+        if (t) openSheet({ mode: 'remove', target: t, state: 'ask' });
+    }
+    function doRemove() {
+        var me = sheet;
+        if (!me || me.mode !== 'remove' || me.state === 'busy') return;
+        if (job && job.running) { me.state = 'failed'; me.error = 'TV-Store is installing ' + job.app.name + ' right now. Try again when that is done.'; renderSheet(); focusKey('close'); return; }
+        me.state = 'busy'; renderSheet();
+        // The token fresh from the service's folder, as before an upload's install: a service that
+        // started again has a new one.
+        withUploadToken(function () {
+            xhr('POST', '/uninstall', { token: uploadToken, id: me.target.id }, function (err, res) {
+                var ok = !err && res && res.ok;
+                me.state = ok ? 'done' : 'failed';
+                me.already = !!(ok && res.result && res.result.already);
+                me.error = ok ? null : err ? err.message : (res && res.error) || 'the service gave no reason';
+                if (!ok && res && res.code === 'NO_TOKEN') me.error = 'TV-Store\u2019s screen could not show its service that it is the one asking' + (uploadTokenError ? ' (' + uploadTokenError + ')' : '') + '. Close TV-Store, open it again and try once more.';
+                // What the platform lists now, and the TV's own list again: the row goes.
+                readInstalled(function (map) {
+                    setInstalled(map);
+                    if (ok && tvApps) tvApps = tvApps.filter(function (a) { return a.id !== me.target.id && tvAppPkg(a.id) !== me.target.id; });
+                    // The row is gone: back from the sheet goes to the list, not to the next app's Uninstall.
+                    if (ok) { tvSel = null; returnFocus = null; }
+                    renderHeader(); pushStore();
+                    if (sheet === me) { renderSheet(true); if (!ok) focusKey('close'); }
+                    else { toast(ok ? me.target.name + ' is off this TV.' : 'Could not remove ' + me.target.name + ': ' + me.error); if (!sheet) { renderPage(); focusFirst(); } }
+                    loadTvApps(true);
+                });
+            }, null, 120000);
+        });
+    }
+
     // ---- On the TV (C6) -----------------------------------------------------------------------------
     function goneRow(g) {
         return '<div class="lrow f" tabindex="0" data-k="tv:' + esc(g.key) + '" data-gone="' + esc(g.key) + '">' + tile(g, 66)
@@ -1480,7 +1592,8 @@
             + '<div class="table kv" style="margin-top:0"><div class="trow"><span class="k">Installed</span><span class="v">' + esc(installed[g.pkg] ? 'v' + installed[g.pkg] : 'Yes') + '</span></div>'
             + '<div class="trow"><span class="k">In the catalog</span><span class="v" style="color:#F0A020">' + esc(g.since ? 'Removed on ' + g.since : 'Removed') + '</span></div></div>'
             + '<div class="btns" style="margin-top:18px"><button class="btn grow f" data-k="gonesheet" data-act="gonesheet">Details</button>'
-            + (g.appId ? '<button class="btn f" data-k="goneopen" data-act="goneopen">Open</button>' : '') + '</div>'
+            + (g.appId ? '<button class="btn f" data-k="goneopen" data-act="goneopen">Open</button>' : '')
+            + (g.pkg ? '<button class="btn danger f" data-k="tvremove" data-act="tvremove">Uninstall</button>' : '') + '</div>'
             + '<div class="hint" style="text-align:left">' + esc(removedWhy(g)) + '</div>';
         return h + '</div>';
     }
@@ -1506,21 +1619,28 @@
 
     function renderTv() {
         var all = onTv(), ups = all.filter(function (x) { return state(x).update; }), ok = all.filter(function (x) { return !state(x).update; });
-        var gone = goneOnTv();
+        var gone = goneOnTv(), other = otherOnTv(), mine = other.filter(function (o) { return o.removable; }), builtIn = other.filter(function (o) { return !o.removable; });
         if (tvSel && tvSel.gone) tvSel = gone.filter(function (g) { return g.key === tvSel.key; })[0] || null;
+        if (tvSel && tvSel.other) tvSel = other.filter(function (o) { return o.key === tvSel.key; })[0] || null;
         // TV-Store itself updates from a head (#41); an app that needs a certificate level this TV lacks waits too (#50).
         var doable = ups.filter(function (x) { var s = state(x), uv = x.variants[s.variant]; return !isSelf(x) && !signPlan(uv).missing && !settingsBlock(x, uv, s); });
-        if (!tvSel || (!tvSel.gone && all.indexOf(tvSel) < 0)) tvSel = ups[0] || ok[0] || gone[0] || null;
+        if (!tvSel || (!tvSel.gone && !tvSel.other && all.indexOf(tvSel) < 0)) tvSel = ups[0] || ok[0] || gone[0] || other[0] || null;
         var h = '<div class="tvtop"><div><h1>Your apps</h1><p>' + (all.length
             ? all.length + (all.length === 1 ? ' catalog app is' : ' catalog apps are') + ' on this TV. ' + (ups.length ? (ups.length === 1 ? 'One has' : ups.length + ' have') + ' a newer version in the catalog.' : 'All up to date.')
-            : 'No apps from the catalog on this TV yet.') + (gone.length ? ' ' + (gone.length === 1 ? 'One app here was' : gone.length + ' apps here were') + ' removed from the catalog.' : '') + '</p></div>';
+            : 'No apps from the catalog on this TV yet.') + (gone.length ? ' ' + (gone.length === 1 ? 'One app here was' : gone.length + ' apps here were') + ' removed from the catalog.' : '')
+            + (other.length ? ' ' + (other.length === 1 ? 'One other app is' : other.length + ' other apps are') + ' listed below.' : '') + '</p></div>';
         if (doable.length && armed()) h += '<button class="btn primary f" data-k="updall" data-act="updall">' + (doable.length === 1 ? 'Update ' + esc(doable[0].name) : doable.length === 2 ? 'Update both' : 'Update all ' + doable.length) + '</button>';
         h += '</div>';
-        if (!all.length && !gone.length) { pageEl.innerHTML = h + '<div class="empty">Install something from the store and it shows up here, with its updates.</div>'; return; }
+        // The TV's own list could not be read: the catalog's apps still show, from what the platform lists.
+        var listNote = tvAppsError ? '<div class="notice" style="margin:0 0 22px">' + esc('The TV\u2019s own list of apps could not be read, so the apps that are not in the catalog do not show here. ' + tvAppsError) + '</div>' : '';
+        if (!all.length && !gone.length && !other.length) { pageEl.innerHTML = h + listNote + '<div class="empty">Install something from the store and it shows up here, with its updates.</div>'; return; }
         h += '<div class="tvcols"><div class="tvlist vscroll">';
         if (ups.length) h += '<div class="glabel warn">Updates<span class="n">' + ups.length + '</span></div><div class="group">' + ups.map(tvRow).join('') + '</div>';
         if (ok.length) h += '<div class="glabel">Up to date<span class="n">' + ok.length + '</span></div><div class="group">' + ok.map(tvRow).join('') + '</div>';
         if (gone.length) h += '<div class="glabel warn">Removed from the catalog<span class="n">' + gone.length + '</span></div><div class="group">' + gone.map(goneRow).join('') + '</div>';
+        if (mine.length) h += '<div class="glabel">Other apps<span class="n">' + mine.length + '</span></div><div class="group">' + mine.map(otherRow).join('') + '</div>';
+        if (builtIn.length) h += '<div class="glabel">Built into the TV<span class="n">' + builtIn.length + '</span></div><div class="group">' + builtIn.map(otherRow).join('') + '</div>';
+        h += listNote;
         h += '</div><div class="tvpanel"><div class="glabel">Selected</div>' + tvPanel(tvSel) + '</div></div>';
         pageEl.innerHTML = h;
     }
@@ -1528,6 +1648,7 @@
     function tvPanel(x) {
         if (!x) return '';
         if (x.gone) return gonePanel(x);
+        if (x.other) return otherPanel(x);
         var st = state(x), v = x.variants[st.variant];
         var h = '<div class="panel" id="tvpanel"><div class="phead">' + tile(x, 96, v.icon) + '<div style="min-width:0"><div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(catName(x.category) + (v.appId ? ' · ' + v.appId : '')) + '</div></div></div>'
             + '<div class="table kv" style="margin-top:0"><div class="trow"><span class="k">Installed</span><span class="v">' + esc(st.unknown ? 'Not known' : 'v' + st.version) + '</span></div>'
@@ -1540,6 +1661,8 @@
         if (v.appId) h += '<button class="btn f" data-k="tvopen" data-act="tvopen">Open</button>';
         // Pin (#102): the build on the TV goes to the Pinned row on the home screen too.
         h += '<button class="btn f" data-k="tvpin" data-act="tvpin">' + (isPinned(x, st.variant) ? 'Unpin' : 'Pin') + '</button>';
+        // Uninstall (#142). Not TV-Store itself: the service doing it would go with the app.
+        if (!isSelf(x)) h += '<button class="btn danger f" data-k="tvremove" data-act="tvremove">Uninstall</button>';
         h += '</div>';
         var mvp = movedInfo(x);
         if (mvp && !mvp.done) h += '<div class="hint" style="text-align:left">' + esc(x.name + ' moved to ' + (mvp.source ? '\u2018' + mvp.source.name + '\u2019' : mvp.domain) + '. Open Details to keep getting its updates.') + '</div>';
@@ -1583,6 +1706,7 @@
         else if (sheet.mode === 'upload') sheetEl.innerHTML = uploadHtml();
         else if (sheet.mode === 'source') sheetEl.innerHTML = sourceHtml();
         else if (sheet.mode === 'gone') sheetEl.innerHTML = goneHtml();
+        else if (sheet.mode === 'remove') sheetEl.innerHTML = removeHtml();
         else sheetEl.innerHTML = appHtml();
         if (!(keep && focusKey(keep))) {
             var d = sheetEl.querySelector('[data-default]') || sheetEl.querySelector('.f:not([disabled])');
@@ -2084,7 +2208,7 @@
         if (el === searchEl) { startTyping(); return; }
         var id = el.id, act = el.getAttribute('data-act'), k;
         if (id === 'tabInstall') { view = 'install'; renderPage(); focusFirst(); return; }
-        if (id === 'tabTv') { view = 'tv'; renderPage(); focusFirst(); return; }
+        if (id === 'tabTv') { view = 'tv'; renderPage(); focusFirst(); loadTvApps(); return; }
         if (id === 'gear') {
             openSheet({ mode: 'settings' });
             // The TV's id for the certificates' device lists arrives after the first ping (the service
@@ -2100,6 +2224,7 @@
         if ((k = el.getAttribute('data-var'))) { sheet.v = parseInt(k, 10); renderSheet(); return; }
         if ((k = el.getAttribute('data-cert'))) { chooseCert(sheet.mode === 'upload' ? uploadApp(upload).variants[0] : sheet.app.variants[sheet.v], k); renderSheet(); focusKey('cert:' + k); return; }
         if ((k = el.getAttribute('data-gone'))) { var g = goneByKey(k); if (g) openSheet({ mode: 'gone', entry: g }); return; }
+        if (el.getAttribute('data-tvapp')) { move('right'); return; }   // an app that is not in the catalog has no sheet: on to its panel
         if ((k = el.getAttribute('data-app'))) { var x = byKey(k), vi = el.getAttribute('data-vi'); if (x) openApp(x, vi != null ? parseInt(vi, 10) : null); return; }
         switch (act) {
             case 'upinstall': if (!el.disabled) installUpload(); return;
@@ -2139,6 +2264,9 @@
             case 'goneopen': var ge = sheet && sheet.mode === 'gone' ? sheet.entry : tvSel; if (ge && ge.appId) launch(ge.appId); return;
             case 'tvopen': launch(tvAppId(tvSel.variants[state(tvSel).variant])); return;
             case 'tvpin': togglePin(tvSel, state(tvSel).variant); renderPage(); focusKey('tvpin'); return;
+            case 'tvremove': askRemove(); return;
+            case 'removeyes': doRemove(); return;
+            case 'tvappopen': if (tvSel && tvSel.other && tvSel.appId) launch(tvSel.appId); return;
             case 'vetro': launch(VETRO_APP); return;
             case 'updall': updateAll(); return;
         }
@@ -2177,6 +2305,10 @@
         if (el.getAttribute && el.getAttribute('data-gone') && view === 'tv' && !sheet) {
             var gk = el.getAttribute('data-gone');
             if (!tvSel || tvSel.key !== gk) { var gs = goneOnTv().filter(function (g) { return g.key === gk; })[0]; if (gs) { tvSel = gs; var gp = $('tvpanel'); if (gp) gp.outerHTML = tvPanel(gs); } }
+        }
+        if (el.getAttribute && el.getAttribute('data-tvapp') && view === 'tv' && !sheet) {
+            var ok = el.getAttribute('data-tvapp');
+            if (!tvSel || tvSel.key !== ok) { var os = otherOnTv().filter(function (o) { return o.key === ok; })[0]; if (os) { tvSel = os; var op = $('tvpanel'); if (op) op.outerHTML = tvPanel(os); } }
         }
     }
     // Give the element the focus without the browser scrolling to it: a TV browser brings a focused
@@ -2290,6 +2422,7 @@
         if (sheet) {
             if (sheet.mode === 'settings' && confirmingAdult) { confirmingAdult = false; renderSheet(); focusKey('opt:showAdult'); return; }
             if (sheet.mode === 'source') { answerOffer(false); return; }
+            if (sheet.mode === 'remove' && sheet.state === 'busy') return;   // the TV is at it; the answer comes
             if (sheet.mode === 'settings' && srcSel) { var sid = srcSel; if (srcConfirm) { srcConfirm = false; renderSheet(); focusKey('srcremove'); return; } srcSel = null; renderSheet(); focusKey('srcrow:' + sid); return; }
             if (sheet.mode === 'settings' && certSel) { var id = certSel; if (certConfirm) { certConfirm = false; renderSheet(); focusKey('certremove'); return; } certSel = null; renderSheet(); focusKey('certrow:' + id); return; }
             closeSheet(); return;
