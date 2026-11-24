@@ -664,6 +664,7 @@ node test/selfupdate.test.js  # TV-Store updating itself (#41): refused without 
 node test/pkgid.test.js     # another app's package id (#84): the derived id against values computed apart, catalog keys, when to rename, whole-token rewrite
 node test/web-version.test.js  # Jellyfin on the catalog's web_version (#124), on the real page script: update, not known, Update all, the record
 node test/rename.test.js    # a fork installed beside the app whose id it kept, its update on that copy, a .tpk refused until Replace, an older page as before
+node test/store-keep.test.js    # the store page is built once and kept: a sheet that closes and the 3 s tick leave it as it is (#126)
 ```
 
 Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching the version in
