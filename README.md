@@ -692,7 +692,6 @@ node test/rename.test.js    # a fork installed beside the app whose id it kept, 
 node test/tvapps.test.js    # the TV's own app list (#142): a real vd_applist reply, an app by id or package, the answers to a removal
 node test/uninstall.test.js # removing an app against a fake sdbd: the token, by id or package, gone only when the list says so, an app the TV keeps, TV-Store itself refused
 node test/tv-uninstall.test.js  # Uninstall on the On the TV page, on the real page script: other apps and built-in ones, the question, the outcome, a refusal
-node test/store-keep.test.js    # the store page is built once and kept: a sheet that closes and the 3 s tick leave it as it is (#126)
 ```
 
 Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching the version in
