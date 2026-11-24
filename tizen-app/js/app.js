@@ -560,7 +560,7 @@
     function offerSource(src, done) { offers.push({ src: src, done: done }); nextOffer(); }
     function nextOffer() {
         if (offer || !offers.length || loading || problem) return;
-        if (sheet && (sheet.mode === 'job' && job && job.running || sheet.mode === 'upload' || sheet.mode === 'remove')) return;   // the 3 s tick asks again
+        if (sheet && (sheet.mode === 'job' && job && job.running || sheet.mode === 'upload' || sheet.mode === 'remove' || sheet.mode === 'backup' || sheet.mode === 'restore')) return;   // the 3 s tick asks again
         offer = offers.shift();
         offer.check = null; offer.error = null; offer.busy = false;
         openSheet({ mode: 'source' });
@@ -610,6 +610,144 @@
                 loadSources(false, function () { rebuild(); finish({ url: o.src.url, repositoryId: o.src.repositoryId, added: true, name: res.source && res.source.name }); });
             });
         });
+    }
+
+    // ---- backup and restore of TV-Store's own data (#146) -------------------------------------------
+    // A firmware update or a reset wipes the TV, TV-Store's data with it. Settings has "Back up or
+    // restore": the TV shows a code and the address of the service's backup page, a phone or PC
+    // downloads one file there with that code (favorites, Settings, sources, the signing certificates
+    // and the settings typed for apps), and sends it back after a reset. A file that came in waits in
+    // the service until this screen has shown what it holds and Restore was pressed. Apps2Samsung
+    // takes the same two steps through A2SStore.backup() and A2SStore.restore() (see below).
+    var backupOffer = null;    // the code sheet: { busy } | { error } | { code, until, url, taken }
+    var restore = null;        // the backup waiting in the service, from /uploads: { id, from, at, summary, otherTv }
+    var seenRestore = null;    // the id this page already asked about
+    var restoreState = null;   // { busy } | { error } | { done: what the service put back }
+    var restoreWaiters = {};   // id -> { resolve, at }, for A2SStore.restore
+    // What this screen keeps itself (its localStorage); the service adds what it keeps.
+    function pageState() { return { settings: settings, pins: pins, certChoice: certChoice, movedSeen: movedSeen, variants: installedFile, webVersions: installedWeb }; }
+    function backupMeta() { return { version: VERSION, device: device }; }
+    function backupBlock() {
+        return '<div class="vhead"><span class="t">Backup</span><span class="h">For after a reset or a firmware update</span></div><div class="opts">'
+            + '<div class="opt f" tabindex="0" data-k="backupopen" data-act="backupopen"><div class="ot"><div class="ont">Back up or restore</div>'
+            + '<div class="oh">' + esc('Your pinned apps, these Settings, the sources, the signing certificates and the settings you typed for apps, as one file on your phone or PC. Send it back here when the TV was wiped.') + '</div></div>' + CHEV + '</div></div>';
+    }
+    function openBackup() {
+        backupOffer = { busy: true };
+        sheet = { mode: 'backup' }; renderSheet(true);
+        withUploadToken(function () {
+            if (!sheet || sheet.mode !== 'backup') return;
+            if (uploadTokenError) { backupOffer = { error: 'TV-Store could not read its key on this TV (' + uploadTokenError + '), so it cannot hand out a backup here.' }; renderSheet(true); return; }
+            xhr('POST', '/backup/offer', { token: uploadToken, page: pageState(), app: backupMeta() }, function (err, res) {
+                if (!sheet || sheet.mode !== 'backup') return;
+                backupOffer = err || !res || !res.ok ? { error: 'Could not start a backup: ' + (err ? err.message : (res && res.error) || 'no answer from the service') } : { code: res.code, until: res.until, url: res.url };
+                renderSheet(true);
+            });
+        });
+    }
+    // The code is void once its sheet is gone.
+    function endBackupOffer() {
+        if (backupOffer && backupOffer.code && !backupOffer.taken) xhr('POST', '/backup/offer', { token: uploadToken, close: true }, function () {});
+        backupOffer = null;
+    }
+    function backupToSettings() { endBackupOffer(); sheet = { mode: 'settings' }; renderSheet(); focusKey('backupopen'); }
+    function backupExpired() { return !!(backupOffer && backupOffer.until && Date.now() > new Date(backupOffer.until).getTime()); }
+    function backupHtml() {
+        var o = backupOffer || {}, close = '<button class="btn f" data-k="backupclose" data-act="backupclose">Back to Settings</button>';
+        var h = '<div class="shd"><div style="min-width:0"><div class="nm">Back up or restore</div><div class="mt">TV-Store’s own data, as a file on your phone or PC</div></div></div>';
+        if (o.busy) return h + '<div class="waiting" style="margin-top:22px"><span class="spin"></span>Asking the service for a code…</div><div class="sfoot"><div class="btns">' + close.replace('class="btn f"', 'class="btn grow f" data-default') + '</div></div>';
+        if (o.error) return h + '<div class="notice bad">' + esc(o.error) + '</div><div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="backupnew" data-act="backupnew" data-default>Try again</button>' + close + '</div></div>';
+        if (o.taken) return h + '<div class="notice info">' + esc('The backup was downloaded by ' + o.taken.from + '. Keep the file somewhere safe: with the signing certificates in it, whoever has it can sign apps as you.') + '</div>'
+            + '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="backupclose" data-act="backupclose" data-default>Done</button><button class="btn f" data-k="backupnew" data-act="backupnew">New code</button></div></div>';
+        if (backupExpired()) return h + '<div class="notice">The code ran out. A code is good for ten minutes and for one download.</div>'
+            + '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="backupnew" data-act="backupnew" data-default>New code</button>' + close + '</div></div>';
+        var u = o.url || (tvIp ? 'http://' + tvIp + ':8077/backup' : '');
+        h += '<div class="qrrow">' + (u ? qr(u + '#code=' + o.code, 170) : '') + '<div><b>Type this code on the backup page</b><span class="bcode">' + esc(o.code.slice(0, 3) + ' ' + o.code.slice(3)) + '</span>'
+            + '<span>' + (u ? 'Scan with your phone, or open <span class="mono">' + esc(u) + '</span> on a computer in the same network. ' : '') + esc('Good for one download, until ' + whenOf(o.until).replace(/^.* /, '') + '.') + '</span></div></div>';
+        h += '<div class="notice info">' + esc('The file holds your pinned apps, the Settings, the sources, the signing certificates with their keys and the settings you typed for apps. The page can leave the certificates and the apps’ settings out.') + '</div>'
+            + '<div class="notice info">' + esc('To restore, send a backup file from that same page. TV-Store shows here what it holds and asks before it puts anything back.') + '</div>';
+        return h + '<div class="sfoot"><div class="btns">' + close.replace('class="btn f"', 'class="btn grow f" data-default') + '<button class="btn f" data-k="backupnew" data-act="backupnew">New code</button></div><div class="hint">The code stops working when this screen closes.</div></div>';
+    }
+    function restoreHtml() {
+        var st = restoreState || {}, r = restore, m = r && r.summary;
+        if (st.done) {
+            var d = st.done, got = [];
+            if (d.certificates) got.push(d.certificates + (d.certificates === 1 ? ' signing certificate' : ' signing certificates'));
+            if (d.sources) got.push(d.sources + (d.sources === 1 ? ' source' : ' sources'));
+            if (d.userSettings) got.push('the settings of ' + d.userSettings + (d.userSettings === 1 ? ' app' : ' apps'));
+            got.push('your pinned apps and Settings');
+            return '<div class="shd"><div style="min-width:0"><div class="nm">Restored</div><div class="mt">TV-Store starts again to show it</div></div></div>'
+                + '<div class="notice info">' + esc('Back on this TV: ' + got.join(', ') + '.' + (armed() || d.certificates ? '' : ' The backup held no signing certificates: press Arm TV-Store in this TV’s Toolbox in Apps2Samsung once.')) + '</div>'
+                + '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="restoredone" data-act="restoredone" data-default>Start TV-Store again</button></div></div>';
+        }
+        if (!r) return '<div class="shd"><div><div class="nm">Nothing waiting</div><div class="mt">The backup is no longer on the TV.</div></div></div>'
+            + '<div class="sfoot"><div class="btns"><button class="btn grow f" data-k="close" data-act="close" data-default>Back to the store</button></div></div>';
+        var h = '<div class="shd"><div style="min-width:0"><div class="nm">Restore this backup?</div><div class="mt">' + esc('Sent from ' + r.from + (m.madeAt ? ' · made ' + whenOf(m.madeAt) : '')) + '</div></div></div>';
+        var certText = !m.secrets ? 'left out of this backup' : m.certificates.length ? m.certificates.map(function (c) { return c.name + (c.level === 'partner' || c.level === 'public' ? ' (' + levelName(c.level) + ')' : ''); }).join(', ') : 'none';
+        h += '<div class="table kv">'
+            + (m.tv || m.tvStore ? '<div class="trow"><span class="k">Made on</span><span class="v">' + esc((m.tv || 'a TV') + (m.tvStore ? ' · TV-Store v' + m.tvStore : '')) + '</span></div>' : '')
+            + '<div class="trow"><span class="k">Pinned apps</span><span class="v">' + m.pins + '</span></div>'
+            + '<div class="trow"><span class="k">Settings</span><span class="v">' + (m.settings ? 'the switches as they were' : 'none') + '</span></div>'
+            + '<div class="trow"><span class="k">Sources</span><span class="v">' + esc(m.sources.length ? m.sources.map(function (x) { return x.name + ' (' + x.domain + ')'; }).join(', ') : 'none') + '</span></div>'
+            + '<div class="trow"><span class="k">Signing certificates</span><span class="v">' + esc(certText) + '</span></div>'
+            + '<div class="trow"><span class="k">Settings typed for apps</span><span class="v">' + esc(!m.secrets ? 'left out of this backup' : m.userSettings ? m.userSettings + (m.userSettings === 1 ? ' app' : ' apps') : 'none') + '</span></div></div>';
+        if (st.error) h += '<div class="notice bad">' + esc('Could not restore it: ' + st.error) + '</div>';
+        if (r.otherTv && m.secrets && m.certificates.length) h += '<div class="notice">' + esc('This backup was made on another TV. A signing certificate only installs on the TVs it lists; Settings shows per certificate whether it covers this one.') + '</div>';
+        h += '<div class="notice">' + esc('Restore it only if the file is yours' + (m.sources.length || m.certificates.length ? ': its sources and certificates decide what TV-Store installs and signs, and are added without another question.' : '.')) + '</div>'
+            + '<div class="notice info">' + esc('What this TV has stays. Certificates, sources and pinned apps are added to those here; the Settings switches and the settings typed for apps become the backup’s.') + '</div>';
+        return h + '<div class="sfoot"><div class="btns"><button class="btn primary grow f" data-k="restoreyes" data-act="restoreyes"' + (st.busy ? ' disabled' : '') + '>' + (st.busy ? 'Restoring…' : 'Restore') + '</button>'
+            + '<button class="btn f" data-k="restoreno" data-act="restoreno" data-default' + (st.busy ? ' disabled' : '') + '>Don’t restore</button></div><div class="hint">RETURN does not restore it.</div></div>';
+    }
+    // The screen's part of a backup, into its storage: added to what is here, the switches replaced.
+    function storeRestored(p) {
+        var k;
+        function put(key, v) { try { window.localStorage.setItem(key, JSON.stringify(v)); } catch (e) {} }
+        if (p.settings) { for (k in p.settings) if (p.settings.hasOwnProperty(k) && settings.hasOwnProperty(k) && typeof p.settings[k] === typeof settings[k]) settings[k] = p.settings[k]; saveSettings(); }
+        if (p.pins) { p.pins.forEach(function (e) { if (!pins.some(function (q) { return q.key === e.key && q.file === e.file; })) pins.push({ key: e.key, file: e.file }); }); savePins(); }
+        if (p.certChoice) { for (k in p.certChoice) if (p.certChoice.hasOwnProperty(k) && !certChoice.hasOwnProperty(k)) certChoice[k] = p.certChoice[k]; put(CERT_CHOICE_KEY, certChoice); }
+        if (p.movedSeen) { p.movedSeen.forEach(function (u) { if (movedSeen.indexOf(u) < 0) movedSeen.push(u); }); put(MOVED_SEEN_KEY, movedSeen); }
+        if (p.variants) { for (k in p.variants) if (p.variants.hasOwnProperty(k) && !installedFile.hasOwnProperty(k)) installedFile[k] = p.variants[k]; put(VARIANTS_KEY, installedFile); }
+        if (p.webVersions) { for (k in p.webVersions) if (p.webVersions.hasOwnProperty(k) && !installedWeb.hasOwnProperty(k)) installedWeb[k] = p.webVersions[k]; saveWeb(); }
+    }
+    function restoreAnswered(id, out) { var w = restoreWaiters[id]; if (w) { delete restoreWaiters[id]; w.resolve(out); } }
+    function answerRestore(yes) {
+        var r = restore;
+        if (restoreState && (restoreState.busy || restoreState.done)) return;
+        if (!yes || !r) {
+            if (r) { xhr('POST', '/backup/discard', { token: uploadToken, id: r.id }, function () {}); restoreAnswered(r.id, { ok: true, restored: false, error: 'declined on the TV' }); }
+            restore = null; restoreState = null;
+            closeSheet(); return;
+        }
+        restoreState = { busy: true }; renderSheet();
+        withUploadToken(function () {
+            xhr('POST', '/backup/apply', { token: uploadToken, id: r.id, installed: Object.keys(installed) }, function (err, res) {
+                if (err || !res || !res.ok) { restoreState = { error: err ? err.message : (res && res.error) || 'no answer from the service' }; renderSheet(true); return; }
+                storeRestored(res.page || {});
+                restoreState = { done: res.applied || {} }; restore = null;
+                restoreAnswered(r.id, { ok: true, restored: true, applied: res.applied || {} });
+                renderSheet(true);
+            });
+        });
+    }
+    // The 3 s tick: what /uploads says about the code and about a backup that waits.
+    function backupTick(res) {
+        if (sheet && sheet.mode === 'backup' && backupOffer && backupOffer.code) {
+            if (res.backup && res.backup.taken && !backupOffer.taken) { backupOffer.taken = res.backup.taken; renderSheet(true); }
+            else if (backupExpired() && !backupOffer.ranOut) { backupOffer.ranOut = true; renderSheet(true); }
+        }
+        if (restoreState && (restoreState.busy || restoreState.done)) return false;
+        var was = restore; restore = res.restore || null;
+        // A request of Apps2Samsung's whose backup is no longer the one waiting gets its answer.
+        for (var id in restoreWaiters) if (restoreWaiters.hasOwnProperty(id) && (!restore || restore.id !== id) && Date.now() - restoreWaiters[id].at > 10000) restoreAnswered(id, { ok: true, restored: false, error: 'the backup is no longer waiting on the TV' });
+        var free = !sheet || sheet.mode === 'backup' || sheet.mode === 'settings';
+        if (restore && restore.id !== seenRestore && free && !loading && !problem) {
+            seenRestore = restore.id; restoreState = null;
+            if (sheet && sheet.mode === 'backup') endBackupOffer();
+            if (sheet) { sheet = { mode: 'restore' }; renderSheet(true); } else openSheet({ mode: 'restore' });
+            return true;
+        }
+        if (sheet && sheet.mode === 'restore' && (!!was !== !!restore || (was && restore && was.id !== restore.id))) { restoreState = null; renderSheet(true); }
+        return false;
     }
 
     // A QR code as an <img> (qrcode.js, GIF data URL: old TV engines show that fine), on a white tile.
@@ -1743,6 +1881,7 @@
         sheet = s; renderSheet(true);
     }
     function closeSheet(then) {
+        if (sheet && sheet.mode === 'backup') endBackupOffer();
         sheet = null; confirmingAdult = false; certSel = null; certConfirm = false; certError = null; srcSel = null; srcConfirm = false; srcError = null;
         sheetEl.className = 'sheet'; sheetEl.innerHTML = ''; appEl.className = 'app';
         if (then) return then();
@@ -1765,6 +1904,8 @@
         else if (sheet.mode === 'source') sheetEl.innerHTML = sourceHtml();
         else if (sheet.mode === 'gone') sheetEl.innerHTML = goneHtml();
         else if (sheet.mode === 'remove') sheetEl.innerHTML = removeHtml();
+        else if (sheet.mode === 'backup') sheetEl.innerHTML = backupHtml();
+        else if (sheet.mode === 'restore') sheetEl.innerHTML = restoreHtml();
         else sheetEl.innerHTML = appHtml();
         if (!(keep && focusKey(keep))) {
             var d = sheetEl.querySelector('[data-default]') || sheetEl.querySelector('.f:not([disabled])');
@@ -1964,7 +2105,7 @@
         var certList = (ready && ready.certificates ? ready.certificates.map(function (c) { return c.name + (c.level === 'partner' || c.level === 'public' ? ' (' + levelName(c.level) + ')' : ''); }) : (ready && ready.certNames) || []);
         var certText = !armed() ? 'not yet' : ready.certCount > 1 ? ready.certCount + ' handed over: ' + certList.join(', ') : 'handed over' + (certList[0] ? ': ' + certList[0] : '');
         var certs = certsBlock();
-        h += certs + sourcesBlock() + '<div class="table kv f stop" tabindex="0" data-k="stop:info">' + (certs ? '' : '<div class="trow"><span class="k">Signing certificate' + (ready && ready.certCount > 1 ? 's' : '') + '</span><span class="v">' + esc(certText) + '</span></div>')
+        h += certs + sourcesBlock() + backupBlock() + '<div class="table kv f stop" tabindex="0" data-k="stop:info">' + (certs ? '' : '<div class="trow"><span class="k">Signing certificate' + (ready && ready.certCount > 1 ? 's' : '') + '</span><span class="v">' + esc(certText) + '</span></div>')
             + '<div class="trow"><span class="k">Catalog</span><span class="v">' + esc(catalogApps.length + ' apps, signature checked' + (catalogNewer ? ' · format version ' + catalogNewer + ', newer than this TV-Store knows: update TV-Store' : '')) + '</span></div>'
             + '<div class="trow"><span class="k">TV-Store</span><span class="v">v' + VERSION + (ready && ready.node ? ' · Node ' + esc(ready.node) : '') + '</span></div>'
             + '<div class="trow"><span class="k">This TV</span><span class="v">' + esc((device ? device + ' · ' : '') + (tvTizen ? 'Tizen ' + tvTizen : 'Tizen version not known')) + '</span></div></div>';
@@ -2327,6 +2468,12 @@
             case 'tvappopen': if (tvSel && tvSel.other && tvSel.appId) launch(tvSel.appId); return;
             case 'vetro': launch(VETRO_APP); return;
             case 'updall': updateAll(); return;
+            case 'backupopen': openBackup(); return;
+            case 'backupnew': endBackupOffer(); openBackup(); return;
+            case 'backupclose': backupToSettings(); return;
+            case 'restoreyes': if (!el.disabled) answerRestore(true); return;
+            case 'restoreno': if (!el.disabled) answerRestore(false); return;
+            case 'restoredone': location.reload(); return;
         }
     }
 
@@ -2505,6 +2652,8 @@
         if (sheet) {
             if (sheet.mode === 'settings' && confirmingAdult) { confirmingAdult = false; renderSheet(); focusKey('opt:showAdult'); return; }
             if (sheet.mode === 'source') { answerOffer(false); return; }
+            if (sheet.mode === 'backup') { backupToSettings(); return; }
+            if (sheet.mode === 'restore') { if (restoreState && restoreState.done) location.reload(); else answerRestore(false); return; }
             if (sheet.mode === 'remove' && sheet.state === 'busy') return;   // the TV is at it; the answer comes
             if (sheet.mode === 'settings' && srcSel) { var sid = srcSel; if (srcConfirm) { srcConfirm = false; renderSheet(); focusKey('srcremove'); return; } srcSel = null; renderSheet(); focusKey('srcrow:' + sid); return; }
             if (sheet.mode === 'settings' && certSel) { var id = certSel; if (certConfirm) { certConfirm = false; renderSheet(); focusKey('certremove'); return; } certSel = null; renderSheet(); focusKey('certrow:' + id); return; }
@@ -2589,6 +2738,33 @@
                     offerSource(src && typeof src === 'object' ? src : {}, function (r) { results[i] = r; if (--left === 0) resolve({ ok: true, results: results }); });
                 });
             });
+        },
+        // Backup and restore of TV-Store's own data (#146), for Apps2Samsung's Backup & restore.
+        // backup({ secrets: false }) leaves the certificates and the apps' settings out. Resolves
+        // { ok, backup }: the object to keep as it is (service/backup.js has the format).
+        backup: function (opts) {
+            return new Promise(function (resolve) {
+                withUploadToken(function () {
+                    xhr('POST', '/backup/make', { token: uploadToken, page: pageState(), app: backupMeta(), secrets: !(opts && opts.secrets === false) }, function (err, res) {
+                        resolve(err ? { ok: false, error: err.message } : res || { ok: false, error: 'no answer from the service' });
+                    });
+                });
+            });
+        },
+        // restore(backup): the object backup() gave, or its JSON text. The service checks it, the TV
+        // shows what it holds, and the promise resolves once the person at the TV answered:
+        // { ok: true, restored: true, applied: { certificates, sources, userSettings } }, or
+        // { ok: true, restored: false, error } when declined, or { ok: false, error } when the
+        // service refused the file. TV-Store starts again after a restore.
+        restore: function (data) {
+            return new Promise(function (resolve) {
+                withUploadToken(function () {
+                    xhr('POST', '/backup/take', { token: uploadToken, backup: data }, function (err, res) {
+                        if (err || !res || !res.ok || !res.restore) return resolve({ ok: false, error: err ? err.message : (res && res.error) || 'no answer from the service' });
+                        restoreWaiters[res.restore.id] = { resolve: resolve, at: Date.now() };
+                    });
+                });
+            });
         }
     };
 
@@ -2606,6 +2782,7 @@
         xhr('GET', '/uploads', null, function (err, res) {
             if (err || !res) { if (++missed >= 3) revive(); return; }
             missed = 0;
+            if (backupTick(res)) return;
             var was = upload; upload = res.pending || null;
             if (upload && upload.id !== seenUpload && !sheet) { seenUpload = upload.id; openSheet({ mode: 'upload' }); return; }
             if (sheet && sheet.mode === 'upload' && (!!was !== !!upload || (was && upload && was.id !== upload.id))) renderSheet(true);

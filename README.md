@@ -539,6 +539,8 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
   sees "install completed". The install still lands. Open TV-Store again (or wait for the head to
   relaunch it), and the new version is there with the relay back on its port. Apps2Samsung is to
   say so up front and read the version from the TV afterwards instead of reporting a failure.
+- **Back up or restore**: TV-Store's own data as one file on a phone or PC, for after a reset or a
+  firmware update (#146). See [Backup and restore](#backup-and-restore).
 - **Let TV-Store update itself (experiment)**: off by default (#41). Off, TV-Store sends you to
   Apps2Samsung on a phone or PC to update it, as since 0.3.11. On, a newer TV-Store in the catalog
   gets an **Update** button under On the TV like any other app. 0.3.11 dropped this on the theory
@@ -622,6 +624,69 @@ the question says so.
   install. `GET /tvapps` is the list.
 - Not while an install runs: the TV takes one developer connection at a time.
 
+## Backup and restore
+
+A firmware update or a factory reset wipes the TV, and TV-Store's own data goes with it (#146).
+**Settings, Back up or restore** puts that data into one file on your phone or PC, and takes it back
+afterwards:
+
+- the pinned apps, the Settings switches, **Sign with** per app,
+- the sources (independent repositories), turned on or off as they were,
+- the signing certificates with their keys, the default among them, and which one each app took,
+- the settings typed for apps (a server address, an API key),
+- the relay with its port and its list of devices, and **Install from a browser**.
+
+**Backing up.** The TV shows a six-digit code and the address `http://<TV IP>:8077/backup` (as a QR
+code too). Open that page on a phone or PC in the same network, type the code and press **Download
+the backup**. The code is good for ten minutes and for one download, stops working when the screen
+with it closes, and is void after five wrong tries. The page has a box to leave the signing
+certificates and the apps' settings out, for a file that may be kept anywhere; after a restore of
+such a file, press **Arm TV-Store** in Apps2Samsung once.
+
+Keep the file private: with the certificates in it, whoever has it can sign apps as you, and the
+apps' settings can hold passwords. The connection to the TV is plain HTTP on your own network, as
+it is when Apps2Samsung arms the TV.
+
+**Restoring.** Install TV-Store again, open the same page and send the file under **Restore a
+backup**. Nothing changes yet: the TV shows where the file came from and what it holds (the TV it
+was made on, the sources by name and address, the certificates by name), and puts it back when you
+press **Restore**. **Don't restore** is under the remote. TV-Store starts again afterwards.
+
+- What the TV already has stays. Certificates, sources and pinned apps are added to those there;
+  the Settings switches and the settings typed for apps become the backup's.
+- A backup's sources are added without the per-source question that Send sources to TV asks, with
+  the key fingerprint they had. That is why the TV asks about the file as a whole, and why only a
+  file of your own should be restored.
+- What TV-Store remembers per installed app (the build, the source it came from, an id of its own)
+  comes back only for apps the TV has at that moment. After a reset the apps are gone, and they
+  install again from the store.
+- A certificate only installs on the TVs it lists. A backup from another TV says so on the
+  question, and Settings shows per certificate whether it covers this TV.
+- **Try the TV's own installer** is not in a backup: what that experiment learned belongs to the
+  firmware it ran on.
+- A backup made by a newer TV-Store than the one on the TV is refused; update TV-Store first.
+
+### For Apps2Samsung (Backup & restore)
+
+Apps2Samsung drives the TV-Store screen, as it does to arm the TV, so its Backup & restore can
+carry TV-Store's data without the code:
+
+```js
+A2SStore.backup()                      // -> { ok: true, backup: { format: 'a2s-tvstore-backup', version: 1, ... } }
+A2SStore.backup({ secrets: false })    // without the certificates and the apps' settings
+A2SStore.restore(backup)               // the object, or its JSON text
+// -> { ok: true, restored: true, applied: { certificates, sources, userSettings } }  after Restore on the TV
+// -> { ok: true, restored: false, error }                                           declined on the TV
+// -> { ok: false, error }                                                           not a backup TV-Store reads
+```
+
+`restore` resolves when the person at the TV has answered. Keep the object as it is;
+`tizen-app/service/backup.js` has the format, and reads every part of a file again before any of it
+is used. In the service: `POST /backup/make`, `/backup/offer`, `/backup/take`, `/backup/apply` and
+`/backup/discard` take the page token and only come from the TV itself; `GET /backup`,
+`POST /backup/download { code, secrets }` and `POST /backup/restore` are for a browser on the LAN,
+under the same rules as the store page (the TV's address, not another web site, the devices list).
+
 ## Layout
 
 - `tizen-app/`: the package: `config.xml`, `index.html`, `js/app.js`, `icon.png`, `service/`
@@ -640,6 +705,7 @@ the question says so.
 - `tizen-app/service/manifest.js`: the ids, the required Tizen version and the privileges a package carries in its own manifest
 - `tizen-app/service/refusal.js`: what the TV's `install failed[...]` codes mean and what TV-Store offers for each
 - `tizen-app/service/certs.js`: the signing profiles handed over, their Public or Partner level, which one each package took, the order to try
+- `tizen-app/service/backup.js`: TV-Store's own data as one file (#146): making a backup, reading one back part by part, the page a browser gets
 - `tizen-app/js/app.js`: the UI, and `window.A2SStore`, which Apps2Samsung calls to arm the TV
 - `tizen-app/js/qrcode.js`: QR codes for the log address and the Ko-fi link ([qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 1.4.4, MIT)
 - `test/`: a fake `sdbd` plus signer and transport tests; `test/fixtures/repositories/` holds the spec's test vectors (copied from tizen-community-packages `spec/fixtures/`, test-only keys)
@@ -680,6 +746,8 @@ node test/install.test.js   # a certificate mismatch is retried with the next pr
 node test/tvapps.test.js    # the TV's own app list (#142): a real vd_applist reply, an app by id or package, the answers to a removal
 node test/uninstall.test.js # removing an app against a fake sdbd: the token, by id or package, gone only when the list says so, an app the TV keeps, TV-Store itself refused
 node test/tv-uninstall.test.js  # Uninstall on the On the TV page, on the real page script: other apps and built-in ones, the question, the outcome, a refusal
+node test/backup.test.js    # backup and restore (#146): the file read back, without secrets, junk and newer formats refused; against the service: token or code, five wrong codes, one download, a restore after a reset
+node test/backup-page.test.js   # the same on the real page script: the code sheet, the restore question and its default, what lands in the screen's storage, A2SStore.backup and restore
 node test/certlevel.test.js # Public or Partner per install: refused up front, picked by privilege, chosen by hand
 node test/sdbhosts.test.js  # the order of addresses to try sdbd on
 node test/sdb-loopback.test.js  # install works whether Host PC IP is the TV's own IP or 127.0.0.1; SDB_BUSY while a PC holds the relay (#73)
