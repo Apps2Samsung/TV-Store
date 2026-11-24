@@ -9,7 +9,7 @@ function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
 // One page: opts { catalog, installed: { pkg: version }, storage: { key: object }, tvApps: [the TV's own list],
 // uninstall: function (body) -> the service's answer }.
 function page(opts) {
-    var store = {}, posts = [], asked = [], installs = [], uninstalls = [], acks = [], requests = [], intervals = [], onTv = opts.installed;
+    var store = {}, posts = [], asked = [], installs = [], uninstalls = [], acks = [], requests = [], intervals = [], onTv = opts.installed, reloads = { n: 0 };
     Object.keys(opts.storage || {}).forEach(function (k) { store[k] = JSON.stringify(opts.storage[k]); });
     // An element that takes whatever the page does to it.
     function el() {
@@ -28,6 +28,7 @@ function page(opts) {
 
     function answer(method, p, body) {
         asked.push(p);
+        if (opts.answer) { var own = opts.answer(method, p, body); if (own) return own; }
         if (p === '/ping') return { ok: true, certReady: true, certificates: [{ name: 'PC', level: 'public' }], browser: { enabled: true }, sourceOf: {}, remembered: {}, userSettings: {} };
         if (p === '/catalog') return opts.catalogFails ? { ok: false, error: 'the catalog did not come' } : opts.catalog;
         if (p.indexOf('/sources/catalog') === 0) return { ok: true, sources: [] };
@@ -60,7 +61,7 @@ function page(opts) {
     var win = {
         document: doc, XMLHttpRequest: XHR, console: { log: function () {}, error: function () {}, warn: function () {} },
         localStorage: { getItem: function (k) { return store.hasOwnProperty(k) ? store[k] : null; }, setItem: function (k, v) { store[k] = String(v); }, removeItem: function (k) { delete store[k]; } },
-        location: { search: '', href: 'file:///index.html' }, navigator: { userAgent: 'test' },
+        location: { search: '', href: 'file:///index.html', reload: function () { reloads.n++; } }, navigator: { userAgent: 'test' },
         addEventListener: function () {}, removeEventListener: function () {},
         // The page's own clocks are run by hand: the 3 s tick through tick(), a timeout right away.
         setInterval: function (f) { intervals.push(f); return intervals.length; }, clearInterval: function () {},
@@ -101,7 +102,7 @@ function page(opts) {
         },
         html: function (id) { return els[id] ? els[id].innerHTML : ''; },
         stored: function (k) { return store.hasOwnProperty(k) ? JSON.parse(store[k]) : null; },
-        installs: installs, uninstalls: uninstalls, acks: acks,
+        installs: installs, uninstalls: uninstalls, acks: acks, reloads: reloads, window: win,
         // Every path the page asked the service for, and the document, to say what has the focus.
         asked: asked, posts: function () { return posts; }, doc: doc, el: function (id) { return doc.getElementById(id); }
     };

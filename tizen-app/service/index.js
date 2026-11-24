@@ -31,6 +31,7 @@ var pkgid = require('./pkgid.js');
 var storePage = require('./storepage.js');
 var usersettings = require('./usersettings.js');
 var tvapps = require('./tvapps.js');
+var backup = require('./backup.js');
 
 var PORT = 8077;
 // sdbd's port; a test points the service at a fake sdbd (test/install.test.js).
@@ -1625,6 +1626,115 @@ function uninstall(b, cb) {
     });
 }
 
+// ---- TV-Store's own state as a backup (#146); backup.js has the format and the why -----------------
+// Out: the TV-Store screen asks for it with the page token (POST /backup/make, for Apps2Samsung, which
+// drives the screen), or it has the service show a code (POST /backup/offer) that a browser on the
+// LAN sends back to get the file (POST /backup/download): once, within ten minutes, five wrong
+// tries and the code is void. The file holds the signing keys, so no address gets it without the
+// person at the TV. In: a browser sends a file (POST /backup/restore), or the screen hands one over
+// (POST /backup/take); it waits, checked and rebuilt, until the screen applies it with the token
+// (POST /backup/apply) or drops it (POST /backup/discard).
+var BACKUP_OFFER = null;       // { page, app, code, until, wrong, taken: { from, at } | null }
+var BACKUP_CODE_MS = 10 * 60 * 1000, BACKUP_WRONG_MAX = 5;
+var RESTORE = null;            // { id, from, at, backup }: the backup waiting for a yes on the TV
+function backupParts(page, app) {
+    return { page: page, tvStore: app && app.version, tv: app && app.device, duid: DUID,
+             certificates: loadCerts(), certByPackage: certByPackage(), sources: SOURCES, sourceOf: sourceOfPackage(), renames: renames(), userSettings: usetAll(),
+             // A relay that turned itself on is no choice to carry over: the next TV decides again.
+             relay: RELAY_CFG.chosen ? { enabled: RELAY_CFG.enabled, port: RELAY_CFG.port, allow: RELAY_CFG.allow, chosen: true } : null,
+             browser: { enabled: BROWSER_CFG.enabled } };
+}
+function backupLine(b) {
+    var s = backup.summary(b);
+    return s.pins + ' pinned, ' + s.sources.length + ' source(s), ' + (s.secrets ? s.certificates.length + ' signing certificate(s), settings of ' + s.userSettings + ' app(s)' : 'no certificates and no app settings');
+}
+function offerLive() { if (BACKUP_OFFER && Date.now() > BACKUP_OFFER.until) BACKUP_OFFER = null; return BACKUP_OFFER; }
+function publicOffer() { var o = offerLive(); return o ? { until: new Date(o.until).toISOString(), open: !!o.code, taken: o.taken } : null; }
+function backupOffer(b) {
+    if (b.close) { BACKUP_OFFER = null; return { ok: true }; }
+    var code = ('00000' + (crypto.randomBytes(4).readUInt32BE(0) % 1000000)).slice(-6), ip = ownIp();
+    BACKUP_OFFER = { page: b.page, app: b.app, code: code, until: Date.now() + BACKUP_CODE_MS, wrong: 0, taken: null };
+    log('backup: the TV shows a code for one download of the backup, good for ' + Math.round(BACKUP_CODE_MS / 60000) + ' minutes');
+    return { ok: true, code: code, until: new Date(BACKUP_OFFER.until).toISOString(), url: ip ? 'http://' + ip + ':' + PORT + '/backup' : null };
+}
+// POST /backup/download { code, secrets } from a browser: cb(code, answer), the answer being the backup.
+function backupDownload(b, from, cb) {
+    var o = offerLive();
+    if (!o || !o.code) return cb(403, { ok: false, error: 'There is no code on the TV right now. Open TV-Store\u2019s Settings on the TV and press Back up or restore.' });
+    if (String((b && b.code) || '') !== o.code) {
+        var out = ++o.wrong >= BACKUP_WRONG_MAX;
+        if (out) BACKUP_OFFER = null;
+        log('backup: wrong code from ' + from + (out ? '; that was try ' + BACKUP_WRONG_MAX + ', so the code is void' : ''));
+        return cb(403, { ok: false, error: 'That is not the code the TV shows.' + (out ? ' Too many wrong tries: ask for a new code on the TV.' : '') });
+    }
+    var made = backup.make(backupParts(o.page, o.app), { secrets: b.secrets !== false });
+    o.code = null; o.page = null; o.taken = { from: from, at: new Date().toISOString() };
+    log('backup: downloaded by ' + from + ': ' + backupLine(made));
+    cb(200, made);
+}
+// A request body as text, up to max bytes.
+function bodyText(req, max, cb) {
+    var c = [], n = 0, done = false;
+    function fin(err, t) { if (done) return; done = true; cb(err, t); }
+    req.on('data', function (d) { if (done) return; n += d.length; if (n > max) { req.resume(); return fin(coded('TOO_BIG', 'that file is too big to be a TV-Store backup')); } c.push(d); });
+    req.on('end', function () { fin(null, Buffer.concat(c).toString('utf8')); });
+    req.on('error', function (e) { fin(e); });
+}
+function publicRestore() {
+    if (!RESTORE) return null;
+    var s = backup.summary(RESTORE.backup);
+    return { id: RESTORE.id, from: RESTORE.from, at: RESTORE.at, summary: s, otherTv: !!(s.duid && DUID && s.duid !== DUID) };
+}
+// A backup that came in, as text or as the object: checked, then kept for the screen. { ok, restore } or { ok: false, error }.
+function restoreTake(input, from) {
+    var r = backup.parse(input);
+    if (r.error) { log('restore: refused a file from ' + from + ': ' + r.error); return { ok: false, error: r.error }; }
+    RESTORE = { id: crypto.randomBytes(8).toString('hex'), from: from, at: new Date().toISOString(), backup: r.backup };
+    log('restore: a backup' + (r.backup.madeAt ? ' made ' + r.backup.madeAt : '') + (r.backup.tv ? ' on ' + r.backup.tv : '') + ' from ' + from + ' waits for OK on the TV: ' + backupLine(r.backup));
+    return { ok: true, restore: publicRestore() };
+}
+// POST /backup/apply { token, id, installed: [package ids on the TV] } from the screen. What the
+// TV holds stays: certificates and sources are added to those here, a record about a package only
+// where the TV has that package and no record yet. The apps' settings and the switches are the
+// backup's. cb(err, { page, applied }): page is the screen's part, to put into its own storage.
+function restoreApply(b, cb) {
+    if (!RESTORE || b.id !== RESTORE.id) return cb(coded('NO_RESTORE', 'that backup is no longer waiting on the TV; send it again'));
+    var bk = RESTORE.backup, s = bk.service, here = backup.forInstalled(bk, b.installed), applied = { certificates: 0, sources: 0, userSettings: 0 }, k;
+    RESTORE = null;
+    if (s.certificates) {
+        var had = haveCerts() ? loadCerts().certificates.length : 0, store = backup.mergeCertificates(loadCerts(), s.certificates);
+        applied.certificates = store.certificates.length - had;
+        if (applied.certificates > 0 || !had) saveCerts(store);
+    }
+    if (DATA_DIR) {
+        var byPkg = certByPackage(), held = loadCerts(), changed = false;
+        for (k in s.certByPackage) if (s.certByPackage.hasOwnProperty(k) && !byPkg.hasOwnProperty(k) && certById(held, s.certByPackage[k])) { byPkg[k] = s.certByPackage[k]; changed = true; }
+        if (changed) { try { fs.writeFileSync(path.join(DATA_DIR, CERT_BY_PKG_NAME), JSON.stringify(byPkg)); } catch (e) { log('restore: cannot save which certificate each package took: ' + e.message); } }
+    }
+    s.sources.forEach(function (src) { if (sourceById(src.repositoryId)) return; SOURCES.push(src); applied.sources++; });
+    if (applied.sources) saveSources();
+    var of = sourceOfPackage(), ofChanged = false;
+    for (k in here.sourceOf) if (here.sourceOf.hasOwnProperty(k) && !of.hasOwnProperty(k) && (here.sourceOf[k] === 'official' || sourceById(here.sourceOf[k]))) { of[k] = here.sourceOf[k]; ofChanged = true; }
+    if (ofChanged) saveSourceOf();
+    var ren = renames(), renAdded = here.renames.filter(function (r) { return !ren.some(function (x) { return x.newPackageId === r.newPackageId; }); });
+    if (renAdded.length) {
+        RENAMES = ren.concat(renAdded);
+        if (DATA_DIR) { try { fs.writeFileSync(path.join(DATA_DIR, RENAMES_NAME), JSON.stringify(RENAMES)); } catch (e) { log('restore: cannot save the package id renames: ' + e.message); } }
+    }
+    var uset = usetAll();
+    for (k in s.userSettings) if (s.userSettings.hasOwnProperty(k)) { uset[k] = s.userSettings[k]; applied.userSettings++; }
+    if (applied.userSettings && USET_FILE) { try { fs.writeFileSync(USET_FILE, JSON.stringify(uset), { mode: 384 }); } catch (e) { log('restore: cannot save the apps\u2019 settings: ' + e.message); } }
+    if (s.browser && s.browser.enabled !== BROWSER_CFG.enabled) applyBrowserSettings(s.browser);
+    log('restore: put back on the TV: ' + applied.certificates + ' signing certificate(s) added, ' + applied.sources + ' source(s) added, settings of ' + applied.userSettings + ' app(s), and the screen\u2019s part (pinned apps and Settings)');
+    function done() {
+        cb(null, { applied: applied, page: { settings: bk.page.settings || null, pins: bk.page.pins || null, certChoice: bk.page.certChoice || null, movedSeen: bk.page.movedSeen || null, variants: here.variants, webVersions: here.webVersions } });
+    }
+    if (!s.relay) return done();
+    var r = { enabled: s.relay.enabled, allow: s.relay.allow };
+    if (s.relay.port && !relayPortProblem(s.relay.port)) r.port = s.relay.port;
+    applyRelaySettings(r, done);
+}
+
 var SERVER = http.createServer(function (req, res) {
     if (req.method === 'OPTIONS') { cors(res, 204, 'text/plain'); return res.end(); }
     var route = url.parse(req.url).pathname;
@@ -1641,10 +1751,25 @@ var SERVER = http.createServer(function (req, res) {
     // screen. Read and asked for from the LAN; never with CORS for other sites, never by a public name.
     var iconHex = /^\/icon\/([0-9a-fA-F]{64})$/.exec(route);
     var storeRoute = ((route === '/' || route === '/store') && req.method === 'GET') || (route === '/store/state' && req.method === 'GET') || (route === '/store/install' && req.method === 'POST');
-    if (storeRoute || (iconHex && req.method === 'GET' && !fromThisTv(req))) {
+    // The backup page (#146), its download (with the code the TV shows) and a file to restore.
+    var backupRoute = (route === '/backup' && req.method === 'GET') || ((route === '/backup/download' || route === '/backup/restore') && req.method === 'POST');
+    if (storeRoute || backupRoute || (iconHex && req.method === 'GET' && !fromThisTv(req))) {
         var peer = relayMod.peerIp(req.socket);
         if (!lanHost(req)) { res.writeHead(403, { 'Content-Type': 'text/plain' }); return res.end('open TV-Store by the TV\'s IP address'); }
         if (!browserAllowed(req)) { res.writeHead(403, { 'Content-Type': 'text/plain' }); return res.end(peer + ' is not one of the devices picked under "Devices that may connect" in TV-Store\'s Settings on the TV'); }
+        if (backupRoute) {
+            if (route === '/backup') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); return res.end(backup.page(ownIp())); }
+            if (!sameOrigin(req)) { req.resume(); log('backup: refused a request from another web site (' + req.headers.origin + ') via ' + peer); return storeJson(res, 403, { ok: false, error: 'only the backup page on this TV may do that' }); }
+            if (route === '/backup/download') return body(req, function (err, b) {
+                if (err || !b || typeof b !== 'object') return storeJson(res, 400, { ok: false, error: 'need { code }' });
+                backupDownload(b, peer, function (code, out) { storeJson(res, code, out); });
+            });
+            return bodyText(req, backup.MAX_BYTES, function (err, text) {
+                if (err) return storeJson(res, err.code === 'TOO_BIG' ? 413 : 400, { ok: false, error: err.message });
+                var took = restoreTake(text, peer);
+                storeJson(res, took.ok ? 200 : 400, took);
+            });
+        }
         if (iconHex && !storeRoute) {
             if (!BROWSER_CFG.enabled) { res.writeHead(403, { 'Content-Type': 'text/plain' }); return res.end('installing from a browser is off'); }
             return icons.serve(iconHex[1].toLowerCase(), res);
@@ -1687,7 +1812,19 @@ var SERVER = http.createServer(function (req, res) {
         applyRelaySettings(b.relay, function (status) { json(res, 200, { ok: true, verbose: VERBOSE, relay: status, installer: installerStatus(), browser: browserStatus() }); });
     });
     if (route === '/logs') return json(res, 200, { logs: LOGS });
-    if (route === '/uploads') return json(res, 200, { pending: publicUpload(), busy: UPLOAD_BUSY });
+    if (route === '/uploads') return json(res, 200, { pending: publicUpload(), busy: UPLOAD_BUSY, backup: publicOffer(), restore: publicRestore() });
+    // The screen's side of backup and restore (#146), each with the page token: other apps on the TV
+    // reach this port too, and none of them gets the keys out or a backup in.
+    if (/^\/backup\/(make|offer|take|apply|discard)$/.test(route) && req.method === 'POST') return bodyText(req, backup.MAX_BYTES + 65536, function (err, text) {
+        var b = null; try { if (!err) b = JSON.parse(text); } catch (e) {}
+        if (!b || typeof b !== 'object') return json(res, 400, { ok: false, error: 'need { token, ... }' });
+        if (!pageToken(b)) { log('backup: refused ' + route + ' without the token'); return json(res, 403, { ok: false, error: 'only the TV-Store screen may do that', code: 'NO_TOKEN' }); }
+        if (route === '/backup/make') { var made = backup.make(backupParts(b.page, b.app), { secrets: b.secrets !== false }); log('backup: handed to the TV-Store screen (for Apps2Samsung): ' + backupLine(made)); return json(res, 200, { ok: true, backup: made }); }
+        if (route === '/backup/offer') return json(res, 200, backupOffer(b));
+        if (route === '/backup/take') return json(res, 200, restoreTake(b.backup, 'Apps2Samsung'));
+        if (route === '/backup/discard') { if (RESTORE && (!b.id || b.id === RESTORE.id)) { log('restore: the backup from ' + RESTORE.from + ' was not restored (declined on the TV)'); RESTORE = null; } return json(res, 200, { ok: true }); }
+        restoreApply(b, function (err, r) { if (err) { log('restore: failed' + (err.code ? ' [' + err.code + ']' : '') + ': ' + err.message); return json(res, 200, { ok: false, error: err.message, code: err.code || null }); } json(res, 200, { ok: true, applied: r.applied, page: r.page }); });
+    });
     if (route === '/upload/discard' && req.method === 'POST') return body(req, function () {
         if (UPLOAD_BUSY) return json(res, 409, { ok: false, error: 'that file is being installed' });
         if (UPLOAD) log('upload: ' + UPLOAD.name + ' discarded on the TV');
