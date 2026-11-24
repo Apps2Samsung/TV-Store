@@ -677,6 +677,9 @@ node test/settings-install.test.js  # app settings end to end: NEEDS_SETTINGS, t
 node test/browser-store.test.js  # the store in a browser (#101): the page, the screen's state behind the token, Install checked and handed to the screen, other sites and public names refused, the Settings switch
 node test/certs.test.js     # the profiles handed over: merge, order per package, Public or Partner level
 node test/install.test.js   # a certificate mismatch is retried with the next profile; replace
+node test/tvapps.test.js    # the TV's own app list (#142): a real vd_applist reply, an app by id or package, the answers to a removal
+node test/uninstall.test.js # removing an app against a fake sdbd: the token, by id or package, gone only when the list says so, an app the TV keeps, TV-Store itself refused
+node test/tv-uninstall.test.js  # Uninstall on the On the TV page, on the real page script: other apps and built-in ones, the question, the outcome, a refusal
 node test/certlevel.test.js # Public or Partner per install: refused up front, picked by privilege, chosen by hand
 node test/sdbhosts.test.js  # the order of addresses to try sdbd on
 node test/sdb-loopback.test.js  # install works whether Host PC IP is the TV's own IP or 127.0.0.1; SDB_BUSY while a PC holds the relay (#73)
@@ -689,9 +692,6 @@ node test/selfupdate.test.js  # TV-Store updating itself (#41): refused without 
 node test/pkgid.test.js     # another app's package id (#84): the derived id against values computed apart, catalog keys, when to rename, whole-token rewrite
 node test/web-version.test.js  # Jellyfin on the catalog's web_version (#124), on the real page script: update, not known, Update all, the record
 node test/rename.test.js    # a fork installed beside the app whose id it kept, its update on that copy, a .tpk refused until Replace, an older page as before
-node test/tvapps.test.js    # the TV's own app list (#142): a real vd_applist reply, an app by id or package, the answers to a removal
-node test/uninstall.test.js # removing an app against a fake sdbd: the token, by id or package, gone only when the list says so, an app the TV keeps, TV-Store itself refused
-node test/tv-uninstall.test.js  # Uninstall on the On the TV page, on the real page script: other apps and built-in ones, the question, the outcome, a refusal
 ```
 
 Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching the version in
