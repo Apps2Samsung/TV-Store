@@ -7,6 +7,7 @@ var SRC = fs.readFileSync(path.join(__dirname, '..', 'tizen-app', 'js', 'app.js'
 function fail(m) { console.error('FAIL: ' + m); process.exit(1); }
 
 // One page: opts { catalog, installed: { pkg: version }, storage: { key: object }, tvApps: [the TV's own list],
+// icons: { pkg: the path of its icon on the TV },
 // uninstall: function (body) -> the service's answer }.
 function page(opts) {
     var store = {}, posts = [], asked = [], installs = [], uninstalls = [], acks = [], requests = [], intervals = [], onTv = opts.installed, reloads = { n: 0 };
@@ -70,7 +71,7 @@ function page(opts) {
         tizen: {
             application: {
                 getCurrentApplication: function () { return { appInfo: { id: 'A2STVStore.Store', packageId: 'A2STVStore', version: '0.0.0' }, getRequestedAppControl: function () { return null; } }; },
-                getAppsInfo: function (ok) { ok(Object.keys(onTv).map(function (p) { return { packageId: p, id: p + '.App', version: onTv[p], name: p }; })); },
+                getAppsInfo: function (ok) { ok(Object.keys(onTv).map(function (p) { return { packageId: p, id: p + '.App', version: onTv[p], name: p, iconPath: (opts.icons || {})[p] }; })); },
                 launch: function (id, ok) { if (ok) ok(); }, launchAppControl: function (c, id, ok) { if (ok) ok(); }
             },
             ApplicationControl: function () {},
