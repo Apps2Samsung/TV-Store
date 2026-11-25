@@ -202,7 +202,9 @@
   .phead .mt{font-size:18px;color:#9FB0C6;margin-top:4px}
 
   /* the sheet: C2 app, C3 installing, C4 done, Settings */
-  .sheet{position:absolute;z-index:6;top:0;right:0;bottom:0;width:780px;background:#142638;border-left:1px solid rgba(244,247,251,.12);box-shadow:-30px 0 70px rgba(0,0,0,.45);padding:40px 44px 32px;display:none;flex-direction:column}
+  /* No shadow to the left of the sheet (#126): a Tizen 6 TV drew that wide soft shadow in bands, as
+     waves over the page. The veil over the page and the sheet's edge set it apart. */
+  .sheet{position:absolute;z-index:6;top:0;right:0;bottom:0;width:780px;background:#142638;border-left:1px solid rgba(244,247,251,.12);padding:40px 44px 32px;display:none;flex-direction:column}
   .sheet.on{display:flex}
   .shd{display:flex;align-items:center;flex:none}
   .shd .tile{margin-right:20px}
@@ -226,6 +228,9 @@
   .var .badge{font-size:14px;margin:0 0 0 10px}
   .sheet .link{align-self:flex-start;margin:12px 0 0;flex:none}
   .notice{flex:none;font-size:18px;line-height:1.5;border-radius:14px;padding:14px 18px;margin-top:16px;background:rgba(240,160,32,.14);color:#F0A020}
+  /* On the store page a notice stands where the greeting stands; a second one above it (#126). */
+  .page>.notice{margin:0 0 26px}
+  .greet .notice{margin:0}
   .notice.info{background:rgba(244,247,251,.06);color:#9FB0C6}
   .notice.bad{background:rgba(255,107,94,.14);color:#FF6B5E}
   /* a toast at the bottom: an install a phone or PC asked for (#101) */

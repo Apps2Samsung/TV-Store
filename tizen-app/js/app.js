@@ -105,6 +105,7 @@
     var installed = {};        // packageId -> version, from the platform
     var appIds = {};           // application ids the platform lists, exact case
     var tvNames = {};          // packageId -> the names its apps have on the TV, for the service's rename check (#84)
+    var tvIcons = {};          // application id -> its icon on the TV as a file: address, from the platform (#126)
     // Another app's package id (#84): download URL -> the id a rename gives that file, from the
     // service's /pkgids. Apps2Samsung derives the same one, so an app either of them renamed is found.
     var pkgIds = {};
@@ -235,6 +236,9 @@
     var storeHtml = null;      // what the store page was last built from, null when the page shows something else
     var selHtml = '';          // the Selected card as the page has it
     var rowsFit = 0;           // how many rows of cards the store shows at once; 0 when it is not laid out in rows
+    var linesFit = 0, linePitch = 0;   // one category or a search: how many lines of cards show at once, and a line's height with its gap; 0 when not laid out so
+    var LINE_ROOM = 12;        // what shows under the last line: room for the card under the focus, which is a little larger
+    var tvHtml = null;         // what the On the TV page was last built from, null when the page shows something else
     var confirmingAdult = false;
     var device = '';
     var tvIp = '';             // this TV's IP now, from systeminfo
@@ -901,15 +905,23 @@
         try {
             tizen.application.getAppsInfo(function (infos) {
                 var map = {};
-                appIds = {}; tvNames = {};
+                appIds = {}; tvNames = {}; tvIcons = {};
                 for (var i = 0; i < infos.length; i++) {
                     var p = infos[i].packageId;
                     if (p) { map[p] = infos[i].version || ''; var n = tvNames[p] || (tvNames[p] = []); if (infos[i].name && n.indexOf(infos[i].name) < 0) n.push(infos[i].name); }
                     if (infos[i].id) appIds[infos[i].id] = true;
+                    var ip = infos[i].id ? fileUrl(infos[i].iconPath) : '';
+                    if (ip) tvIcons[infos[i].id] = ip;
                 }
                 cb(map);
             }, function () { cb({}); });
         } catch (e) { cb({}); }
+    }
+
+    // A path on the TV as an address an <img> takes; '' for anything that is not an absolute path.
+    function fileUrl(p) {
+        p = typeof p === 'string' ? p : '';
+        return /^file:\/\/\//.test(p) ? p : p.charAt(0) === '/' ? 'file://' + encodeURI(p) : '';
     }
 
     function readDevice() {
@@ -1386,7 +1398,7 @@
         var text = o === 'landed' ? 'TV-Store updated itself to v' + VERSION + '.'
             : o === 'not-landed' ? 'The update to v' + (m.to || '?') + ' did not land; this is still v' + VERSION + '.' + (last ? ' Last log line before TV-Store closed: ' + last + '.' : '') + ' Please add the TV-Store log (Settings) to GitHub issue #41, and update from Apps2Samsung on a phone or PC.'
             : 'TV-Store sent an update of itself' + (m.to ? ' to v' + m.to : '') + ' and now runs v' + VERSION + '. Please add the TV-Store log (Settings) to GitHub issue #41.';
-        return '<div class="notice row' + (o === 'landed' ? ' info' : o === 'not-landed' ? ' bad' : '') + '" style="margin:0 0 26px"><span>' + esc(text) + '</span><button class="btn f" data-k="selfack" data-act="selfack">Got it</button></div>';
+        return '<div class="notice row' + (o === 'landed' ? ' info' : o === 'not-landed' ? ' bad' : '') + '"><span>' + esc(text) + '</span><button class="btn f" data-k="selfack" data-act="selfack">Got it</button></div>';
     }
     function updates() { return catalogApps.filter(function (x) { return state(x).update; }); }
     function onTv() { return catalogApps.filter(function (x) { return state(x).installed; }); }
@@ -1428,14 +1440,44 @@
         // same app always looks the same.
         var m = String(x.name || '').match(/[A-Za-z0-9]/), c = knownCategory(x.category);
         var bg = c !== 'other' ? CATEGORY_COLORS[c] : x.name ? PALETTE[hashOf(String(x.name)) % PALETTE.length] : CATEGORY_COLORS.other;
+        // An app the catalog has no icon for shows the one it has on the TV, once it is installed
+        // (#126): the apps that are not in the catalog, and a repository's that names no icon.
         icon = icon || x.icon;
+        var src = icon ? BASE + '/icon/' + icon : tvIconOf(x);
         // decoding="sync" (#126): a browser that decodes large images off the frame (Chromium 65 and up)
         // first paints the tile without its icon and adds it a frame later, again every time the focus
         // scales a card or the Selected card is rebuilt: the icon blinked between the bare rounded tile
         // and its own shape. An older browser ignores the attribute and decodes in the frame anyway.
-        var img = icon ? '<img class="ic" alt="" decoding="sync" src="' + esc(BASE + '/icon/' + icon) + '" onload="this.parentNode.className+=\' has\'" onerror="if(this.parentNode)this.parentNode.removeChild(this)">' : '';
+        var img = src ? '<img class="ic" alt="" decoding="sync" src="' + esc(src) + '" onload="this.parentNode.classList.add(\'has\')" onerror="if(this.parentNode)this.parentNode.removeChild(this)">' : '';
         return '<div class="tile s' + size + '" style="background:' + bg + '">' + img + '<span class="lt">' + esc(m ? m[0].toUpperCase() : '?') + '</span></div>';
     }
+    // The icon the TV itself has for the app: by the application id of any of its builds.
+    function tvIconOf(x) {
+        var ids = x.other ? [x.id] : x.gone ? [x.appId] : (x.variants || []).map(tvAppId);
+        for (var i = 0; i < ids.length; i++) if (ids[i] && tvIcons.hasOwnProperty(ids[i])) return tvIcons[ids[i]];
+        return '';
+    }
+    // An icon that loaded once is shown from the first frame wherever it comes back (#126). A tile
+    // starts as its letter and turns into its icon when the image has loaded, which is a frame or
+    // more after the page is built: every time a page was built again (a search, a category, Show
+    // all, On the TV, and back) all icons blinked from letter to icon. The images that loaded are
+    // remembered by address, and a tile that is added to the page with one of those is marked
+    // before the browser draws it.
+    var iconSeen = {};
+    document.addEventListener('load', function (e) {
+        var t = e.target;
+        if (t && t.className === 'ic' && t.getAttribute) iconSeen[t.getAttribute('src')] = true;
+    }, true);
+    if (typeof MutationObserver === 'function') new MutationObserver(function (recs) {
+        recs.forEach(function (r) {
+            Array.prototype.forEach.call(r.addedNodes, function (n) {
+                if (n.nodeType !== 1) return;
+                Array.prototype.forEach.call(n.querySelectorAll('img.ic'), function (img) {
+                    if (iconSeen[img.getAttribute('src')] === true && img.parentNode) img.parentNode.classList.add('has');
+                });
+            });
+        });
+    }).observe(appEl, { childList: true, subtree: true });
     function badge(cls, text) { return '<span class="badge ' + cls + '">' + esc(text) + '</span>'; }
     function subline(x) { return x.variants.length > 1 ? x.variants.length + ' variants' : (verOf(x.variants[0]) ? 'v' + verOf(x.variants[0]) : x.variants[0].file); }
     function cardBadges(x) {
@@ -1525,9 +1567,13 @@
             + tile(x, 68, v.icon) + '<div class="nm">' + esc(x.name) + '</div><div class="mt">' + esc(x.variants.length > 1 ? v.label : (verOf(v) ? 'v' + verOf(v) : v.file)) + '</div><div class="badges">' + pinBadges(x, i) + '</div></div>';
     }
 
+    function shead(title, n) { return '<div class="shead"><span class="t">' + esc(title) + '</span><span class="n">' + n + '</span></div>'; }
+    // A row of cards with its heading, or (grid) every card of one list in lines of six. The grid's
+    // heading stands above the list, not in it (shead() where the page is built): the list then
+    // holds lines of cards only and moves by whole lines (#126).
     function section(id, title, list, grid, more) {
-        return '<div class="sect' + (grid ? ' grid' : '') + '"><div class="shead"><span class="t">' + esc(title) + '</span><span class="n">' + list.length + '</span>'
-            + (more ? '<span class="link f" tabindex="0" data-k="more:' + id + '" data-chip="' + id + '">Show all ›</span>' : '') + '</div>'
+        return '<div class="sect' + (grid ? ' grid lines' : '') + '">' + (grid ? '' : '<div class="shead"><span class="t">' + esc(title) + '</span><span class="n">' + list.length + '</span>'
+            + (more ? '<span class="link f" tabindex="0" data-k="more:' + id + '" data-chip="' + id + '">Show all ›</span>' : '') + '</div>')
             + '<div class="strip" data-row="' + id + '"><div class="cards">' + list.map(function (x) { return card(x, id); }).join('') + '</div></div></div>';
     }
 
@@ -1558,14 +1604,25 @@
     // heading of the next one when there is room for all of it. Left to the room there happened to be,
     // the list ended anywhere: through the next row's heading on a TV with the "From" chips, which
     // take a line of their own.
+    // The cards of one category or of a search stand in lines of six, and the list is as high as the
+    // lines that fit: it showed two lines and the top half of a third.
     function fitRows() {
         var rows = $('rows');
-        rowsFit = 0;
+        rowsFit = 0; linesFit = 0;
         if (!rows) return;
         rows.style.maxHeight = '';
         var sects = rows.querySelectorAll('.sect');
+        if (!sects.length) return;
+        var pad = parseFloat(window.getComputedStyle(rows).paddingTop) || 0, room = rows.clientHeight - pad;
+        if (sects.length && sects[0].classList.contains('lines')) {
+            var c = sects[0].querySelector('.card'), under = c ? parseFloat(window.getComputedStyle(c).marginBottom) || 0 : 0, lp = c ? c.offsetHeight + under : 0;
+            if (!(lp > 0) || !(room > 0)) return;
+            linesFit = Math.max(1, Math.floor((room + under - LINE_ROOM) / lp)); linePitch = lp;
+            rows.style.maxHeight = Math.round(pad + linesFit * lp - under + LINE_ROOM) + 'px';
+            return;
+        }
         if (sects.length < 2 || sects[0].classList.contains('grid')) return;
-        var pad = parseFloat(window.getComputedStyle(rows).paddingTop) || 0, pitch = sects[1].offsetTop - sects[0].offsetTop, room = rows.clientHeight - pad;
+        var pitch = sects[1].offsetTop - sects[0].offsetTop;
         if (!(pitch > 0) || !(room > 0)) return;
         var gap = pitch - sects[0].offsetHeight, head = sects[0].querySelector('.shead'), headH = head ? head.offsetHeight : 0;
         var n = Math.max(1, Math.floor((room + gap / 2) / pitch)), left = room - n * pitch;
@@ -1615,30 +1672,37 @@
             var own = (selfInfo() || {}).version || '', latest = me.variants[0] ? me.variants[0].version : '';
             if (own && latest && newer(latest, own)) { selfLatest = latest; selfText = 'TV-Store v' + latest + ' is out (this is v' + own + '). This copy was installed under another package id by Apps2Samsung, so update it from Apps2Samsung (On the TV, Update) rather than from here.'; }
         }
-        h += selfResultHtml();
+        // What the store has to say goes where the greeting stands (#126): as a line of its own above
+        // it, one notice took the room of a whole row of cards. Only a second one still does.
+        var notes = [];
+        if (selfResult) notes.push(selfResultHtml());
         // A breaking change in the catalog's format is announced 30 days ahead, so an up-to-date
         // TV-Store never sees this; one left behind keeps working on what it understands.
-        if (catalogNewer) h += '<div class="notice bad" style="margin:0 0 26px">' + esc('The app catalog uses a newer format (version ' + catalogNewer + ') than this TV-Store understands. Update TV-Store from Apps2Samsung on a phone or PC (On the TV, Update). Until then some apps may be missing or shown wrongly; what it installs is still checked against the signed catalog.') + '</div>';
+        if (catalogNewer) notes.push('<div class="notice bad">' + esc('The app catalog uses a newer format (version ' + catalogNewer + ') than this TV-Store understands. Update TV-Store from Apps2Samsung on a phone or PC (On the TV, Update). Until then some apps may be missing or shown wrongly; what it installs is still checked against the signed catalog.') + '</div>');
         movedGroups().forEach(function (g) {
             if (movedSeen.indexOf(g.url) >= 0) return;
-            h += '<div class="notice row" style="margin:0 0 26px"><span>' + esc(names(g.apps) + (g.apps.length === 1 ? ' has' : ' have') + ' moved to ' + (g.source ? '\u2018' + g.source.name + '\u2019' : 'the developer\u2019s own repository at ' + g.domain) + '. The official catalog stops updating ' + (g.apps.length === 1 ? 'it' : 'them') + ' soon. ' + (g.source ? 'Take the updates from there to keep getting them.' : 'Add that repository to keep getting updates.')) + '</span>'
+            notes.push('<div class="notice row"><span>' + esc(names(g.apps) + (g.apps.length === 1 ? ' has' : ' have') + ' moved to ' + (g.source ? '\u2018' + g.source.name + '\u2019' : 'the developer\u2019s own repository at ' + g.domain) + '. The official catalog stops updating ' + (g.apps.length === 1 ? 'it' : 'them') + ' soon. ' + (g.source ? 'Take the updates from there to keep getting them.' : 'Add that repository to keep getting updates.')) + '</span>'
                 + '<button class="btn f" data-k="movedadd:' + esc(g.url) + '" data-act="movedadd" data-url="' + esc(g.url) + '" data-fp="' + esc(g.fingerprint) + '" data-name="' + esc(g.apps[0].name) + '">' + (g.source ? 'Take updates from there' : 'Add source') + '</button>'
-                + '<button class="btn f" data-k="movedlater:' + esc(g.url) + '" data-act="movedlater" data-url="' + esc(g.url) + '">Not now</button></div>';
+                + '<button class="btn f" data-k="movedlater:' + esc(g.url) + '" data-act="movedlater" data-url="' + esc(g.url) + '">Not now</button></div>');
         });
         if (selfLatest && settings.hideSelfNotice !== selfLatest)
-            h += '<div class="notice row" style="margin:0 0 26px"><span>' + esc(selfText) + '</span><button class="btn f" data-k="dismissself" data-act="dismissself" data-v="' + esc(selfLatest) + '">Got it</button></div>';
+            notes.push('<div class="notice row"><span>' + esc(selfText) + '</span><button class="btn f" data-k="dismissself" data-act="dismissself" data-v="' + esc(selfLatest) + '">Got it</button></div>');
+        var lead = !query && notes.length ? notes.shift() : '';
+        h += notes.join('');
 
         if (!hover || apps.indexOf(hover) < 0) hover = apps[0] || null;
         // The Selected card stays put (with the greeting and the chips) and the rows scroll under it,
         // so the description of the app under the remote always shows.
         if (!query) {
-            h += '<div class="hero"><div class="greet"><h1>' + greeting() + '</h1><p>Everything here installs straight onto this TV. Pick an app, press OK, and it shows up in your Apps row in about a minute.</p></div>' + SEL + '</div>';
+            h += '<div class="hero"><div class="greet">' + (lead || '<h1>' + greeting() + '</h1><p>Everything here installs straight onto this TV. Pick an app, press OK, and it shows up in your Apps row in about a minute.</p>') + '</div>' + SEL + '</div>';
             sel = selCard(hover);
             var cats = CATEGORY_ORDER.filter(function (c) { return apps.some(function (x) { return x.category === c; }); });
             h += '<div class="chips"><span class="chip f' + (chip === 'all' ? ' on' : '') + '" tabindex="0" data-k="chip:all" data-chip="all">All</span>'
                 + cats.map(function (c) { return '<span class="chip f' + (chip === c ? ' on' : '') + '" tabindex="0" data-k="chip:' + c + '" data-chip="' + c + '">' + esc(catName(c)) + '</span>'; }).join('') + '</div>';
-            h += srcChips() + '<div class="fade"></div><div class="rows vscroll" id="rows">';
+            var open = '<div class="fade"></div><div class="rows vscroll" id="rows">';
+            h += srcChips();
             if (chip === 'all') {
+                h += open;
                 var pinnedNow = pinned(), vetro = vetroOnTv();
                 if (pinnedNow.length || vetro) h += '<div class="sect"><div class="shead"><span class="t">Pinned</span><span class="n">' + (pinnedNow.length + (vetro ? 1 : 0)) + '</span>'
                     + '<span class="hintline">Pin an app from its page, or from On the TV</span></div>'
@@ -1648,18 +1712,20 @@
                     h += section(c, catName(c), list, false, list.length > 6);
                 });
             } else {
-                h += section(chip, catName(chip), apps.filter(function (x) { return x.category === chip; }), true, false);
+                var inChip = apps.filter(function (x) { return x.category === chip; });
+                h += shead(catName(chip), inChip.length) + open + section(chip, '', inChip, true, false);
             }
         } else {
             // Name, description or developer (the heads match the author too since Apps2Samsung #906).
             var q = query.toLowerCase();
             var found = apps.filter(function (x) { return x.name.toLowerCase().indexOf(q) >= 0 || (x.description || '').toLowerCase().indexOf(q) >= 0 || (x.author || '').toLowerCase().indexOf(q) >= 0; });
             if (found.length && found.indexOf(hover) < 0) hover = found[0];
-            h += '<div class="hero"><div class="greet"><h1>Search</h1><p>' + esc(found.length ? found.length + (found.length === 1 ? ' app matches' : ' apps match') + ' \u201c' + query + '\u201d, by name, description or developer.' : 'Nothing matches \u201c' + query + '\u201d.') + '</p></div>' + SEL + '</div><div class="fade"></div><div class="rows vscroll" id="rows">';
+            h += '<div class="hero"><div class="greet"><h1>Search</h1><p>' + esc(found.length ? found.length + (found.length === 1 ? ' app matches' : ' apps match') + ' \u201c' + query + '\u201d, by name, description or developer.' : 'Nothing matches \u201c' + query + '\u201d.') + '</p></div>' + SEL + '</div>'
+                + (found.length ? shead('Results for “' + query + '”', found.length) : '') + '<div class="fade"></div><div class="rows vscroll" id="rows">';
             sel = selCard(found.length ? hover : null);
             // Apps the catalog took out (#87) answer too, after the results, without an install.
             var gq = goneMatches(q);
-            h += found.length ? section('search', 'Results for “' + query + '”', found, true, false)
+            h += found.length ? section('search', '', found, true, false)
                 : gq.length ? '' : '<div class="empty">Nothing in the catalog matches “' + esc(query) + '”.</div>';
             if (gq.length) h += '<div class="sect grid"><div class="shead"><span class="t">No longer in the catalog</span><span class="n">' + gq.length + '</span></div>'
                 + '<div class="strip"><div class="cards">' + gq.map(goneCard).join('') + '</div></div></div>';
@@ -1847,7 +1913,7 @@
         h += '</div>';
         // The TV's own list could not be read: the catalog's apps still show, from what the platform lists.
         var listNote = tvAppsError ? '<div class="notice" style="margin:0 0 22px">' + esc('The TV\u2019s own list of apps could not be read, so the apps that are not in the catalog do not show here. ' + tvAppsError) + '</div>' : '';
-        if (!all.length && !gone.length && !other.length) { pageEl.innerHTML = h + listNote + '<div class="empty">Install something from the store and it shows up here, with its updates.</div>'; return; }
+        if (!all.length && !gone.length && !other.length) { tvHtml = null; pageEl.innerHTML = h + listNote + '<div class="empty">Install something from the store and it shows up here, with its updates.</div>'; return; }
         h += '<div class="tvcols"><div class="tvlist vscroll">';
         if (ups.length) h += '<div class="glabel warn">Updates<span class="n">' + ups.length + '</span></div><div class="group">' + ups.map(tvRow).join('') + '</div>';
         if (ok.length) h += '<div class="glabel">Up to date<span class="n">' + ok.length + '</span></div><div class="group">' + ok.map(tvRow).join('') + '</div>';
@@ -1855,10 +1921,23 @@
         if (mine.length) h += '<div class="glabel">Other apps<span class="n">' + mine.length + '</span></div><div class="group">' + mine.map(otherRow).join('') + '</div>';
         if (builtIn.length) h += '<div class="glabel">Built into the TV<span class="n">' + builtIn.length + '</span></div><div class="group">' + builtIn.map(otherRow).join('') + '</div>';
         h += listNote;
-        h += '</div><div class="tvpanel"><div class="glabel">Selected</div>' + tvPanel(tvSel) + '</div></div>';
-        pageEl.innerHTML = h;
+        var panel = tvPanel(tvSel);
+        h += '</div><div class="tvpanel"><div class="glabel">Selected</div>' + PANEL + '</div></div>';
+        // Nothing but the selected app's panel differs from what the page shows: the page stays as
+        // it is, like the store (#126). Built again for every sheet that closed, the list drew
+        // every icon anew.
+        if (h === tvHtml && pageEl.querySelector('.tvlist')) { showPanel(panel); return; }
+        tvHtml = h; panelHtml = panel;
+        pageEl.innerHTML = h.replace(PANEL, function () { return panel; });
     }
 
+    // The selected app's panel takes this place in the On the TV page as it is built.
+    var PANEL = '<!--panel-->', panelHtml = '';
+    function showPanel(html) {
+        var tp = $('tvpanel');
+        if (!tp || (html === panelHtml)) return;
+        tp.outerHTML = html; panelHtml = html;
+    }
     function tvPanel(x) {
         if (!x) return '';
         if (x.gone) return gonePanel(x);
@@ -1890,7 +1969,7 @@
 
     function renderPage() {
         renderHeader();
-        if (view === 'tv') { storeHtml = null; renderTv(); } else renderStore();
+        if (view === 'tv') { storeHtml = null; renderTv(); } else { tvHtml = null; renderStore(); }
     }
 
     // ---- the sheet (C2, C3, C4, Settings) --------------------------------------------------------
@@ -2523,15 +2602,15 @@
         }
         if (el.getAttribute && el.getAttribute('data-app') && view === 'tv' && !sheet) {
             var y = byKey(el.getAttribute('data-app'));
-            if (y && y !== tvSel) { tvSel = y; var tp = $('tvpanel'); if (tp) tp.outerHTML = tvPanel(y); }
+            if (y && y !== tvSel) { tvSel = y; showPanel(tvPanel(y)); }
         }
         if (el.getAttribute && el.getAttribute('data-gone') && view === 'tv' && !sheet) {
             var gk = el.getAttribute('data-gone');
-            if (!tvSel || tvSel.key !== gk) { var gs = goneOnTv().filter(function (g) { return g.key === gk; })[0]; if (gs) { tvSel = gs; var gp = $('tvpanel'); if (gp) gp.outerHTML = tvPanel(gs); } }
+            if (!tvSel || tvSel.key !== gk) { var gs = goneOnTv().filter(function (g) { return g.key === gk; })[0]; if (gs) { tvSel = gs; showPanel(tvPanel(gs)); } }
         }
         if (el.getAttribute && el.getAttribute('data-tvapp') && view === 'tv' && !sheet) {
             var ok = el.getAttribute('data-tvapp');
-            if (!tvSel || tvSel.key !== ok) { var os = otherOnTv().filter(function (o) { return o.key === ok; })[0]; if (os) { tvSel = os; var op = $('tvpanel'); if (op) op.outerHTML = tvPanel(os); } }
+            if (!tvSel || tvSel.key !== ok) { var os = otherOnTv().filter(function (o) { return o.key === ok; })[0]; if (os) { tvSel = os; showPanel(tvPanel(os)); } }
         }
     }
     // Give the element the focus without the browser scrolling to it: a TV browser brings a focused
@@ -2616,7 +2695,18 @@
                 if (by) box.scrollTop += by;
                 return;
             }
+            // One category or a search (#126): the list moves by whole lines of cards.
+            if (sect && linesFit && box.id === 'rows' && sect.classList.contains('lines')) {
+                var c0 = sect.querySelector('.card'), line = Math.round((el.offsetTop - c0.offsetTop) / linePitch), firstLine = Math.round(box.scrollTop / linePitch);
+                if (line < firstLine) firstLine = line; else if (line > firstLine + linesFit - 1) firstLine = line - linesFit + 1;
+                if (box.scrollTop !== firstLine * linePitch) box.scrollTop = firstLine * linePitch;
+                return;
+            }
             if (sect) { var sr2 = sect.getBoundingClientRect(); if (r.top - sr2.top < 90) top = sr2.top + m - 6; }
+            // The first app of a group on the TV page brings the group's heading along (#126):
+            // coming back up, "Up to date" stood cut in half above its first app.
+            var grp = box !== pageEl && closest(el, 'group'), lab = grp && el === grp.firstElementChild ? grp.previousElementSibling : null;
+            if (lab && lab.classList.contains('glabel')) top = lab.getBoundingClientRect().top + m;
             if (top < br.top + m) box.scrollTop -= (br.top + m - top);
             else if (r.bottom > br.bottom - m) box.scrollTop += (r.bottom - br.bottom + m);
         });
