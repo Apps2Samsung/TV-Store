@@ -32,6 +32,7 @@ var storePage = require('./storepage.js');
 var usersettings = require('./usersettings.js');
 var tvapps = require('./tvapps.js');
 var backup = require('./backup.js');
+var updater = require('./updater.js');
 
 var PORT = 8077;
 // sdbd's port; a test points the service at a fake sdbd (test/install.test.js).
@@ -1789,8 +1790,136 @@ function restoreApply(b, cb) {
     applyRelaySettings(r, done);
 }
 
+// ---- updates while TV-Store is closed (#157) -----------------------------------------------------------
+// The screen updates apps by itself while it is open (#154). Started without it, the service does a
+// round of its own: it waits AUTO_WAIT for the screen to turn up, and when nothing asked for
+// anything it reads the catalog and the TV's list and installs the updates of the plan the screen
+// last handed over (updater.js says what an update is), one app at a time. Only with the switch
+// for it on. A round that cannot run (no network yet, the developer connection does not answer)
+// is tried again twice, then left for the next start. Nothing is ever shown: the log says what
+// happened, and the screen says it the next time it opens (`landed`).
+// An app that runs is left alone. Where the TV does not say what runs, a round only goes shortly
+// after the TV started (AUTO_BOOT), when nothing is on screen yet.
+// The service does not end itself afterwards: on newer TVs the process may not be this service's
+// alone, and how the screen gets a service back that let go of its port is not proven on a TV.
+var AUTO_FILE = DATA_DIR ? path.join(DATA_DIR, '.a2s-auto.json') : null;
+var AUTO = { plan: null, tried: {}, landed: [], last: '' };
+try {
+    if (AUTO_FILE && fs.existsSync(AUTO_FILE)) {
+        var au = JSON.parse(fs.readFileSync(AUTO_FILE, 'utf8'));
+        if (au && typeof au === 'object') {
+            if (au.plan) AUTO.plan = updater.plan(au.plan);
+            if (au.tried && typeof au.tried === 'object' && !Array.isArray(au.tried)) AUTO.tried = au.tried;
+            if (Array.isArray(au.landed)) AUTO.landed = au.landed.filter(function (l) { return l && typeof l.key === 'string'; }).slice(-50);
+            if (typeof au.last === 'string') AUTO.last = au.last;
+        }
+    }
+} catch (e) { log('auto: cannot read ' + AUTO_FILE + ': ' + e.message); }
+function envMs(name, dflt) { var n = parseInt(process.env[name], 10); return n >= 0 ? n : dflt; }
+var AUTO_WAIT = envMs('A2S_AUTO_WAIT', 60000), AUTO_RETRY = envMs('A2S_AUTO_RETRY', 60000), AUTO_EVERY = envMs('A2S_AUTO_EVERY', 6 * 60 * 60 * 1000), AUTO_BOOT = envMs('A2S_AUTO_BOOT', 10 * 60 * 1000);
+var AUTO_NOW = {};             // app key -> the version tried since this service started
+var AUTO_RUN = null;           // { key, name } while a round installs
+var AUTO_BUSY = false;         // a round is under way
+var SEEN_REQUEST = 0;          // when something first asked this service for anything: the screen, or a browser
+function saveAuto() { if (AUTO_FILE) { try { fs.writeFileSync(AUTO_FILE, JSON.stringify(AUTO)); } catch (e) { log('auto: cannot save ' + AUTO_FILE + ': ' + e.message); } } }
+function autoPublic() { return { running: AUTO_RUN ? AUTO_RUN.name : null, landed: AUTO.landed, last: AUTO.last }; }
+// POST /auto/plan { token, settings, tizen, tvApps, items } from the screen.
+function autoPlan(b) {
+    var p = updater.plan(b);
+    if (AUTO.plan && JSON.stringify(AUTO.plan) === JSON.stringify(p)) return { ok: true, changed: false };
+    AUTO.plan = p;
+    // What is no longer in the plan need not be remembered.
+    Object.keys(AUTO.tried).forEach(function (k) { if (!p.items.some(function (i) { return i.key === k; })) delete AUTO.tried[k]; });
+    saveAuto();
+    logv('auto: the screen handed over its plan, ' + p.items.length + ' apps, apps ' + (p.settings.apps ? 'on' : 'off') + ', TV-Store ' + (p.settings.self ? 'on' : 'off') + ', while closed ' + (p.settings.closed ? 'on' : 'off'));
+    return { ok: true, changed: true };
+}
+// The application ids that run now, or null when this TV does not say. A2S_RUNNING stands in for
+// the platform in a test ("none", or ids with commas between them).
+function runningApps(cb) {
+    if (typeof process.env.A2S_RUNNING === 'string') return cb(process.env.A2S_RUNNING === 'none' ? [] : process.env.A2S_RUNNING.split(',').filter(Boolean));
+    var done = false, timer = null;
+    function once(v) { if (done) return; done = true; clearTimeout(timer); cb(v); }
+    try {
+        var t = typeof tizen !== 'undefined' ? tizen : null;   // eslint-disable-line no-undef
+        if (!t || !t.application || typeof t.application.getAppsContext !== 'function') return once(null);
+        timer = setTimeout(function () { once(null); }, 5000);
+        t.application.getAppsContext(function (list) {
+            var ids = [];
+            for (var i = 0; list && i < list.length; i++) if (list[i] && list[i].appId) ids.push(String(list[i].appId));
+            once(ids);
+        }, function () { once(null); });
+    } catch (e) { once(null); }
+}
+function autoRound(tryNo) {
+    tryNo = tryNo || 1;
+    var p = AUTO.plan;
+    if (AUTO_BUSY || SEEN_REQUEST) return;
+    if (!p || !p.settings.closed || !(p.settings.apps || p.settings.self)) return logv('auto: updating while TV-Store is closed is off');
+    if (AUTO.last && Date.now() - Date.parse(AUTO.last) < AUTO_EVERY) return logv('auto: looked for updates at ' + AUTO.last + '; not again yet');
+    if (!haveCerts()) return log('auto: TV-Store is closed and there is no signing certificate on this TV; nothing is updated');
+    AUTO_BUSY = true;
+    function end(line) { AUTO_BUSY = false; AUTO_RUN = null; log('auto: ' + line); }
+    function again(why) {
+        if (tryNo >= 3 || SEEN_REQUEST) return end(why + '; left for the next start');
+        end(why + '; trying again in ' + Math.round(AUTO_RETRY / 1000) + ' s');
+        setTimeout(function () { autoRound(tryNo + 1); }, AUTO_RETRY);
+    }
+    log('auto: TV-Store is closed; looking for updates of the ' + p.items.length + ' apps in its plan');
+    withCatalog(function (err, cat) {
+        if (err) return again('the catalog did not load (' + err.message + ')');
+        withSources(true, function (list) {
+            var all = updater.builds(cat.catalog);
+            list.forEach(function (r) {
+                if (r.verified) all = all.concat(updater.builds(r.verified.manifest, r.source.repositoryId));
+                else log('auto: ' + sourceLabel(r.source.repositoryId) + ' did not load; its apps wait');
+            });
+            listTvApps(function (err, tvApps) {
+                if (err) return again('the TV did not list its apps (' + err.message + ')');
+                runningApps(function (running) {
+                    var up = Math.round(os.uptime());
+                    if (!running && up * 1000 > AUTO_BOOT) return end('this TV does not say which apps run, and it has been on for ' + Math.round(up / 60) + ' min; nothing is installed over an app that may be on screen');
+                    var d = updater.due(p, all, tvApps, AUTO.tried, AUTO_NOW, running, function (file) { return !!usetGet(file); });
+                    d.skipped.forEach(function (s) { log('auto: ' + s.item.name + ' waits: ' + s.why); });
+                    AUTO.last = new Date().toISOString(); saveAuto();
+                    var n = 0, failed = 0;
+                    (function step() {
+                        if (SEEN_REQUEST && d.list.length) return end('TV-Store was opened; its screen takes over with ' + d.list.length + ' still to do');
+                        var c = d.list.shift();
+                        if (!c) return end(n + failed === 0 ? 'nothing to update' : n + ' updated, ' + failed + ' failed');
+                        var item = c.item, b = c.build;
+                        // An app under an id of its own (#84) needs the TV's names to land on that copy again.
+                        if (b.packageId && b.packageId !== item.packageId && !p.tvApps) { log('auto: ' + item.name + ' waits: it has an id of its own on this TV and the plan does not say what else is on it'); return step(); }
+                        updater.mark(AUTO.tried, item.key, c.version, item.self ? updater.TRIES : 1);
+                        AUTO_NOW[item.key] = c.version; saveAuto();
+                        AUTO_RUN = { key: item.key, name: item.name };
+                        var entry = { url: b.url, file: b.file, appId: item.appId, packageId: item.packageId, name: item.name, tizen: p.tizen, installed: true, replace: false, source: item.source };
+                        if (p.tvApps) entry.tvApps = p.tvApps;
+                        if (item.certLevel) entry.certLevel = item.certLevel;
+                        if (item.self) { entry.selfUpdate = true; entry.fromVersion = item.have; entry.toVersion = b.version; }
+                        log('auto: updating ' + item.name + ' from v' + item.have + ' to v' + c.version);
+                        install(entry, function (err, r) {
+                            AUTO_RUN = null;
+                            if (err) { failed++; log('auto: the update of ' + item.name + ' failed' + (err.code ? ' [' + err.code + ']' : '') + ': ' + err.message); }
+                            else {
+                                n++; item.have = c.version;
+                                AUTO.tried[item.key] = { v: c.version, n: updater.TRIES };
+                                AUTO.landed = AUTO.landed.concat([{ key: item.key, name: item.name, file: b.file, packageId: (r && r.packageId) || item.packageId, version: c.version, web: item.web ? c.version : '', at: new Date().toISOString() }]).slice(-50);
+                                log('auto: ' + item.name + ' is now v' + c.version);
+                            }
+                            saveAuto();
+                            setTimeout(step, 1000);
+                        });
+                    })();
+                });
+            });
+        });
+    }, true);
+}
+
 var SERVER = http.createServer(function (req, res) {
     if (req.method === 'OPTIONS') { cors(res, 204, 'text/plain'); return res.end(); }
+    if (!SEEN_REQUEST) SEEN_REQUEST = Date.now();
     var route = url.parse(req.url).pathname;
     // The page polls /ping and /logs all the time; those would drown the rest.
     if (VERBOSE && !/^\/(ping|logs|log\.txt|uploads|icon\/.*|store\/state)$/.test(route)) res.on('finish', function () { logv('http: ' + req.method + ' ' + route + ' -> ' + res.statusCode); });
@@ -1874,7 +2003,15 @@ var SERVER = http.createServer(function (req, res) {
         applyRelaySettings(b.relay, function (status) { json(res, 200, { ok: true, verbose: VERBOSE, relay: status, installer: installerStatus(), browser: browserStatus() }); });
     });
     if (route === '/logs') return json(res, 200, { logs: LOGS });
-    if (route === '/uploads') return json(res, 200, { pending: publicUpload(), busy: UPLOAD_BUSY, backup: publicOffer(), restore: publicRestore() });
+    if (route === '/uploads') return json(res, 200, { pending: publicUpload(), busy: UPLOAD_BUSY, backup: publicOffer(), restore: publicRestore(), auto: autoPublic() });
+    // The plan for updates while TV-Store is closed (#157), and "the screen has shown what landed":
+    // both from the screen only, with its token.
+    if ((route === '/auto/plan' || route === '/auto/seen') && req.method === 'POST') return body(req, function (err, b) {
+        if (err || !b || typeof b !== 'object') return json(res, 400, { ok: false, error: 'need { token, ... }' });
+        if (!pageToken(b)) { log('auto: refused ' + route + ' without the token'); return json(res, 403, { ok: false, error: 'only the TV-Store screen may do that', code: 'NO_TOKEN' }); }
+        if (route === '/auto/seen') { if (AUTO.landed.length) { AUTO.landed = []; saveAuto(); } return json(res, 200, { ok: true }); }
+        json(res, 200, autoPlan(b));
+    });
     // The screen's side of backup and restore (#146), each with the page token: other apps on the TV
     // reach this port too, and none of them gets the keys out or a backup in.
     if (/^\/backup\/(make|offer|take|apply|discard|page)$/.test(route) && req.method === 'POST') return bodyText(req, backup.MAX_BYTES + 65536, function (err, text) {
@@ -1978,6 +2115,7 @@ var SERVER = http.createServer(function (req, res) {
     });
     if (route === '/install' && req.method === 'POST') return body(req, function (err, b) {
         if (err || !b || !(b.url || b.upload)) return json(res, 400, { ok: false, error: 'need { url, file, appId } or { upload, token }' });
+        if (AUTO_RUN) return json(res, 200, { ok: false, error: 'TV-Store is installing an update of ' + AUTO_RUN.name + ' that started while it was closed. Try again when it is done.', code: 'BUSY' });
         (b.upload ? installUpload : install)(b, function (err, r) { if (err) { log('install: failed' + (err.code ? ' [' + err.code + ']' : '') + ': ' + err.message); return json(res, 200, { ok: false, error: err.message, code: err.code || null }); } json(res, 200, { ok: true, result: r }); });
     });
     cors(res, 404, 'text/plain'); res.end('not found');
@@ -2013,6 +2151,8 @@ SERVER.on('listening', function () {
     logPlatform();
     if (RELAY_CFG.enabled) { log('relay: enabled, starting on port ' + RELAY_CFG.port); startRelay(); }
     if ((!RELAY_CFG.chosen && !RELAY_CFG.enabled) || !DUID) setTimeout(probeLoopback, 1000);
+    // Nothing asked for anything by then: TV-Store is closed (#157).
+    setTimeout(function () { autoRound(1); }, AUTO_WAIT);
 });
 listen();
 

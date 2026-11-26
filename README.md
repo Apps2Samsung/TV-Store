@@ -555,6 +555,26 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
   version than the catalog does is not installed without end. What did not land waits under On
   the TV, where **Update** still works and says why, until the catalog has a newer version.
   **Update** and **Update all** pressed while such an update runs are lined up behind it.
+  **While TV-Store is closed** (#157, built, not switched on yet): the service can do the same
+  round without the screen. Which build of an app is on the TV is something only the screen
+  knows (the file TV-Store installed, the pinned builds, the certificate chosen per app, what the
+  platform lists), so the screen hands the service a plan (`POST /auto/plan`, with its token,
+  kept in `.a2s-auto.json`): one line per app it would update by itself, with the build and the
+  version on the TV. Started with nothing asking it anything for a minute, the service reads the
+  catalog and the TV's own list and installs the same build when its version is newer than the
+  one the screen saw and the one the TV lists. It never picks a build, and anything else (the app
+  left the TV or the catalog, the new version needs a phone or PC, the TV has a newer copy from
+  elsewhere) is no update. An app that runs is left alone; where the TV does not say what runs,
+  a round only goes in the first ten minutes after the TV started. One version is tried once per
+  start and three times in all, as on the screen; a round that cannot run (no network yet, sdbd
+  does not answer) is tried twice more, a minute apart, and then left for the next start; six
+  hours pass between two looks. Nothing is shown: the log says what happened, and the screen
+  says it once when it is opened (`auto.landed` on `GET /uploads`, cleared by `POST /auto/seen`).
+  A request to the service during the wait means TV-Store is open, and the round is the
+  screen's. The plan carries a third switch, "while closed", that no screen sets yet (#158), so
+  nothing of this runs on a TV today. The service does not stop itself after a round: on newer
+  TVs its process may not be its own, and how the screen gets a service back that let go of its
+  port is not proven on a TV.
 - **Update TV-Store automatically**: off by default (#154). On, TV-Store installs its own update
   by itself when it is open and the catalog has a newer version: with its sheet, because TV-Store
   closes during the install. Open it again
@@ -768,6 +788,7 @@ under the same rules as the store page (the TV's address, not another web site, 
 - `tizen-app/service/repos.js`: independent repositories (#82): every rule of the spec with its reason code, key size and fingerprint from the DER, the sources Apps2Samsung hands over
 - `tizen-app/service/pkgid.js`: another app's package id (#84): the id derived from a catalog entry, when to rename, the rewrite of the package
 - `tizen-app/service/icons.js`: app icons, fetched like a package, kept only with the catalog's hash, cached, served at `/icon/<sha256>` (#66)
+- `tizen-app/service/updater.js`: updates while TV-Store is closed (#157): the builds of a catalog, the plan the screen hands over, what a round installs and what waits
 - `tizen-app/service/compat.js`: buffers that work on the TV's Node 4.4.3
 - `tizen-app/service/manifest.js`: the ids, the required Tizen version and the privileges a package carries in its own manifest
 - `tizen-app/service/refusal.js`: what the TV's `install failed[...]` codes mean and what TV-Store offers for each
@@ -832,6 +853,9 @@ node test/store-keep.test.js    # the store page is built once and kept: a sheet
 node test/tv-page.test.js       # On the TV on the real page script: the search box narrows the TV's apps down and stays there, the note about an unread list stands above the list (#126)
 node test/tvapps-hang.test.js   # a TV that never answers the app listing: NO_LISTING after the wait, and the next request works (#126)
 node test/auto-update.test.js   # updates that install by themselves (#154): off by default, one app per tick without a sheet, once per version, TV-Store's own first
+node test/updater.test.js       # what the service may install while TV-Store is closed (#157): the same build with a newer version, TV-Store's own first, and what waits with its reason
+node test/auto-closed.test.js   # the real service started with nobody asking: waits, installs the plan's one update, keeps what landed for the screen; switch off, someone there, a running app, a bad download, the pause
+node test/auto-plan.test.js     # the screen's side: the plan it hands over, what the service installed written down and said once, nothing of its own while the service installs
 ```
 
 Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching the version in

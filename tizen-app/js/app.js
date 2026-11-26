@@ -2527,6 +2527,8 @@
     function autoUpdate() {
         if (!settings.autoUpdateApps && !settings.autoUpdateSelf) return;
         if (!storeComplete || loading || problem || reviving || !armed() || sheet || (job && job.running) || queue.length || catalogChanged || document.hidden || typing() || tvAppsAsking) return;
+        // First what the service did while TV-Store was closed (#157): an app it updated is not installed again.
+        if (!autoHeard || (svcAuto && (svcAuto.running || (svcAuto.landed && svcAuto.landed.length)))) return;
         var me = self();
         if (settings.autoUpdateSelf && me && selfCan(me)) {
             var ms = state(me), mv = ms.installed ? me.variants[ms.variant] : null;
@@ -2540,6 +2542,68 @@
         if (!settings.autoUpdateApps) return;
         var next = updatable().filter(function (x) { var st = state(x); return fits(x.variants[st.variant]) && !autoWaits(x, st); })[0];
         if (next) { var ns = state(next); autoMark(next, ns.latest); startInstall(next, ns.variant, { auto: true, quiet: true }); }
+    }
+
+    // ---- updates while TV-Store is closed (#157) ---------------------------------------------------
+    // Started without this screen, the service does a round of its own. It cannot tell which build
+    // of an app is on the TV (that takes the file TV-Store installed, the pins and the platform),
+    // so the screen hands it a plan: every app it would update by itself, with the build that is on
+    // the TV and the version it has. The service installs the same build when the catalog has a
+    // newer one, and nothing else. The plan is built once a minute at most (it asks for the state
+    // of every app), right away after a switch in Settings, and sent only when it changed.
+    // What the service installed meanwhile comes back in the tick (`landed`): the screen writes
+    // down what it would have after an install of its own, says so once, and tells the service.
+    var svcAuto = null;           // the service's side, from the tick: { running, landed, last }
+    var planDue = 0, planSent = '', planBusy = false, landedBusy = false;
+    var autoHeard = false;        // the tick has heard from the service: what it says about its own updates is in
+    function autoPlan() {
+        var items = [];
+        catalogApps.forEach(function (x) {
+            var st = state(x);
+            if (!st.installed || !st.known || st.unknown) return;
+            var v = x.variants[st.variant], me = isSelf(x);
+            if (v.upload || v.needsHead || !fits(v) || signPlan(v).missing || settingsBlock(x, v, st) || (me && !selfCan(x))) return;
+            items.push({ key: x.key, name: x.name, file: v.file, source: x.source || 'official', packageId: tvPkg(v), appId: tvAppId(v) || '', have: st.version || '', web: !!v.webVersion, certLevel: certChoiceOf(v), self: me });
+        });
+        return { settings: { apps: !!settings.autoUpdateApps, self: !!settings.autoUpdateSelf, closed: !!settings.autoUpdateClosed }, tizen: tvTizen, tvApps: tvNames, items: items };
+    }
+    function sendPlan() {
+        if (planBusy || !storeComplete || loading || problem || !armed() || !uploadToken || (job && job.running) || catalogChanged || Date.now() < planDue) return;
+        if (svcAuto && (svcAuto.running || (svcAuto.landed && svcAuto.landed.length))) return;   // first what the service did
+        if (lastKey && Date.now() - lastKey < 3000) return;   // not while the remote is in use
+        planDue = Date.now() + 60000;
+        var plan = autoPlan(), text = JSON.stringify(plan);
+        if (text === planSent) return;
+        plan.token = uploadToken; planBusy = true;
+        xhr('POST', '/auto/plan', plan, function (err, res) { planBusy = false; if (!err && res && res.ok) planSent = text; }, null, 5000);
+    }
+    function takeAuto(a) {
+        svcAuto = a && typeof a === 'object' ? a : null;
+        autoHeard = true;
+        var list = svcAuto && Array.isArray(svcAuto.landed) ? svcAuto.landed : [];
+        if (!list.length || landedBusy || !storeComplete || !uploadToken) return;
+        var web = false;
+        list.forEach(function (l) {
+            var x = l && byKey(l.key);
+            if (!x) return;
+            if (l.packageId && l.file) installedFile[l.packageId] = l.file;
+            if (l.web && l.packageId) { installedWeb[l.packageId] = { key: l.key, file: l.file, web: l.web }; web = true; }
+            autoDone(x, l.version);
+        });
+        try { window.localStorage.setItem(VARIANTS_KEY, JSON.stringify(installedFile)); } catch (e) {}
+        if (web) saveWeb(); else handPage();
+        claims = null; planDue = 0;
+        var last = list[list.length - 1];
+        toast(list.length === 1 ? (last.name || 'An app') + ' was updated to v' + last.version + ' while TV-Store was closed.' : list.length + ' apps were updated while TV-Store was closed.');
+        // The versions on the TV were read before the service was done: read them again.
+        readInstalled(function (map) {
+            if (map && Object.keys(map).length) setInstalled(map);
+            if (sheet) return;
+            var at = document.activeElement && document.activeElement !== searchEl ? document.activeElement.getAttribute('data-k') : null;
+            renderPage(); if (at) focusKey(at) || focusFirst();
+        });
+        landedBusy = true;
+        xhr('POST', '/auto/seen', { token: uploadToken }, function (err, res) { landedBusy = false; if (!err && res && res.ok && svcAuto) svcAuto.landed = []; }, null, 5000);
     }
 
     var toastTimer = null;
@@ -2701,6 +2765,7 @@
     function setSetting(key, value) {
         settings[key] = value;
         if (key === 'autoUpdateSelf') settings.selfUpdate = false;
+        planDue = 0;
         saveSettings(); confirmingAdult = false;
         if (key === 'verboseLog') syncVerbose();
         apps = visible(catalogApps);
@@ -3097,10 +3162,12 @@
         if (!document.hidden && Date.now() >= catalogDue) refreshCatalog();
         showCatalog();
         autoUpdate();
+        sendPlan();
         pushStore(true);
         xhr('GET', '/uploads', null, function (err, res) {
             if (err || !res) { if (++missed >= 3) revive(); return; }
             missed = 0;
+            takeAuto(res.auto);
             if (backupTick(res)) return;
             var was = upload; upload = res.pending || null;
             if (upload && upload.id !== seenUpload && !sheet) { seenUpload = upload.id; openSheet({ mode: 'upload' }); return; }
@@ -3190,6 +3257,8 @@
                     rebuild(); storeComplete = true;
                     if (!sheet) { renderPage(); focusKey(at) || focusFirst(); } else renderHeader();
                     nextOffer();
+                    // What the service updated while TV-Store was closed (#157), before the screen updates anything itself.
+                    xhr('GET', '/uploads', null, function (err, res) { takeAuto(!err && res ? res.auto : null); }, null, 5000);
                     // An app from an independent repository is only known now.
                     if (requestedApp() && requestedApp() !== requestedHandled) openRequested();
                 });
