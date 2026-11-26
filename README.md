@@ -556,15 +556,17 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
   the TV, where **Update** still works and says why, until the catalog has a newer version.
   **Update** and **Update all** pressed while such an update runs are lined up behind it.
 - **Update TV-Store automatically**: off by default (#154). On, TV-Store installs its own update
-  by itself when it is open and the catalog has a newer version, the way **Let TV-Store update
-  itself** below does it: with its sheet, because TV-Store closes during the install. Open it again
+  by itself when it is open and the catalog has a newer version: with its sheet, because TV-Store
+  closes during the install. Open it again
   after a minute and it says whether the update landed. It goes before the apps' updates, which
   follow when TV-Store is open again, and it waits until the remote has rested for half a minute
   (right away when TV-Store was just opened). Once per version. Not for a copy
-  Apps2Samsung installed under another package id.
-- **Let TV-Store update itself (experiment)**: off by default (#41). Off, TV-Store sends you to
+  Apps2Samsung installed under another package id. Off, TV-Store sends you to
   Apps2Samsung on a phone or PC to update it, as since 0.3.11. On, a newer TV-Store in the catalog
-  gets an **Update** button under On the TV like any other app. 0.3.11 dropped this on the theory
+  also has an **Update** button under On the TV like any other app. This switch took the place of
+  **Let TV-Store update itself (experiment)** (#41, 0.3.21), which only gave that button; a TV
+  where that one was on keeps the button, and nothing installs by itself there until this switch
+  is turned on. 0.3.11 dropped updating itself on the theory
   that the installer stops the service driving the install so the update never lands, but nobody
   saw where it stopped (the log then lived in memory), and Apps2Samsung#1005 showed `sdbd`
   finishing an update of TV-Store after the service that sent it was stopped. The service installs
@@ -868,7 +870,7 @@ Only when that start fails too does the page say "The TV-Store service stopped".
 | Independent repositories (#82) | built (0.3.21): verified per source against the spec's test vectors, sources from Apps2Samsung confirmed on the TV, every app labelled with its source, updates only from it; proven against local HTTPS stand-ins and a fake `sdbd`. Waits for Apps2Samsung's **Send sources to TV** (Apps2Samsung#1018) and a real repository for the test on a TV |
 | A fork that kept another app's package id (#84) | built (0.3.22): a `.wgt` goes on beside the other app under the id derived from its catalog entry (the scheme of Apps2Samsung#1028), a `.tpk` asks before replacing; proven against local HTTPS stand-ins and a fake `sdbd`, untested on a TV |
 | Apps removed from the community catalog (#87) | built (0.3.23): an installed copy that no catalog app claims gets a row under "Removed from the catalog" on the On the TV page with the reason, and search answers with "No longer in the catalog"; matched by the entry's own package ids (with its app ids or name) and by the rename id of each file; waits on Apps2Samsung carrying `catalog.removed` into `resolved.json`; untested on a TV |
-| TV-Store updating itself (#41) | dropped in 0.3.11; back as an experiment behind a Settings switch, off by default, through `sdbd` with a marker that tells the next start whether it landed (0.3.21). Apps2Samsung#1005 saw an update of TV-Store land on a Tizen 5.0 set after the service that sent it was stopped; untested from the TV itself, Tizen 9 above all |
+| TV-Store updating itself (#41) | dropped in 0.3.11; back behind a Settings switch, off by default, through `sdbd` with a marker that tells the next start whether it landed (0.3.21). Apps2Samsung#1005 saw an update of TV-Store land on a Tizen 5.0 set after the service that sent it was stopped; untested from the TV itself, Tizen 9 above all |
 | The store in a phone or PC browser (#101) | built (0.3.28): browse and install at `http://<TV>:8077/`, the TV screen does the install; apps with settings get a form there. Proven on a 2019 Tizen 5.0 set, a settings install included |
 | Open TV-Store on an app, Vetro in the Pinned row (#102) | built (0.3.28): the app control data key `app` proven on a 2019 Tizen 5.0 set; Vetro's own entry to TV-Store is Vetro's to build |
 | The relay on by default when Host PC IP is `127.0.0.1` | built (0.3.28), proven on a 2019 Tizen 5.0 set |

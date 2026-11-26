@@ -59,6 +59,7 @@ test('off by default: nothing installs by itself', function (done) {
             p.settle(function () {
                 html = p.html('sheet');
                 if (html.indexOf('data-opt="autoUpdateApps"') < 0 || html.indexOf('data-opt="autoUpdateSelf"') < 0) fail('Settings does not have the two switches');
+                if (html.indexOf('data-opt="selfUpdate"') >= 0) fail('Settings still has the older switch for the same thing');
                 var apps = html.slice(html.indexOf('data-opt="autoUpdateApps"')), self = html.slice(html.indexOf('data-opt="autoUpdateSelf"'));
                 if (apps.slice(0, apps.indexOf('</span></div>')).indexOf('class="sw on"') >= 0 || self.slice(0, self.indexOf('</span></div>')).indexOf('class="sw on"') >= 0) fail('a switch is on without anyone turning it on');
                 // Turning one on is remembered.
@@ -160,6 +161,23 @@ test('Update all while an automatic update runs: lined up behind it, and kept wh
 test('apps: a TV that still lists the old version is not sent the update again and again', function (done) {
     open({ storage: on(true, false), lands: false }, function (p) {
         ticks(p, 6, function () { eq(pkgs(p), ['MoonPkg001', 'TubePkg001'], 'each update once, although the TV still lists the old versions'); done(); });
+    });
+});
+
+test('the older switch, left on: nothing by itself, and the new switch takes its place', function (done) {
+    var st = {}; st[SETTINGS] = { selfUpdate: true };
+    open({ storage: st }, function (p) {
+        ticks(p, 4, function () {
+            eq(pkgs(p), [], 'installs with only the older switch on');
+            p.press('gear');
+            p.settle(function () {
+                p.press('', { 'data-opt': 'autoUpdateSelf' });
+                p.settle(function () {
+                    eq([p.stored(SETTINGS).autoUpdateSelf, p.stored(SETTINGS).selfUpdate], [true, false], 'one switch is left to say it');
+                    done();
+                });
+            });
+        });
     });
 });
 

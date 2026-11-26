@@ -1,4 +1,4 @@
-/* TV-Store updating itself (#41, an experiment behind a Settings switch). 0.3.11 stopped offering
+/* TV-Store updating itself (#41, behind the Settings switch "Update TV-Store automatically"). 0.3.11 stopped offering
  * it on the theory that the installer stops every process of the package it replaces, including
  * the service that drives the install, so the install never lands. Apps2Samsung#1005 showed the
  * other side on a Tizen 5.0 set: an update of TV-Store through its own relay lost its connection
@@ -29,7 +29,7 @@ function isOwn(entry, pkg) {
 
 // Why an install of TV-Store's own package may not go ahead; null when it may.
 function refusal(entry) {
-    if (entry.selfUpdate !== true) return { code: 'SELF_UPDATE_OFF', message: 'TV-Store does not update itself unless "Update TV-Store automatically" or "Let TV-Store update itself" is on in Settings. Update it from Apps2Samsung on a phone or PC (On the TV, Update).' };
+    if (entry.selfUpdate !== true) return { code: 'SELF_UPDATE_OFF', message: 'TV-Store does not update itself unless "Update TV-Store automatically" is on in Settings. Update it from Apps2Samsung on a phone or PC (On the TV, Update).' };
     if (entry.replace) return { code: 'SELF_REPLACE', message: 'TV-Store cannot remove itself first and then install: nothing would be left running to install it. Update it from Apps2Samsung on a phone or PC.' };
     return null;
 }

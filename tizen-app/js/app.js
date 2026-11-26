@@ -268,8 +268,10 @@
     var SETTINGS_KEY = 'a2s.store.settings';
     var settings = (function () {
         // hideSelfNotice: the TV-Store version whose "vX is out" banner was dismissed (#43); the
-        // banner comes back for the next release. selfUpdate: the #41 experiment, off by default.
-        // autoUpdateApps, autoUpdateSelf: updates that install by themselves (#154), both off by default.
+        // banner comes back for the next release. autoUpdateApps, autoUpdateSelf: updates that
+        // install by themselves (#154), both off by default. selfUpdate: the #41 switch, which
+        // Settings no longer shows since autoUpdateSelf took its place. One that was on is kept
+        // (Update under On the TV still works for TV-Store) until autoUpdateSelf is set either way.
         var s = { showAdult: false, showNeedsHead: true, verboseLog: false, hideSelfNotice: '', selfUpdate: false, autoUpdateApps: false, autoUpdateSelf: false };
         try {
             var saved = JSON.parse(window.localStorage.getItem(SETTINGS_KEY) || '{}');
@@ -1387,14 +1389,14 @@
     // (#41). A head on a phone or PC is outside the package and updates it fine.
     function isSelf(x) { return !!x && x === self(); }
     var SELF_HOW = 'TV-Store cannot replace itself while it runs: the installer stops the service that drives the install. Update it from Apps2Samsung on a phone or PC (On the TV, Update).';
-    // The #41 experiment: with "Let TV-Store update itself" on, the service installs TV-Store's own
-    // package through sdbd and expects to be stopped by the installer on the way (Apps2Samsung#1005
-    // saw the install land anyway). Not for a copy a head installed under another package id: an
+    // With "Update TV-Store automatically" on (#154; before it the #41 switch "Let TV-Store update
+    // itself", still honoured where it was on), the service installs TV-Store's own package
+    // through sdbd and expects to be stopped by the installer on the way (Apps2Samsung#1005 saw
+    // the install land anyway). Not for a copy a head installed under another package id: an
     // install from here would land a second TV-Store. Never part of Update all, which it would end.
-    // "Update TV-Store automatically" (#154) goes the same way, so it allows it as well.
     function selfCan(x) { return isSelf(x) && (settings.selfUpdate || settings.autoUpdateSelf) && !selfRenamed(); }
     var SELF_AUTO = 'TV-Store is updating itself, because \u201cUpdate TV-Store automatically\u201d is on in Settings. It closes during the install; open it again after a minute and it says whether the update landed.';
-    var SELF_TRY = 'Experiment: TV-Store installs its own update. It closes during the install; open it again after a minute and it says whether the update landed.';
+    var SELF_TRY = 'TV-Store installs its own update. It closes during the install; open it again after a minute and it says whether the update landed.';
     // How the last self-update went, from the marker the service found at start: { mark, outcome }.
     var selfResult = null;
     function selfOutcome(mark) { return mark && mark.to && mark.to === VERSION ? 'landed' : mark && mark.from && mark.from === VERSION ? 'not-landed' : 'unknown'; }
@@ -2308,8 +2310,7 @@
             + opt('verboseLog', 'Verbose logging', 'Writes much more detail to the TV-Store log. Turn it on when a bug report asks for it, and off again afterwards.')
             + browserRow() + relayRow() + devicesRows() + installerRow()
             + opt('autoUpdateApps', 'Update apps automatically', 'Off: updates wait under On the TV until you press Update. On: while TV-Store is open it installs the updates for the apps on this TV by itself, one after another. An app that needs a phone or PC, or a choice from you, still waits there.')
-            + opt('autoUpdateSelf', 'Update TV-Store automatically', 'Off: TV-Store only says that a newer version is out. On: when TV-Store is open and a newer version is out, it installs it by itself. It closes during the install; open it again after a minute and it says whether the update landed.')
-            + opt('selfUpdate', 'Let TV-Store update itself (experiment)', 'Off: update TV-Store from Apps2Samsung on a phone or PC. On: TV-Store offers its own update under On the TV. It closes during the install; open it again after a minute and it says whether the update landed.') + '</div>' + browserNotice() + relayNotice() + installerNotice();
+            + opt('autoUpdateSelf', 'Update TV-Store automatically', 'Off: TV-Store only says that a newer version is out; update it from Apps2Samsung on a phone or PC. On: when TV-Store is open and a newer version is out, it installs it by itself. It closes during the install; open it again after a minute and it says whether the update landed.') + '</div>' + browserNotice() + relayNotice() + installerNotice();
         if (confirmingAdult) h += '<div class="notice">These apps are meant for adults only. Turn them on only if you are 18 or older.</div>'
             + '<div class="btns" style="margin-top:16px"><button class="btn primary grow f" data-k="adultyes" data-act="adultyes" data-default>I am 18 or older</button><button class="btn f" data-k="adultno" data-act="adultno">Cancel</button></div>';
         var certList = (ready && ready.certificates ? ready.certificates.map(function (c) { return c.name + (c.level === 'partner' || c.level === 'public' ? ' (' + levelName(c.level) + ')' : ''); }) : (ready && ready.certNames) || []);
@@ -2698,7 +2699,9 @@
         setSetting(key, !settings[key]);
     }
     function setSetting(key, value) {
-        settings[key] = value; saveSettings(); confirmingAdult = false;
+        settings[key] = value;
+        if (key === 'autoUpdateSelf') settings.selfUpdate = false;
+        saveSettings(); confirmingAdult = false;
         if (key === 'verboseLog') syncVerbose();
         apps = visible(catalogApps);
         renderPage(); renderSheet(); focusKey('opt:' + key);
