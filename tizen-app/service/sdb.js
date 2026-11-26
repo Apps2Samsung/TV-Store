@@ -125,9 +125,17 @@ SdbClient.prototype.close = function (ch) { try { this._send(CMD.CLSE, ch.localI
 SdbClient.prototype.end = function () { try { this._sock.destroy(); } catch (e) {} };
 
 // shell:<command>: collect all output, then callback.
-SdbClient.prototype.shell = function (command, cb) {
-    var out = [], finished = false;
-    function fin(err) { if (finished) return; finished = true; cb(err, Buffer.concat(out).toString('utf8')); }
+// timeoutMs (optional): how long the whole answer may take. sdbd ends a shell by closing its
+// stream, and one that never does (no answer at all, or an answer without an end) left the caller
+// waiting for good, with the connection open. After the time the callback gets an error with code
+// SDB_TIMEOUT and what came until then; the caller ends the connection.
+SdbClient.prototype.shell = function (command, cb, timeoutMs) {
+    var out = [], finished = false, timer = null;
+    function fin(err) { if (finished) return; finished = true; if (timer) clearTimeout(timer); cb(err, Buffer.concat(out).toString('utf8')); }
+    if (timeoutMs > 0) timer = setTimeout(function () {
+        var e = new Error('the TV did not finish its answer to "' + command + '" within ' + Math.round(timeoutMs / 1000) + ' s');
+        e.code = 'SDB_TIMEOUT'; fin(e);
+    }, timeoutMs);
     this.open('shell:' + command + '\u0000', {
         onData: function (d) { out.push(d); },
         onClose: function (err) { fin(err || null); },

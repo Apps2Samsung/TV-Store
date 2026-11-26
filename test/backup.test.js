@@ -24,7 +24,7 @@ var B = { name: 'Phone', authorKeyPem: pem('distributor.key'), authorCertPem: pe
 var idA = certs.fingerprint(A.authorCertPem), idB = certs.fingerprint(B.authorCertPem);
 var FP = new Array(65).join('ab').slice(0, 64);
 var SOURCE = { url: 'https://example.org/tizen/repository.json.signed', repositoryId: 'org.example.tizen', fingerprint: FP, name: 'Example', maintainer: 'Someone', enabled: false, addedAt: '2026-11-01T10:00:00.000Z', lastGeneratedAt: '2026-11-20T10:00:00.000Z' };
-var PAGE = { settings: { showAdult: true, showNeedsHead: false, verboseLog: false, selfUpdate: true, hideSelfNotice: '0.3.40', junk: 1 },
+var PAGE = { settings: { showAdult: true, showNeedsHead: false, verboseLog: false, selfUpdate: true, autoUpdateApps: true, autoUpdateSelf: 'yes', hideSelfNotice: '0.3.40', junk: 1 },
              pins: [{ key: 'official:moonfin', file: 'Moonfin.wgt' }, { key: '', file: 'x' }, 'nope'], certChoice: { MoonPkg001: 'partner', OtherPkg01: 'root' },
              movedSeen: ['https://example.org/moved'], variants: { MoonPkg001: 'Moonfin.wgt', GonePkg001: 'Gone.wgt' }, webVersions: { JellyPkg01: { key: 'official:jellyfin', file: 'Jellyfin.wgt', web: '10.9.0' } } };
 
@@ -41,7 +41,7 @@ var read = backup.parse(JSON.stringify(made));
 if (read.error) fail('a backup must read back: ' + read.error);
 var b = read.backup;
 if (b.tv !== 'QE55Q60' || b.duid !== 'ABCDEFGH1234' || b.tvStore !== '0.3.40') fail('where a backup was made: ' + JSON.stringify([b.tv, b.duid, b.tvStore]));
-if (JSON.stringify(b.page.settings) !== JSON.stringify({ showAdult: true, showNeedsHead: false, verboseLog: false, selfUpdate: true, hideSelfNotice: '0.3.40' })) fail('settings: ' + JSON.stringify(b.page.settings));
+if (JSON.stringify(b.page.settings) !== JSON.stringify({ showAdult: true, showNeedsHead: false, verboseLog: false, selfUpdate: true, autoUpdateApps: true, hideSelfNotice: '0.3.40' })) fail('settings: ' + JSON.stringify(b.page.settings));
 if (b.page.pins.length !== 1 || b.page.pins[0].file !== 'Moonfin.wgt') fail('pins: only the whole ones: ' + JSON.stringify(b.page.pins));
 if (JSON.stringify(b.page.certChoice) !== '{"MoonPkg001":"partner"}') fail('certChoice: only public or partner: ' + JSON.stringify(b.page.certChoice));
 if (b.page.webVersions.JellyPkg01.web !== '10.9.0' || b.page.variants.GonePkg001 !== 'Gone.wgt' || b.page.movedSeen.length !== 1) fail('the rest of the page part: ' + JSON.stringify(b.page));

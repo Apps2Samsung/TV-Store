@@ -148,7 +148,10 @@
   .card.dim .badge{opacity:.5}
   .card.dim .tile:after{content:"";position:absolute;left:0;top:0;right:0;bottom:0;background:rgba(13,27,42,.5);border-radius:inherit}
   .card.dim:focus{color:#F4F7FB}.card.dim:focus .mt{color:#9FB0C6}.card.dim:focus .badge{opacity:1}.card.dim:focus .tile:after{display:none}
-  .card:focus{background:rgba(244,247,251,.14);box-shadow:inset 0 0 0 4px #2DD4BF,0 16px 40px rgba(0,0,0,.35);transform:scale(1.05);opacity:1}
+  /* No soft shadow under the card with the focus (#126): a Tizen 6 TV drew its 40 px of blur as
+     bands around the card, like the sheet's shadow before it. The ring, the lighter fill and the
+     size say where the remote is. */
+  .card:focus{background:rgba(244,247,251,.14);box-shadow:inset 0 0 0 4px #2DD4BF;transform:scale(1.05);opacity:1}
   .card .nm{font-size:21px;font-weight:600;line-height:1.25;margin-top:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .card .mt{font-size:16px;color:#9FB0C6;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .card .badges{margin-top:auto;flex-wrap:nowrap;overflow:hidden}
@@ -234,7 +237,7 @@
   .notice.info{background:rgba(244,247,251,.06);color:#9FB0C6}
   .notice.bad{background:rgba(255,107,94,.14);color:#FF6B5E}
   /* a toast at the bottom: an install a phone or PC asked for (#101) */
-  #toast{position:fixed;left:50%;bottom:48px;transform:translateX(-50%);max-width:1200px;padding:18px 28px;border-radius:16px;background:#F4F7FB;color:#0D1B2A;font-size:22px;font-weight:700;box-shadow:0 10px 40px rgba(0,0,0,.5);z-index:50;display:none}
+  #toast{position:fixed;left:50%;bottom:48px;transform:translateX(-50%);max-width:1200px;padding:18px 28px;border-radius:16px;background:#F4F7FB;color:#0D1B2A;font-size:22px;font-weight:700;z-index:50;display:none}
   #toast.on{display:block}
   .notice.row{display:flex;align-items:center}
   .notice.row>span{flex:1}

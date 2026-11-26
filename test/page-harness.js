@@ -15,7 +15,8 @@ function page(opts) {
     // An element that takes whatever the page does to it.
     function el() {
         var e = { style: {}, className: '', innerHTML: '', textContent: '', value: '', children: [], scrollTop: 0, scrollLeft: 0, offsetWidth: 0, offsetHeight: 0 };
-        ['addEventListener', 'removeEventListener', 'appendChild', 'removeChild', 'focus', 'blur', 'setAttribute', 'scrollIntoView'].forEach(function (n) { e[n] = function () {}; });
+        ['removeEventListener', 'appendChild', 'removeChild', 'focus', 'blur', 'setAttribute', 'scrollIntoView'].forEach(function (n) { e[n] = function () {}; });
+        e.on = {}; e.addEventListener = function (type, f) { e.on[type] = f; };
         e.getAttribute = function () { return null; };
         e.querySelector = function () { return null; };
         e.querySelectorAll = function () { return []; };
@@ -87,6 +88,8 @@ function page(opts) {
         // Lets the page's requests and timeouts run out, then calls back.
         settle: function (cb) { var n = 0; (function turn() { if (++n > 40) return cb(); setTimeout(turn, 1); })(); },
         tick: function (cb) { intervals.forEach(function (f) { f(); }); api.settle(cb); },
+        // The tick without waiting for what it started: for a press while a request is still out.
+        tickNow: function () { intervals.forEach(function (f) { f(); }); },
         // The picture the page last posted, one app of it by key.
         app: function (key) {
             if (!posts.length) fail('the page posted no picture of the store');
@@ -101,6 +104,9 @@ function page(opts) {
             t.getAttribute = function (k) { return attrs && attrs.hasOwnProperty(k) ? attrs[k] : null; };
             listeners.click({ target: t });
         },
+        // What the remote's keyboard does to the search box, and one key of the remote.
+        type: function (text) { var s = doc.getElementById('search'); s.value = text; if (s.on.input) s.on.input(); },
+        key: function (code) { listeners.keydown({ keyCode: code, preventDefault: function () {} }); },
         html: function (id) { return els[id] ? els[id].innerHTML : ''; },
         stored: function (k) { return store.hasOwnProperty(k) ? JSON.parse(store[k]) : null; },
         installs: installs, uninstalls: uninstalls, acks: acks, reloads: reloads, window: win,

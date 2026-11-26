@@ -1020,11 +1020,12 @@ var SDB_ACTIVE = 0;            // TV-Store's own developer connections open now 
 function learnDuid(c, done) {
     if (DUID) return done();
     c.shell('0 getduid', function (err, out) {
+        // Cut short after DUID_WAIT: a set that does not answer this must not hold up what the connection is for.
         var m = err ? null : /(?:^|\n)\s*([A-Za-z0-9]{6,40})\s*(?:\r?\n|$)/.exec(String(out || ''));
         if (m) { DUID = m[1]; log('duid: this TV is ' + DUID + ' (from sdbd)'); try { if (DUID_FILE) fs.writeFileSync(DUID_FILE, DUID); } catch (e) {} }
         else logv('duid: sdbd did not give one (' + (err ? err.message : String(out || '').replace(/\s+/g, ' ').slice(0, 80)) + ')');
         done();
-    });
+    }, DUID_WAIT);
 }
 function tunnelPort() { var s = relay.status(); return s.listening && s.port === TUNNEL_PORT ? 0 : TUNNEL_PORT; }
 function sdbHosts() { return sdbhosts.targets(ownIp(), SDB_WORKED, SDB_PORT, tunnelPort()); }
@@ -1571,16 +1572,22 @@ function levelName(l) { return l === 'partner' ? 'Partner' : 'Public'; }
 // of the answer differ from set to set. An app the TV lists as its own (is_removable 0) is tried
 // like any other when the person at the TV asks for it; the TV has the last word.
 function shortReply(out) { return String(out || '').replace(/\s+/g, ' ').trim().slice(0, 200); }
+// A TV that does not finish its answer is given up on after LIST_WAIT (#126). Without that the
+// request never ended and its connection stayed open: every later one was then told that an
+// install was running, until TV-Store was started again, and sdbd (one client at a time) was held.
+// A2S_LIST_WAIT (ms) shortens the first for the tests.
+var LIST_WAIT = parseInt(process.env.A2S_LIST_WAIT, 10) > 0 ? parseInt(process.env.A2S_LIST_WAIT, 10) : 20000, UNINSTALL_WAIT = 60000, DUID_WAIT = 10000;
 function readTvApps(c, cb) {
     c.shell('0 vd_applist', function (err, out) {
+        if (err && err.code === 'SDB_TIMEOUT') return cb(coded('NO_LISTING', 'The TV did not answer when asked for its apps (waited ' + Math.round(LIST_WAIT / 1000) + ' s). Try again; if it keeps happening, restart the TV.'));
         if (err) return cb(err);
         if (!tvapps.isListing(out)) return cb(coded('NO_LISTING', 'The TV did not list its apps' + (shortReply(out) ? ' (it answered: ' + shortReply(out) + ')' : '') + '.'));
         cb(null, tvapps.parse(out));
-    });
+    }, LIST_WAIT);
 }
 // sdbd takes one connection at a time: while TV-Store installs, a second one is dropped the way a
 // wrong Host PC IP is, and the advice for that would be wrong.
-function sdbBusy() { return SDB_ACTIVE > 0 ? coded('BUSY', 'TV-Store is using the TV\u2019s developer connection right now (an install is running). Try again when it is done.') : null; }
+function sdbBusy() { return SDB_ACTIVE > 0 ? coded('BUSY', 'TV-Store is using the TV\u2019s developer connection right now (it is installing, removing or listing apps). Try again when it is done.') : null; }
 function listTvApps(cb) {
     var busy = sdbBusy();
     if (busy) return cb(busy);
@@ -1621,7 +1628,7 @@ function uninstall(b, cb) {
                     if (!app.removable) return cb(coded('TV_OWN_APP', 'The TV did not remove ' + name + '. It lists the app as one of its own, and those it keeps' + (said ? ' (it answered: ' + shortReply(said) + ')' : '') + '.'));
                     cb(coded('UNINSTALL_FAILED', 'The TV did not remove ' + name + (said ? '. It answered: ' + shortReply(said) : ', and gave no reason') + '.'));
                 });
-            });
+            }, UNINSTALL_WAIT);
         });
     });
 }
