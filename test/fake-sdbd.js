@@ -51,7 +51,9 @@ function start(port, opts, onReady) {
                 send(CMD.OKAY, remoteId, clientId);
                 if (service.indexOf('shell:') === 0) {
                     var cmd = service.slice(6);
-                    var reply = (opts.shell && opts.shell(cmd)) || ('ok: ' + cmd + '\n');
+                    var said = opts.shell && opts.shell(cmd);
+                    if (said === false) return;   // a TV that never answers this one: the stream stays open
+                    var reply = said || ('ok: ' + cmd + '\n');
                     send(CMD.WRTE, remoteId, clientId, Buf.from(reply));
                     // client will OKAY; then we close
                     chans[remoteId].closeAfterOkay = true;

@@ -121,7 +121,7 @@ function pagePart(p) {
     if (!isObj(p)) return out;
     if (isObj(p.settings)) {
         out.settings = {};
-        ['showAdult', 'showNeedsHead', 'verboseLog', 'selfUpdate'].forEach(function (k) { if (typeof p.settings[k] === 'boolean') out.settings[k] = p.settings[k]; });
+        ['showAdult', 'showNeedsHead', 'verboseLog', 'selfUpdate', 'autoUpdateApps', 'autoUpdateSelf'].forEach(function (k) { if (typeof p.settings[k] === 'boolean') out.settings[k] = p.settings[k]; });
         if (typeof p.settings.hideSelfNotice === 'string') out.settings.hideSelfNotice = p.settings.hideSelfNotice.slice(0, 20);
     }
     if (Array.isArray(p.pins)) {

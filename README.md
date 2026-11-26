@@ -541,9 +541,32 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
   say so up front and read the version from the TV afterwards instead of reporting a failure.
 - **Back up or restore**: TV-Store's own data as one file on a phone or PC, for after a reset or a
   firmware update (#146). See [Backup and restore](#backup-and-restore).
-- **Let TV-Store update itself (experiment)**: off by default (#41). Off, TV-Store sends you to
+- **Update apps automatically**: off by default (#154). On, TV-Store installs the updates for the
+  apps on this TV by itself while it is open: what **Update all** would install, one app after
+  another, without a sheet. The header says what is installing and a line at the bottom of the
+  screen says how it went. It looks for as long as TV-Store is open (the catalog is read again
+  every ten minutes), and starts only when the screen is free: no sheet open, nothing installing,
+  nobody typing. Nothing runs while TV-Store is closed. An app that needs a phone or PC, a
+  certificate level the TV does not hold, its settings filled in, or a build picked by hand is
+  left alone and keeps its **Update** under On the TV. A version is tried by itself once per start
+  of TV-Store and three times in all (written down in `localStorage` under
+  `a2s.tvstore.autotried`): an update that keeps failing is not tried again at every start, and a
+  version that was installed is not tried again at all, so an app whose package says an older
+  version than the catalog does is not installed without end. What did not land waits under On
+  the TV, where **Update** still works and says why, until the catalog has a newer version.
+  **Update** and **Update all** pressed while such an update runs are lined up behind it.
+- **Update TV-Store automatically**: off by default (#154). On, TV-Store installs its own update
+  by itself when it is open and the catalog has a newer version: with its sheet, because TV-Store
+  closes during the install. Open it again
+  after a minute and it says whether the update landed. It goes before the apps' updates, which
+  follow when TV-Store is open again, and it waits until the remote has rested for half a minute
+  (right away when TV-Store was just opened). Once per version. Not for a copy
+  Apps2Samsung installed under another package id. Off, TV-Store sends you to
   Apps2Samsung on a phone or PC to update it, as since 0.3.11. On, a newer TV-Store in the catalog
-  gets an **Update** button under On the TV like any other app. 0.3.11 dropped this on the theory
+  also has an **Update** button under On the TV like any other app. This switch took the place of
+  **Let TV-Store update itself (experiment)** (#41, 0.3.21), which only gave that button; a TV
+  where that one was on keeps the button, and nothing installs by itself there until this switch
+  is turned on. 0.3.11 dropped updating itself on the theory
   that the installer stops the service driving the install so the update never lands, but nobody
   saw where it stopped (the log then lived in memory), and Apps2Samsung#1005 showed `sdbd`
   finishing an update of TV-Store after the service that sent it was stopped. The service installs
@@ -596,6 +619,10 @@ The header counts what the switches hide ("12 apps · 3 hidden").
   clears the search.
 - The search box also matches the developer's name, and "by *developer*" in the app sheet is a
   link: OK shows every app by them (as Apps2Samsung does on the phone and PC).
+- The search box searches the page it stands above (#126). On the store that is the catalog.
+  Under **On the TV** it narrows the list down to the apps on the TV that match: the catalog's by
+  name, description or developer, the removed ones by name, the others by name or id. Back clears
+  the search and shows every app again; the next Back goes to the store.
 - On the TV page, **▶** from an app in the list goes to its panel on the right (Details or
   Update, Open) and **◀** comes back to the list.
 
@@ -605,8 +632,16 @@ The header counts what the switches hide ("12 apps · 3 hidden").
 come **Other apps** (installed from Samsung's own store, from a phone or PC, or with a file) and
 **Built into the TV**. The list is the TV's own, read over its developer connection
 (`0 vd_applist`), so it needs what an install through `sdbd` needs: Developer Mode on, Host PC IP
-at the TV's own address or `127.0.0.1`. Without it the catalog's apps still show and a note says
-why the rest does not.
+at the TV's own address or `127.0.0.1`. Without it the catalog's apps still show and a note above
+the list says why the rest does not. A TV that does not finish its answer is given up on after
+20 seconds (`NO_LISTING`), and the connection is let go; before 0.3.44 such a request never
+ended and every later one was told that an install was running, until TV-Store was started again.
+
+The apps that are not in the catalog show the icon they have on the TV. Those icons are as large
+as their developer made them, so the page draws each one once on a canvas of at most 192 px and
+shows that copy; with the originals the list stuttered on a Tizen 6 set. Where the browser cannot
+do that, the icon shows as it is, and an app whose icon the TV does not hand over keeps its
+letter.
 
 Every app has **Uninstall** in its panel, except TV-Store itself (remove that from the TV's Apps
 menu). It asks first, with Cancel under the remote, and says what goes: the app and everything it
@@ -794,6 +829,9 @@ node test/pkgid.test.js     # another app's package id (#84): the derived id aga
 node test/web-version.test.js  # Jellyfin on the catalog's web_version (#124), on the real page script: update, not known, Update all, the record
 node test/rename.test.js    # a fork installed beside the app whose id it kept, its update on that copy, a .tpk refused until Replace, an older page as before
 node test/store-keep.test.js    # the store page is built once and kept: a sheet that closes and the 3 s tick leave it as it is (#126)
+node test/tv-page.test.js       # On the TV on the real page script: the search box narrows the TV's apps down and stays there, the note about an unread list stands above the list (#126)
+node test/tvapps-hang.test.js   # a TV that never answers the app listing: NO_LISTING after the wait, and the next request works (#126)
+node test/auto-update.test.js   # updates that install by themselves (#154): off by default, one app per tick without a sheet, once per version, TV-Store's own first
 ```
 
 Install the `.wgt` with Apps2Samsung like any package. A `vX.Y.Z` tag (matching the version in
@@ -832,7 +870,7 @@ Only when that start fails too does the page say "The TV-Store service stopped".
 | Independent repositories (#82) | built (0.3.21): verified per source against the spec's test vectors, sources from Apps2Samsung confirmed on the TV, every app labelled with its source, updates only from it; proven against local HTTPS stand-ins and a fake `sdbd`. Waits for Apps2Samsung's **Send sources to TV** (Apps2Samsung#1018) and a real repository for the test on a TV |
 | A fork that kept another app's package id (#84) | built (0.3.22): a `.wgt` goes on beside the other app under the id derived from its catalog entry (the scheme of Apps2Samsung#1028), a `.tpk` asks before replacing; proven against local HTTPS stand-ins and a fake `sdbd`, untested on a TV |
 | Apps removed from the community catalog (#87) | built (0.3.23): an installed copy that no catalog app claims gets a row under "Removed from the catalog" on the On the TV page with the reason, and search answers with "No longer in the catalog"; matched by the entry's own package ids (with its app ids or name) and by the rename id of each file; waits on Apps2Samsung carrying `catalog.removed` into `resolved.json`; untested on a TV |
-| TV-Store updating itself (#41) | dropped in 0.3.11; back as an experiment behind a Settings switch, off by default, through `sdbd` with a marker that tells the next start whether it landed (0.3.21). Apps2Samsung#1005 saw an update of TV-Store land on a Tizen 5.0 set after the service that sent it was stopped; untested from the TV itself, Tizen 9 above all |
+| TV-Store updating itself (#41) | dropped in 0.3.11; back behind a Settings switch, off by default, through `sdbd` with a marker that tells the next start whether it landed (0.3.21). Apps2Samsung#1005 saw an update of TV-Store land on a Tizen 5.0 set after the service that sent it was stopped; untested from the TV itself, Tizen 9 above all |
 | The store in a phone or PC browser (#101) | built (0.3.28): browse and install at `http://<TV>:8077/`, the TV screen does the install; apps with settings get a form there. Proven on a 2019 Tizen 5.0 set, a settings install included |
 | Open TV-Store on an app, Vetro in the Pinned row (#102) | built (0.3.28): the app control data key `app` proven on a 2019 Tizen 5.0 set; Vetro's own entry to TV-Store is Vetro's to build |
 | The relay on by default when Host PC IP is `127.0.0.1` | built (0.3.28), proven on a 2019 Tizen 5.0 set |

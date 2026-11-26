@@ -268,8 +268,11 @@
     var SETTINGS_KEY = 'a2s.store.settings';
     var settings = (function () {
         // hideSelfNotice: the TV-Store version whose "vX is out" banner was dismissed (#43); the
-        // banner comes back for the next release. selfUpdate: the #41 experiment, off by default.
-        var s = { showAdult: false, showNeedsHead: true, verboseLog: false, hideSelfNotice: '', selfUpdate: false };
+        // banner comes back for the next release. autoUpdateApps, autoUpdateSelf: updates that
+        // install by themselves (#154), both off by default. selfUpdate: the #41 switch, which
+        // Settings no longer shows since autoUpdateSelf took its place. One that was on is kept
+        // (Update under On the TV still works for TV-Store) until autoUpdateSelf is set either way.
+        var s = { showAdult: false, showNeedsHead: true, verboseLog: false, hideSelfNotice: '', selfUpdate: false, autoUpdateApps: false, autoUpdateSelf: false };
         try {
             var saved = JSON.parse(window.localStorage.getItem(SETTINGS_KEY) || '{}');
             if (typeof saved.showAdult === 'boolean') s.showAdult = saved.showAdult;
@@ -277,6 +280,8 @@
             if (typeof saved.verboseLog === 'boolean') s.verboseLog = saved.verboseLog;
             if (typeof saved.hideSelfNotice === 'string') s.hideSelfNotice = saved.hideSelfNotice;
             if (typeof saved.selfUpdate === 'boolean') s.selfUpdate = saved.selfUpdate;
+            if (typeof saved.autoUpdateApps === 'boolean') s.autoUpdateApps = saved.autoUpdateApps;
+            if (typeof saved.autoUpdateSelf === 'boolean') s.autoUpdateSelf = saved.autoUpdateSelf;
         } catch (e) {}
         return s;
     })();
@@ -913,6 +918,7 @@
                     var ip = infos[i].id ? fileUrl(infos[i].iconPath) : '';
                     if (ip) tvIcons[infos[i].id] = ip;
                 }
+                queueThumbs();
                 cb(map);
             }, function () { cb({}); });
         } catch (e) { cb({}); }
@@ -1383,12 +1389,14 @@
     // (#41). A head on a phone or PC is outside the package and updates it fine.
     function isSelf(x) { return !!x && x === self(); }
     var SELF_HOW = 'TV-Store cannot replace itself while it runs: the installer stops the service that drives the install. Update it from Apps2Samsung on a phone or PC (On the TV, Update).';
-    // The #41 experiment: with "Let TV-Store update itself" on, the service installs TV-Store's own
-    // package through sdbd and expects to be stopped by the installer on the way (Apps2Samsung#1005
-    // saw the install land anyway). Not for a copy a head installed under another package id: an
+    // With "Update TV-Store automatically" on (#154; before it the #41 switch "Let TV-Store update
+    // itself", still honoured where it was on), the service installs TV-Store's own package
+    // through sdbd and expects to be stopped by the installer on the way (Apps2Samsung#1005 saw
+    // the install land anyway). Not for a copy a head installed under another package id: an
     // install from here would land a second TV-Store. Never part of Update all, which it would end.
-    function selfCan(x) { return isSelf(x) && settings.selfUpdate && !selfRenamed(); }
-    var SELF_TRY = 'Experiment: TV-Store installs its own update. It closes during the install; open it again after a minute and it says whether the update landed.';
+    function selfCan(x) { return isSelf(x) && (settings.selfUpdate || settings.autoUpdateSelf) && !selfRenamed(); }
+    var SELF_AUTO = 'TV-Store is updating itself, because \u201cUpdate TV-Store automatically\u201d is on in Settings. It closes during the install; open it again after a minute and it says whether the update landed.';
+    var SELF_TRY = 'TV-Store installs its own update. It closes during the install; open it again after a minute and it says whether the update landed.';
     // How the last self-update went, from the marker the service found at start: { mark, outcome }.
     var selfResult = null;
     function selfOutcome(mark) { return mark && mark.to && mark.to === VERSION ? 'landed' : mark && mark.from && mark.from === VERSION ? 'not-landed' : 'unknown'; }
@@ -1454,8 +1462,80 @@
     // The icon the TV itself has for the app: by the application id of any of its builds.
     function tvIconOf(x) {
         var ids = x.other ? [x.id] : x.gone ? [x.appId] : (x.variants || []).map(tvAppId);
-        for (var i = 0; i < ids.length; i++) if (ids[i] && tvIcons.hasOwnProperty(ids[i])) return tvIcons[ids[i]];
+        for (var i = 0; i < ids.length; i++) if (ids[i] && tvIcons.hasOwnProperty(ids[i])) return thumbOf(tvIcons[ids[i]]);
         return '';
+    }
+    // A small copy of each of the TV's own icons (#126). An app's icon on the TV is as large as its
+    // developer made it, and the list under On the TV shows dozens of them at 66 px: the TV decoded
+    // and scaled every one of them again while the list moved, and moving through the apps that are
+    // not in the catalog stuttered. Each icon is drawn once on a canvas of at most THUMB px and kept
+    // as a blob: address; the page shows that copy from then on. One at a time, and only while the
+    // remote rests, so making them holds nothing up. Where the browser cannot do this (no toBlob
+    // before Tizen 4, or a canvas it will not let the page read back) the icon shows as it is.
+    var THUMB = 192;
+    var tvThumbs = {};         // file: address -> blob: address of its small copy, or '' when it shows as it is
+    var thumbQueue = [], thumbBusy = false, thumbNow = '', thumbAgain = false;   // thumbNow: the one being made; thumbAgain: its icon changed meanwhile
+    var thumbsWork = (function () {
+        try { var c = document.createElement('canvas'); return typeof Image === 'function' && !!c.getContext && typeof c.toBlob === 'function' && !!window.URL && typeof window.URL.createObjectURL === 'function'; }
+        catch (e) { return false; }
+    })();
+    function thumbOf(file) {
+        if (!thumbsWork) return file;
+        if (tvThumbs.hasOwnProperty(file)) return tvThumbs[file] || file;
+        if (file === thumbNow) return file;
+        // Asked for by a page: before the ones nothing shows yet.
+        var at = thumbQueue.indexOf(file);
+        if (at > 0) thumbQueue.splice(at, 1);
+        if (at !== 0) thumbQueue.unshift(file);
+        return file;
+    }
+    function queueThumbs() {
+        if (!thumbsWork) return;
+        for (var id in tvIcons) if (tvIcons.hasOwnProperty(id) && !tvThumbs.hasOwnProperty(tvIcons[id]) && tvIcons[id] !== thumbNow && thumbQueue.indexOf(tvIcons[id]) < 0) thumbQueue.push(tvIcons[id]);
+    }
+    // An app that was installed again may have a new icon at the same place.
+    function dropThumb(file) {
+        if (!file) return;
+        delete iconSeen[file];   // the image that kept the old icon loaded
+        if (file === thumbNow) thumbAgain = true;
+        if (!tvThumbs.hasOwnProperty(file)) return;
+        if (tvThumbs[file]) { delete iconSeen[tvThumbs[file]]; try { window.URL.revokeObjectURL(tvThumbs[file]); } catch (e) {} }
+        delete tvThumbs[file];
+    }
+    function nextThumb() {
+        if (thumbBusy || !thumbQueue.length || Date.now() - lastKey < 1500 || (job && job.running)) return;
+        var file = thumbQueue.shift(), img = new Image();
+        function done(address) {
+            thumbBusy = false; thumbNow = '';
+            if (thumbAgain) {   // made from the icon as it was: once more, from the new one
+                thumbAgain = false;
+                if (address) { delete iconSeen[address]; try { window.URL.revokeObjectURL(address); } catch (e) {} }
+                thumbQueue.unshift(file); return;
+            }
+            tvThumbs[file] = address || '';
+            // The large original need not stay loaded once its small copy is there.
+            if (address) delete iconSeen[file];
+        }
+        thumbBusy = true; thumbNow = file;
+        img.onerror = function () { done(''); };
+        img.onload = function () {
+            try {
+                var w = img.naturalWidth, h = img.naturalHeight, k = Math.min(1, THUMB / Math.max(w, h));
+                if (!(w > 0) || !(h > 0) || k === 1) return done('');
+                var c = document.createElement('canvas');
+                c.width = Math.max(1, Math.round(w * k)); c.height = Math.max(1, Math.round(h * k));
+                c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+                c.toBlob(function (blob) {
+                    if (!blob) return done('');
+                    // Loaded once here, so the page shows it from its first frame (see iconSeen).
+                    var address = window.URL.createObjectURL(blob), keep = new Image();
+                    keep.onload = function () { iconSeen[address] = keep; done(address); };
+                    keep.onerror = function () { done(''); };
+                    keep.src = address;
+                });
+            } catch (e) { done(''); }
+        };
+        img.src = file;
     }
     // An icon that loaded once is shown from the first frame wherever it comes back (#126). A tile
     // starts as its letter and turns into its icon when the image has loaded, which is a frame or
@@ -1463,17 +1543,23 @@
     // all, On the TV, and back) all icons blinked from letter to icon. The images that loaded are
     // remembered by address, and a tile that is added to the page with one of those is marked
     // before the browser draws it.
-    var iconSeen = {};
+    // Each of them is also held on to, as an image of its own that is in no page: after a couple of
+    // minutes on another page the browser had let the icons go, and going back drew every tile empty
+    // first and its icon a moment later. An image that something still holds stays loaded.
+    var iconSeen = {};         // address -> the image that keeps it loaded
     document.addEventListener('load', function (e) {
-        var t = e.target;
-        if (t && t.className === 'ic' && t.getAttribute) iconSeen[t.getAttribute('src')] = true;
+        var t = e.target, src = t && t.className === 'ic' && t.getAttribute ? t.getAttribute('src') : '';
+        if (!src || iconSeen.hasOwnProperty(src)) return;
+        var keep = true;
+        if (typeof Image === 'function') { keep = new Image(); keep.src = src; }
+        iconSeen[src] = keep;
     }, true);
     if (typeof MutationObserver === 'function') new MutationObserver(function (recs) {
         recs.forEach(function (r) {
             Array.prototype.forEach.call(r.addedNodes, function (n) {
                 if (n.nodeType !== 1) return;
                 Array.prototype.forEach.call(n.querySelectorAll('img.ic'), function (img) {
-                    if (iconSeen[img.getAttribute('src')] === true && img.parentNode) img.parentNode.classList.add('has');
+                    if (iconSeen.hasOwnProperty(img.getAttribute('src')) && img.parentNode) img.parentNode.classList.add('has');
                 });
             });
         });
@@ -1757,7 +1843,8 @@
     var tvAppsError = null;    // why it could not be read
     var tvAppsAt = 0, tvAppsAsking = false;
     function loadTvApps(force) {
-        if (tvAppsAsking || (!force && tvApps && Date.now() - tvAppsAt < 60000)) return;
+        // A list that was read is good for a minute; one that could not be read is asked for again.
+        if (tvAppsAsking || (!force && tvApps && !tvAppsError && Date.now() - tvAppsAt < 60000)) return;
         tvAppsAsking = true;
         xhr('GET', '/tvapps', null, function (err, res) {
             tvAppsAsking = false; tvAppsAt = Date.now();
@@ -1765,9 +1852,13 @@
             else { tvApps = res.apps; tvAppsError = null; }
             if (view !== 'tv' || sheet) return;
             var at = document.activeElement && document.activeElement.getAttribute('data-k');
-            renderPage(); focusKey(at) || focusFirst();
-        }, null, 30000);
+            renderPage();
+            if (document.activeElement !== searchEl) focusKey(at) || focusFirst();
+        }, null, 45000);
     }
+    // While TV-Store installs, the TV's developer connection is taken and the list cannot be read
+    // (the service answers BUSY). When the install is over, the page that said so asks again.
+    function tvAppsAgain() { if (view === 'tv' && tvAppsError) loadTvApps(true); }
     function sizeText(bytes) { return !(bytes > 0) ? '' : bytes < 1048576 ? Math.max(1, Math.round(bytes / 1024)) + ' KB' : bytes < 1073741824 ? (bytes / 1048576).toFixed(1) + ' MB' : (bytes / 1073741824).toFixed(1) + ' GB'; }
     // The package an app of the TV's list is in: `AbCdEfGhIj.App` is in `AbCdEfGhIj`, an app that
     // came with the TV (`org.tizen.netflix-app`) is its own.
@@ -1897,30 +1988,52 @@
             + (isPinned(x, st.variant) ? badge('b-pin', 'Pinned') : '') + (st.update ? badge('b-warn', 'Update') : st.unknown ? badge('b-mute', 'Version not known') : badge('b-ok', 'Up to date')) + CHEV + '</div>';
     }
 
+    // What the page lists besides the catalog's apps, as it was last built: focus() looks a row up
+    // in these. It asked for both lists again at every step of the remote, which goes through
+    // every app on the TV and every app in the catalog (#126: moving through the other apps lagged).
+    var tvGoneNow = [], tvOtherNow = [];
+    function tvRowOf(list, key) { for (var i = 0; i < list.length; i++) if (list[i].key === key) return list[i]; return null; }
     function renderTv() {
-        var all = onTv(), ups = all.filter(function (x) { return state(x).update; }), ok = all.filter(function (x) { return !state(x).update; });
-        var gone = goneOnTv(), other = otherOnTv(), mine = other.filter(function (o) { return o.removable; }), builtIn = other.filter(function (o) { return !o.removable; });
+        // The search box on this page searches this page (#126): the apps on the TV, by name (and
+        // by description or developer for the catalog's, by id for the others). It used to jump to
+        // the store and search the catalog.
+        var q = query.toLowerCase();
+        function has(text) { return String(text || '').toLowerCase().indexOf(q) >= 0; }
+        var every = onTv(), everyGone = goneOnTv(), everyOther = otherOnTv();
+        tvGoneNow = everyGone; tvOtherNow = everyOther;
+        var all = !q ? every : every.filter(function (x) { return has(x.name) || has(x.description) || has(x.author); });
+        var ups = all.filter(function (x) { return state(x).update; }), ok = all.filter(function (x) { return !state(x).update; });
+        var gone = !q ? everyGone : everyGone.filter(function (g) { return has(g.name); });
+        var other = !q ? everyOther : everyOther.filter(function (o) { return has(o.name) || has(o.id); });
+        var mine = other.filter(function (o) { return o.removable; }), builtIn = other.filter(function (o) { return !o.removable; });
         if (tvSel && tvSel.gone) tvSel = gone.filter(function (g) { return g.key === tvSel.key; })[0] || null;
         if (tvSel && tvSel.other) tvSel = other.filter(function (o) { return o.key === tvSel.key; })[0] || null;
         // TV-Store itself updates from a head (#41); an app that needs a certificate level this TV lacks waits too (#50).
         var doable = ups.filter(function (x) { var s = state(x), uv = x.variants[s.variant]; return !isSelf(x) && !signPlan(uv).missing && !settingsBlock(x, uv, s); });
-        if (!tvSel || (!tvSel.gone && !tvSel.other && all.indexOf(tvSel) < 0)) tvSel = ups[0] || ok[0] || gone[0] || other[0] || null;
-        var h = '<div class="tvtop"><div><h1>Your apps</h1><p>' + (all.length
-            ? all.length + (all.length === 1 ? ' catalog app is' : ' catalog apps are') + ' on this TV. ' + (ups.length ? (ups.length === 1 ? 'One has' : ups.length + ' have') + ' a newer version in the catalog.' : 'All up to date.')
-            : 'No apps from the catalog on this TV yet.') + (gone.length ? ' ' + (gone.length === 1 ? 'One app here was' : gone.length + ' apps here were') + ' removed from the catalog.' : '')
-            + (other.length ? ' ' + (other.length === 1 ? 'One other app is' : other.length + ' other apps are') + ' listed below.' : '') + '</p></div>';
-        if (doable.length && armed()) h += '<button class="btn primary f" data-k="updall" data-act="updall">' + (doable.length === 1 ? 'Update ' + esc(doable[0].name) : doable.length === 2 ? 'Update both' : 'Update all ' + doable.length) + '</button>';
+        if (!tvSel || (!tvSel.gone && !tvSel.other && all.indexOf(tvSel) < 0)) tvSel = ups[0] || ok[0] || gone[0] || mine[0] || builtIn[0] || null;
+        var found = all.length + gone.length + other.length;
+        var h = '<div class="tvtop"><div><h1>Your apps</h1><p>' + (q
+            ? esc(found ? found + (found === 1 ? ' app on this TV matches' : ' apps on this TV match') + ' \u201c' + query + '\u201d. RETURN shows them all again.' : 'Nothing on this TV matches \u201c' + query + '\u201d.')
+            : (all.length
+                ? all.length + (all.length === 1 ? ' catalog app is' : ' catalog apps are') + ' on this TV. ' + (ups.length ? (ups.length === 1 ? 'One has' : ups.length + ' have') + ' a newer version in the catalog.' : 'All up to date.')
+                : 'No apps from the catalog on this TV yet.') + (gone.length ? ' ' + (gone.length === 1 ? 'One app here was' : gone.length + ' apps here were') + ' removed from the catalog.' : '')
+              + (other.length ? ' ' + (other.length === 1 ? 'One other app is' : other.length + ' other apps are') + ' listed below.' : '')) + '</p></div>';
+        // Not while searching: Update all is about every update, not about the ones the search shows.
+        if (doable.length && armed() && !q) h += '<button class="btn primary f" data-k="updall" data-act="updall">' + (doable.length === 1 ? 'Update ' + esc(doable[0].name) : doable.length === 2 ? 'Update both' : 'Update all ' + doable.length) + '</button>';
         h += '</div>';
         // The TV's own list could not be read: the catalog's apps still show, from what the platform lists.
-        var listNote = tvAppsError ? '<div class="notice" style="margin:0 0 22px">' + esc('The TV\u2019s own list of apps could not be read, so the apps that are not in the catalog do not show here. ' + tvAppsError) + '</div>' : '';
-        if (!all.length && !gone.length && !other.length) { tvHtml = null; pageEl.innerHTML = h + listNote + '<div class="empty">Install something from the store and it shows up here, with its updates.</div>'; return; }
+        // Above the list (#126): at its end the note stood below the last app, where nothing takes
+        // the focus, so with more apps than fit it was cut off by the bottom of the screen and the
+        // reason at its end could not be read.
+        var listNote = tvAppsError ? '<div class="notice">' + esc('The TV\u2019s own list of apps could not be read, so the apps that are not in the catalog do not show here. ' + tvAppsError) + '</div>' : '';
+        h += listNote;
+        if (!found) { tvHtml = null; pageEl.innerHTML = h + '<div class="empty">' + (q ? 'RETURN shows every app on this TV again.' : 'Install something from the store and it shows up here, with its updates.') + '</div>'; return; }
         h += '<div class="tvcols"><div class="tvlist vscroll">';
         if (ups.length) h += '<div class="glabel warn">Updates<span class="n">' + ups.length + '</span></div><div class="group">' + ups.map(tvRow).join('') + '</div>';
         if (ok.length) h += '<div class="glabel">Up to date<span class="n">' + ok.length + '</span></div><div class="group">' + ok.map(tvRow).join('') + '</div>';
         if (gone.length) h += '<div class="glabel warn">Removed from the catalog<span class="n">' + gone.length + '</span></div><div class="group">' + gone.map(goneRow).join('') + '</div>';
         if (mine.length) h += '<div class="glabel">Other apps<span class="n">' + mine.length + '</span></div><div class="group">' + mine.map(otherRow).join('') + '</div>';
         if (builtIn.length) h += '<div class="glabel">Built into the TV<span class="n">' + builtIn.length + '</span></div><div class="group">' + builtIn.map(otherRow).join('') + '</div>';
-        h += listNote;
         var panel = tvPanel(tvSel);
         h += '</div><div class="tvpanel"><div class="glabel">Selected</div>' + PANEL + '</div></div>';
         // Nothing but the selected app's panel differs from what the page shows: the page stays as
@@ -2155,7 +2268,7 @@
             return '<div class="trow' + cls + '">' + ico + '<span style="flex:1">' + (i < done ? s[0] : s[1]) + '</span><span class="v">' + side + '</span></div>';
         }).join('') + '</div>';
         if (job.error) h += '<div class="notice bad">' + esc(job.error) + '</div>';
-        else if (isSelf(job.app)) h += '<div class="notice">' + esc(SELF_TRY) + '</div>';
+        else if (isSelf(job.app)) h += '<div class="notice">' + esc(job.auto ? SELF_AUTO : SELF_TRY) + '</div>';
         else h += '<div class="notice info">You can keep browsing with RETURN; the ' + (upd ? 'update' : 'install') + ' carries on in the background and the app shows up under On the TV when it is in.</div>';
         h += '<div class="sfoot"><div class="btns">';
         if (job.error && job.code === 'PACKAGE_ID_TAKEN' && !job.replaceOther) h += '<button class="btn f" data-k="close" data-act="close" data-default>Cancel</button><button class="btn danger f" data-k="replaceother" data-act="replaceother">Replace it</button>';
@@ -2196,7 +2309,8 @@
             + opt('showNeedsHead', 'Show apps that need a phone or PC', 'Some apps need Apps2Samsung on a phone or PC to install. Turn this off to keep them out of the store.')
             + opt('verboseLog', 'Verbose logging', 'Writes much more detail to the TV-Store log. Turn it on when a bug report asks for it, and off again afterwards.')
             + browserRow() + relayRow() + devicesRows() + installerRow()
-            + opt('selfUpdate', 'Let TV-Store update itself (experiment)', 'Off: update TV-Store from Apps2Samsung on a phone or PC. On: TV-Store offers its own update under On the TV. It closes during the install; open it again after a minute and it says whether the update landed.') + '</div>' + browserNotice() + relayNotice() + installerNotice();
+            + opt('autoUpdateApps', 'Update apps automatically', 'Off: updates wait under On the TV until you press Update. On: while TV-Store is open it installs the updates for the apps on this TV by itself, one after another. An app that needs a phone or PC, or a choice from you, still waits there.')
+            + opt('autoUpdateSelf', 'Update TV-Store automatically', 'Off: TV-Store only says that a newer version is out; update it from Apps2Samsung on a phone or PC. On: when TV-Store is open and a newer version is out, it installs it by itself. It closes during the install; open it again after a minute and it says whether the update landed.') + '</div>' + browserNotice() + relayNotice() + installerNotice();
         if (confirmingAdult) h += '<div class="notice">These apps are meant for adults only. Turn them on only if you are 18 or older.</div>'
             + '<div class="btns" style="margin-top:16px"><button class="btn primary grow f" data-k="adultyes" data-act="adultyes" data-default>I am 18 or older</button><button class="btn f" data-k="adultno" data-act="adultno">Cancel</button></div>';
         var certList = (ready && ready.certificates ? ready.certificates.map(function (c) { return c.name + (c.level === 'partner' || c.level === 'public' ? ' (' + levelName(c.level) + ')' : ''); }) : (ready && ready.certNames) || []);
@@ -2331,7 +2445,22 @@
     function ackBrowser(x, status, message) { var id = x && browserReq[x.key]; if (!id) return; delete browserReq[x.key]; ackRequest(id, status, message); }
     // The updates Update all installs: known builds, none that needs a phone or PC, not TV-Store itself.
     function updatable() { return updates().filter(function (x) { var st = state(x), v = x.variants[st.variant]; return st.known && !v.needsHead && !isSelf(x) && !signPlan(v).missing && !settingsBlock(x, v, st); }); }
-    function updateAll() { queue = updatable(); if (queue.length) { var first = queue.shift(); startInstall(first, state(first).variant); } }
+    // While something installs (an update that started by itself runs without a sheet, #154), what
+    // is asked for is lined up behind it, and the app that is installing is not installed twice.
+    function installing(x) { return !!(job && job.running && job.app === x); }
+    function updateAll() {
+        var list = updatable().filter(function (x) { return queue.indexOf(x) < 0 && !installing(x); });
+        if (job && job.running) { queue = queue.concat(list); if (list.length) toast((list.length === 1 ? list[0].name + ' is' : list.length + ' updates are') + ' installed after ' + job.app.name + '.'); return; }
+        queue = list;
+        if (queue.length) { var first = queue.shift(); startInstall(first, state(first).variant); }
+    }
+    function updateOne(x) {
+        if (!x) return;
+        if (!(job && job.running)) return startInstall(x, state(x).variant);
+        if (installing(x)) return toast(x.name + ' is being installed right now.');
+        if (queue.indexOf(x) < 0) queue.push(x);
+        toast(x.name + ' is installed after ' + job.app.name + '.');
+    }
     function takeRequest(r) {
         if (!r || !r.id || browserTaken[r.id]) return;
         browserTaken[r.id] = true;
@@ -2355,6 +2484,64 @@
         if (job && job.running) queue.push(x); else startInstall(x, pickVariant(x));
         pushStore();
     }
+    // ---- updates that install by themselves (#154) ---------------------------------------------------
+    // Two switches in Settings, both off until the user turns them on. "Update apps automatically":
+    // what Update all would install is installed without anybody pressing it, one app after another,
+    // without a sheet; a line at the bottom of the screen says what happened. "Update TV-Store
+    // automatically": TV-Store's own update, the #41 way, with its sheet, because TV-Store closes
+    // during it. That one goes first: it ends everything else, and the apps follow when TV-Store is
+    // open again.
+    // Only while TV-Store is open: nothing of it runs when it is closed. The 3 s tick looks, once the
+    // store is complete (the catalog and every source are in), and starts something only when the
+    // screen is free: no sheet open, nothing installing, nobody typing. Not while the TV's own list
+    // is being read either: the TV's developer connection takes one client at a time.
+    // A version is tried by itself once per start of TV-Store, and AUTO_TRIES times in all, written
+    // down when it starts: one that fails for good (another certificate, say) would fail again at
+    // every tick and every start, while one that failed because the download broke off deserves
+    // another go next time. A version that was installed is not tried again at all: an app whose
+    // package says an older version than the catalog does still has "an update" afterwards, which
+    // would install it again without end. TV-Store's own is tried once: it may not live to see how
+    // its update ends. What did not land waits under On the TV, where Update still works and shows
+    // why, until the catalog has a newer version.
+    var AUTO_TRIED_KEY = 'a2s.tvstore.autotried', AUTO_TRIES = 3;
+    var autoTried = (function () { try { var t = JSON.parse(window.localStorage.getItem(AUTO_TRIED_KEY)); return t && typeof t === 'object' && !Array.isArray(t) ? t : {}; } catch (e) { return {}; } })();   // app key -> { v: version, n: times tried by itself }
+    var autoNow = {};             // app key -> the version tried since TV-Store started
+    var AUTO_SELF_REST = 30000;   // TV-Store's own update waits until the remote has rested this long, or was never touched
+    var storeComplete = false;    // the catalog and the sources are in: only then is it known what has an update
+    function autoRecord(x, version) { var r = autoTried.hasOwnProperty(x.key) ? autoTried[x.key] : null; return r && typeof r === 'object' && r.v === (version || '') && r.n > 0 ? r : null; }
+    function autoSave() { try { window.localStorage.setItem(AUTO_TRIED_KEY, JSON.stringify(autoTried)); } catch (e) {} }
+    // times: how many tries this one counts for (all of them for TV-Store's own).
+    function autoMark(x, version, times) {
+        var r = autoRecord(x, version), n = (r ? r.n : 0) + (times || 1);
+        // What is not on the TV any more, or not in the catalog, need not be remembered.
+        Object.keys(autoTried).forEach(function (k) { var a = byKey(k); if (!a || !state(a).installed) delete autoTried[k]; });
+        autoTried[x.key] = { v: version || '', n: Math.min(n, AUTO_TRIES) };
+        autoNow[x.key] = version || '';
+        autoSave();
+    }
+    function autoDone(x, version) { autoTried[x.key] = { v: version || '', n: AUTO_TRIES }; autoSave(); }
+    function autoWaits(x, st) {
+        var v = st.latest || '', r = autoRecord(x, v);
+        return (autoNow.hasOwnProperty(x.key) && autoNow[x.key] === v) || !!(r && r.n >= AUTO_TRIES);
+    }
+    function autoUpdate() {
+        if (!settings.autoUpdateApps && !settings.autoUpdateSelf) return;
+        if (!storeComplete || loading || problem || reviving || !armed() || sheet || (job && job.running) || queue.length || catalogChanged || document.hidden || typing() || tvAppsAsking) return;
+        var me = self();
+        if (settings.autoUpdateSelf && me && selfCan(me)) {
+            var ms = state(me), mv = ms.installed ? me.variants[ms.variant] : null;
+            if (mv && ms.update && ms.known && !mv.needsHead && fits(mv) && !signPlan(mv).missing && !settingsBlock(me, mv, ms) && !autoWaits(me, ms)) {
+                if (lastKey && Date.now() - lastKey < AUTO_SELF_REST) return;   // the apps wait too: TV-Store's own goes first
+                autoMark(me, ms.latest, AUTO_TRIES);
+                startInstall(me, ms.variant, { auto: true });   // its sheet says that it started by itself
+                return;
+            }
+        }
+        if (!settings.autoUpdateApps) return;
+        var next = updatable().filter(function (x) { var st = state(x); return fits(x.variants[st.variant]) && !autoWaits(x, st); })[0];
+        if (next) { var ns = state(next); autoMark(next, ns.latest); startInstall(next, ns.variant, { auto: true, quiet: true }); }
+    }
+
     var toastTimer = null;
     function toast(text) {
         var t = $('toast');
@@ -2386,8 +2573,10 @@
     function startInstall(x, vIdx, opts) {
         if ((job && job.running) || (isSelf(x) && !selfCan(x))) return;
         var v = x.variants[vIdx], st = state(x), replace = !!(opts && opts.replace);
-        job = { app: x, v: v, vIdx: vIdx, update: st.installed && st.known && st.variant === vIdx, replace: replace, running: true, finished: false, ok: false, step: 0, bytes: 0, line: '', error: null, code: null, started: Date.now(), plan: signPlan(v), certificate: '', level: '' };
-        if (sheet) { sheet = { mode: 'job' }; renderSheet(true); } else openSheet({ mode: 'job' });
+        job = { app: x, v: v, vIdx: vIdx, update: st.installed && st.known && st.variant === vIdx, replace: replace, running: true, finished: false, ok: false, step: 0, bytes: 0, line: '', error: null, code: null, started: Date.now(), plan: signPlan(v), certificate: '', level: '',
+                auto: !!(opts && opts.auto), quiet: !!(opts && opts.quiet), latest: st.latest || v.version || '' };
+        // An update that started by itself (#154) runs without its sheet: the header says what is installing.
+        if (job.quiet) { /* no sheet */ } else if (sheet) { sheet = { mode: 'job' }; renderSheet(true); } else openSheet({ mode: 'job' });
         renderHeader(); pushStore();
         var since = job.started - 2000, me = job;
         var timer = setInterval(function () { pollLog(me, since); }, 700);
@@ -2415,10 +2604,20 @@
                 if (err && isSelf(me.app)) err = new Error('The connection to the TV-Store service dropped, which is what installing TV-Store over itself does. Close TV-Store and open it again; it then says whether the update landed.');
                 if (err || !res.ok) {
                     me.error = err ? err.message : res.error; me.code = err ? null : (res.code || null); renderHeader(); if (sheet && sheet.mode === 'job') renderSheet(true);
+                    // Started by itself (#154), without a sheet to say how it went. What was asked
+                    // for meanwhile still installs: nobody asked for the update that failed.
+                    if (me.quiet) {
+                        toast('The automatic update of ' + me.app.name + ' failed. It waits under On the TV, where Update says why.');
+                        ackBrowser(me.app, 'failed', me.error);
+                        if (sheet && (sheet.mode === 'app' || sheet.mode === 'upload')) renderSheet();
+                        pushStore(); tvAppsAgain();
+                        if (queue.length) setTimeout(function () { var nx = queue.shift(); startInstall(nx, pickVariant(nx)); }, 2500);
+                        return;
+                    }
                     // Asked for from a browser (#101): say how it went there, and that the rest did not start.
                     ackBrowser(me.app, 'failed', me.error);
                     queue.forEach(function (q) { ackBrowser(q, 'failed', 'Not started: ' + me.app.name + ' before it failed.'); });
-                    queue = []; pushStore(); return;
+                    queue = []; pushStore(); tvAppsAgain(); return;
                 }
                 var rr = res.result || {};
                 me.ok = true; me.step = 4; me.certificate = rr.certificate || ''; me.level = rr.level || '';
@@ -2428,15 +2627,22 @@
                 if (rr.renamed && rr.renamed.to && v.url && !pkgIds[v.url]) pkgIds[v.url] = rr.renamed.to;
                 if (pkg) { installed[pkg] = v.version; claims = null; rememberVariant(v, pkg); rememberWeb(x, v, pkg); }
                 if (pkg && ready) { ready.sourceOf = ready.sourceOf || {}; if (v.upload) delete ready.sourceOf[pkg]; else ready.sourceOf[pkg] = rr.source || x.source || 'official'; }
-                if (aid) appIds[aid] = true;
+                if (aid) { appIds[aid] = true; dropThumb(tvIcons[aid]); }
                 ackBrowser(me.app, 'done');
                 // The service now remembers the profile this package took; the next sheet should say so.
                 xhr('GET', '/ping', null, function (e, p) { if (!e && p && p.ok) ready = p; }, null, 5000);
                 readInstalled(function (map) {
                     if (map && Object.keys(map).length) setInstalled(map);
+                    // Without its sheet (#154) the page under the remote is built again: the focus stays where it was.
+                    var at = me.quiet && !sheet && document.activeElement && document.activeElement !== searchEl ? document.activeElement.getAttribute('data-k') : null;
                     renderPage();
+                    // The button under the remote may be gone (Update, once the app is updated): its row then.
+                    if (at) focusKey(at) || (view === 'tv' && tvSel && focusKey('tv:' + tvSel.key)) || focusFirst();
                     if (sheet && sheet.mode === 'job') renderSheet(true);
-                    pushStore();
+                    else if (me.quiet && sheet && (sheet.mode === 'app' || sheet.mode === 'upload')) renderSheet();
+                    if (me.quiet) autoDone(me.app, me.latest);
+                    if (me.quiet) toast(me.app.name + ' was updated to v' + (verOf(v) || me.latest) + ' automatically.');
+                    pushStore(); tvAppsAgain();
                     if (queue.length) setTimeout(function () { var nx = queue.shift(); startInstall(nx, pickVariant(nx)); }, 2500);
                 });
             });
@@ -2493,7 +2699,9 @@
         setSetting(key, !settings[key]);
     }
     function setSetting(key, value) {
-        settings[key] = value; saveSettings(); confirmingAdult = false;
+        settings[key] = value;
+        if (key === 'autoUpdateSelf') settings.selfUpdate = false;
+        saveSettings(); confirmingAdult = false;
         if (key === 'verboseLog') syncVerbose();
         apps = visible(catalogApps);
         renderPage(); renderSheet(); focusKey('opt:' + key);
@@ -2554,7 +2762,7 @@
             case 'srcremoveno': srcConfirm = false; renderSheet(); focusKey('srcremove'); return;
             case 'srcremoveyes': sourceAction('/sources/remove', {}, function () { srcSel = null; renderSheet(); focus(focusables()[0]); }); return;
             case 'certremoveyes': certAction('/cert/remove', function () { certSel = null; renderSheet(); focus(focusables()[0]); }); return;
-            case 'tvupd': startInstall(tvSel, state(tvSel).variant); return;
+            case 'tvupd': updateOne(tvSel); return;
             case 'tvsheet': openApp(tvSel); return;
             case 'gonesheet': if (tvSel && tvSel.gone) openSheet({ mode: 'gone', entry: tvSel }); return;
             case 'goneopen': var ge = sheet && sheet.mode === 'gone' ? sheet.entry : tvSel; if (ge && ge.appId) launch(ge.appId); return;
@@ -2606,11 +2814,11 @@
         }
         if (el.getAttribute && el.getAttribute('data-gone') && view === 'tv' && !sheet) {
             var gk = el.getAttribute('data-gone');
-            if (!tvSel || tvSel.key !== gk) { var gs = goneOnTv().filter(function (g) { return g.key === gk; })[0]; if (gs) { tvSel = gs; showPanel(tvPanel(gs)); } }
+            if (!tvSel || tvSel.key !== gk) { var gs = tvRowOf(tvGoneNow, gk); if (gs) { tvSel = gs; showPanel(tvPanel(gs)); } }
         }
         if (el.getAttribute && el.getAttribute('data-tvapp') && view === 'tv' && !sheet) {
             var ok = el.getAttribute('data-tvapp');
-            if (!tvSel || tvSel.key !== ok) { var os = otherOnTv().filter(function (o) { return o.key === ok; })[0]; if (os) { tvSel = os; showPanel(tvPanel(os)); } }
+            if (!tvSel || tvSel.key !== ok) { var os = tvRowOf(tvOtherNow, ok); if (os) { tvSel = os; showPanel(tvPanel(os)); } }
         }
     }
     // Give the element the focus without the browser scrolling to it: a TV browser brings a focused
@@ -2768,6 +2976,7 @@
             closeSheet(); return;
         }
         if (document.activeElement === searchEl && query) { query = ''; searchEl.value = ''; renderPage(); return; }
+        if (view === 'tv' && query) { query = ''; searchEl.value = ''; renderPage(); focusFirst(); return; }
         if (view === 'tv') { view = 'install'; renderPage(); focusFirst(); return; }
         if (chip !== 'all' || query) { chip = 'all'; query = ''; searchEl.value = ''; renderPage(); focusFirst(); return; }
         try { tizen.application.getCurrentApplication().exit(); } catch (x) {}
@@ -2805,7 +3014,8 @@
     document.addEventListener('click', function (e) {
         for (var n = e.target; n && n !== document.body; n = n.parentNode) if (n.classList && n.classList.contains('f')) { focus(n); activate(n); return; }
     });
-    searchEl.addEventListener('input', function () { query = searchEl.value.trim(); if (view !== 'install') view = 'install'; renderPage(); });
+    // The box searches the page it stands above: the catalog on the store, the TV's apps under On the TV.
+    searchEl.addEventListener('input', function () { query = searchEl.value.trim(); renderPage(); });
 
     // ---- the API a head drives over the web inspector (#844 phase 3) ------------------------------
     function setReady(ping) {
@@ -2886,6 +3096,7 @@
         refreshRelay();
         if (!document.hidden && Date.now() >= catalogDue) refreshCatalog();
         showCatalog();
+        autoUpdate();
         pushStore(true);
         xhr('GET', '/uploads', null, function (err, res) {
             if (err || !res) { if (++missed >= 3) revive(); return; }
@@ -2896,6 +3107,8 @@
             if (sheet && sheet.mode === 'upload' && (!!was !== !!upload || (was && upload && was.id !== upload.id))) renderSheet(true);
         }, null, 2500);
     }, 3000);
+    // The small copies of the TV's own icons, one at a time while the remote rests.
+    if (thumbsWork) setInterval(nextThumb, 250);
 
     // The service can die while TV-Store stays open: a TV put to sleep with the store on screen came
     // back with the page but no service, and every action failed. When the TV wakes the page up, or
@@ -2974,7 +3187,7 @@
                 // and none at all leaves the store as it was.
                 loadSources(false, function () {
                     var at = document.activeElement && document.activeElement.getAttribute('data-k');
-                    rebuild();
+                    rebuild(); storeComplete = true;
                     if (!sheet) { renderPage(); focusKey(at) || focusFirst(); } else renderHeader();
                     nextOffer();
                     // An app from an independent repository is only known now.
