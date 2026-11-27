@@ -1,0 +1,10 @@
+{
+  "id": "tvstore-onboot",
+  "name": "TV-Store start at boot",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "permissions": ["exec"],
+  "author": "PatrickSt1991",
+  "description": "Sets the start-at-boot flag of the TV-Store service again on firmware that drops it at install, so TV-Store can update apps while closed. No network use.",
+  "main": "index.js"
+}

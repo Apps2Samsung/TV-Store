@@ -590,6 +590,16 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
   0.3.45 that was only so once TV-Store had been opened. Not tested on a TV: whether the network
   and `sdbd` can be reached that early, and whether the service sees which apps run, is what the
   log (`auto: ...`) tells.
+  **With Vetro and root** (#159): on a TV whose firmware drops the flag, the Vetro Shard in
+  [`vetro-shard/`](vetro-shard/tvstore-onboot/README.md) turns it on again. It changes that one
+  value in the TV's list of registered apps (`app_onboot` for `A2STVStore.sdbservice`), 20 seconds
+  after Vetro starts and once an hour after that, because every update of TV-Store registers the
+  service again. It downloads, signs and installs nothing. Install
+  `vetro-shard/tvstore-onboot-1.0.0.vplugin` in the Vetro dashboard under Vetro Shards, "Install
+  from a file" (that takes Vetro's Developer mode: the bundle is not in Vetro's catalog), and
+  switch it on. The flag counts from the next start of the TV; the line under the switch then
+  says whether the TV started TV-Store by itself. `node scripts/build-shard.js` packs the folder
+  into the bundle. Not tried on a TV.
 - **Update TV-Store automatically**: off by default (#154). On, TV-Store installs its own update
   by itself when it is open and the catalog has a newer version: with its sheet, because TV-Store
   closes during the install. Open it again
@@ -870,6 +880,7 @@ node test/tvapps-hang.test.js   # a TV that never answers the app listing: NO_LI
 node test/auto-update.test.js   # updates that install by themselves (#154): off by default, one app per tick without a sheet, once per version, TV-Store's own first
 node test/updater.test.js       # what the service may install while TV-Store is closed (#157): the same build with a newer version, TV-Store's own first, and what waits with its reason
 node test/auto-closed.test.js   # the real service started with nobody asking: waits, installs the plan's one update, keeps what landed for the screen; switch off, someone there, a running app, a bad download, the pause
+node test/vetro-shard.test.js   # the Vetro Shard for the start-at-boot flag (#159): turned on once, left alone when on, three tries when it will not, the bundle is the folder
 node test/auto-plan.test.js     # the screen's side: the plan it hands over, what the service installed written down and said once, nothing of its own while the service installs
 ```
 
