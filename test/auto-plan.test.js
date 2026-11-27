@@ -70,8 +70,7 @@ test('TV-Store itself is in the plan only when it may update itself; a switch se
     open({ storage: storage({ autoUpdateSelf: true, autoUpdateClosed: true }) }, function (p) {
         ticks(p, 2, function () {
             var plan = p.plans[p.plans.length - 1], me = plan.items.filter(function (i) { return i.self; });
-            // No switch for "while closed" yet (#158 brings it): a value in storage that Settings never wrote stays off.
-            eq(plan.settings, { apps: false, self: true, closed: false }, 'the switches');
+            eq(plan.settings, { apps: false, self: true, closed: true }, 'the switches');
             eq(me.map(function (i) { return [i.key, i.packageId, i.have]; }), [['p:tv-store', 'A2STVStore', '0.0.0']], 'TV-Store’s own line');
             var n = p.plans.length;
             p.press('gear');
@@ -82,7 +81,22 @@ test('TV-Store itself is in the plan only when it may update itself; a switch se
                     ticks(p, 3, function () {
                         eq(p.plans.length > n, true, 'sent again after the switch');
                         eq(p.plans[p.plans.length - 1].settings.apps, true, 'with the switch on');
-                        done();
+                        // The switch for "while TV-Store is closed" (#158), with the line that says
+                        // whether this TV starts the service by itself.
+                        var m = p.plans.length;
+                        p.press('gear');
+                        p.settle(function () {
+                            if (p.el('sheet').innerHTML.indexOf('This TV has not started TV-Store by itself yet.') < 0) fail('Settings says whether the TV starts the service');
+                            p.press('', { 'data-opt': 'autoUpdateClosed' });
+                            p.settle(function () {
+                                p.press('', { 'data-act': 'close' });
+                                ticks(p, 3, function () {
+                                    eq(p.plans.length > m, true, 'sent again after the switch for closed');
+                                    eq(p.plans[p.plans.length - 1].settings.closed, false, 'with that switch off');
+                                    done();
+                                });
+                            });
+                        });
                     });
                 });
             });

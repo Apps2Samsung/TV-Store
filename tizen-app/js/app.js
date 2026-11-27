@@ -72,7 +72,7 @@
     // TV's current IP and loopback too, and keeps whichever answers.
     var BASE = 'http://127.0.0.1:8077';
     var KOFI = 'https://ko-fi.com/patrickst';
-    var VERSION = '0.3.44';
+    var VERSION = '0.3.45';
     var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13, RETURN: 10009, ESC: 27, BACK: 8, IME_DONE: 65376, IME_CANCEL: 65385 };
 
     // What the manifest providers are called; resolved.json carries only their ids.
@@ -272,7 +272,7 @@
         // install by themselves (#154), both off by default. selfUpdate: the #41 switch, which
         // Settings no longer shows since autoUpdateSelf took its place. One that was on is kept
         // (Update under On the TV still works for TV-Store) until autoUpdateSelf is set either way.
-        var s = { showAdult: false, showNeedsHead: true, verboseLog: false, hideSelfNotice: '', selfUpdate: false, autoUpdateApps: false, autoUpdateSelf: false };
+        var s = { showAdult: false, showNeedsHead: true, verboseLog: false, hideSelfNotice: '', selfUpdate: false, autoUpdateApps: false, autoUpdateSelf: false, autoUpdateClosed: false };
         try {
             var saved = JSON.parse(window.localStorage.getItem(SETTINGS_KEY) || '{}');
             if (typeof saved.showAdult === 'boolean') s.showAdult = saved.showAdult;
@@ -282,6 +282,8 @@
             if (typeof saved.selfUpdate === 'boolean') s.selfUpdate = saved.selfUpdate;
             if (typeof saved.autoUpdateApps === 'boolean') s.autoUpdateApps = saved.autoUpdateApps;
             if (typeof saved.autoUpdateSelf === 'boolean') s.autoUpdateSelf = saved.autoUpdateSelf;
+            // autoUpdateClosed (#158): the service looks for updates when the TV starts it, without this screen.
+            if (typeof saved.autoUpdateClosed === 'boolean') s.autoUpdateClosed = saved.autoUpdateClosed;
         } catch (e) {}
         return s;
     })();
@@ -2298,6 +2300,15 @@
         return h + '</div>';
     }
 
+    // Whether this TV starts the service by itself (#158): what the service wrote down the last
+    // time it was started shortly after the TV, with nobody asking it anything. A reporter reads
+    // this line out; it is the only way to know per model.
+    function bootLine() {
+        var at = ready && ready.bootStart ? new Date(ready.bootStart) : null;
+        if (!at || isNaN(at.getTime())) return 'This TV has not started TV-Store by itself yet.';
+        function two(n) { return (n < 10 ? '0' : '') + n; }
+        return 'This TV last started TV-Store by itself on ' + at.getFullYear() + '-' + two(at.getMonth() + 1) + '-' + two(at.getDate()) + ' at ' + two(at.getHours()) + ':' + two(at.getMinutes()) + '.';
+    }
     function settingsHtml() {
         function opt(key, title, hint) {
             return '<div class="opt f" tabindex="0" data-k="opt:' + key + '" data-opt="' + key + '"><div class="ot"><div class="ont">' + esc(title) + '</div><div class="oh">' + esc(hint) + '</div></div>'
@@ -2310,7 +2321,8 @@
             + opt('verboseLog', 'Verbose logging', 'Writes much more detail to the TV-Store log. Turn it on when a bug report asks for it, and off again afterwards.')
             + browserRow() + relayRow() + devicesRows() + installerRow()
             + opt('autoUpdateApps', 'Update apps automatically', 'Off: updates wait under On the TV until you press Update. On: while TV-Store is open it installs the updates for the apps on this TV by itself, one after another. An app that needs a phone or PC, or a choice from you, still waits there.')
-            + opt('autoUpdateSelf', 'Update TV-Store automatically', 'Off: TV-Store only says that a newer version is out; update it from Apps2Samsung on a phone or PC. On: when TV-Store is open and a newer version is out, it installs it by itself. It closes during the install; open it again after a minute and it says whether the update landed.') + '</div>' + browserNotice() + relayNotice() + installerNotice();
+            + opt('autoUpdateSelf', 'Update TV-Store automatically', 'Off: TV-Store only says that a newer version is out; update it from Apps2Samsung on a phone or PC. On: when TV-Store is open and a newer version is out, it installs it by itself. It closes during the install; open it again after a minute and it says whether the update landed.')
+            + opt('autoUpdateClosed', 'Update while TV-Store is closed (experiment)', 'Off: updates are only installed while TV-Store is open. On: TV-Store also looks for updates when the TV starts, without being opened, and installs them without a message. It only does something when one of the two switches above is on. Whether a TV starts TV-Store by itself differs per model. ' + bootLine()) + '</div>' + browserNotice() + relayNotice() + installerNotice();
         if (confirmingAdult) h += '<div class="notice">These apps are meant for adults only. Turn them on only if you are 18 or older.</div>'
             + '<div class="btns" style="margin-top:16px"><button class="btn primary grow f" data-k="adultyes" data-act="adultyes" data-default>I am 18 or older</button><button class="btn f" data-k="adultno" data-act="adultno">Cancel</button></div>';
         var certList = (ready && ready.certificates ? ready.certificates.map(function (c) { return c.name + (c.level === 'partner' || c.level === 'public' ? ' (' + levelName(c.level) + ')' : ''); }) : (ready && ready.certNames) || []);

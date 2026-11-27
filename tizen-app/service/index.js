@@ -1803,7 +1803,7 @@ function restoreApply(b, cb) {
 // The service does not end itself afterwards: on newer TVs the process may not be this service's
 // alone, and how the screen gets a service back that let go of its port is not proven on a TV.
 var AUTO_FILE = DATA_DIR ? path.join(DATA_DIR, '.a2s-auto.json') : null;
-var AUTO = { plan: null, tried: {}, landed: [], last: '' };
+var AUTO = { plan: null, tried: {}, landed: [], last: '', boot: '' };
 try {
     if (AUTO_FILE && fs.existsSync(AUTO_FILE)) {
         var au = JSON.parse(fs.readFileSync(AUTO_FILE, 'utf8'));
@@ -1812,11 +1812,23 @@ try {
             if (au.tried && typeof au.tried === 'object' && !Array.isArray(au.tried)) AUTO.tried = au.tried;
             if (Array.isArray(au.landed)) AUTO.landed = au.landed.filter(function (l) { return l && typeof l.key === 'string'; }).slice(-50);
             if (typeof au.last === 'string') AUTO.last = au.last;
+            if (typeof au.boot === 'string') AUTO.boot = au.boot;
         }
     }
 } catch (e) { log('auto: cannot read ' + AUTO_FILE + ': ' + e.message); }
 function envMs(name, dflt) { var n = parseInt(process.env[name], 10); return n >= 0 ? n : dflt; }
 var AUTO_WAIT = envMs('A2S_AUTO_WAIT', 60000), AUTO_RETRY = envMs('A2S_AUTO_RETRY', 60000), AUTO_EVERY = envMs('A2S_AUTO_EVERY', 6 * 60 * 60 * 1000), AUTO_BOOT = envMs('A2S_AUTO_BOOT', 10 * 60 * 1000);
+// Started by the TV or by the screen (#158): the TV starts the service right after it starts itself
+// (on-boot in config.xml, where the firmware keeps it), the screen whenever TV-Store is opened. A
+// start within BOOT_START of the TV's own, with nothing asking for anything during AUTO_WAIT, was
+// the TV's. The last such time is kept (AUTO.boot) and given out on /ping: Settings shows it, and
+// it is how a reporter tells whether their model keeps on-boot.
+var BOOT_START = envMs('A2S_BOOT_START', 5 * 60 * 1000), START_UPTIME = os.uptime() * 1000;
+function noteBootStart() {
+    if (SEEN_REQUEST || START_UPTIME > BOOT_START) return;
+    AUTO.boot = new Date().toISOString(); saveAuto();
+    log('auto: the TV started this service by itself, ' + Math.round(START_UPTIME / 1000) + ' s after it started');
+}
 var AUTO_NOW = {};             // app key -> the version tried since this service started
 var AUTO_RUN = null;           // { key, name } while a round installs
 var AUTO_BUSY = false;         // a round is under way
@@ -1982,7 +1994,7 @@ var SERVER = http.createServer(function (req, res) {
     if (!fromThisTv(req)) { cors(res, 403, 'text/plain'); return res.end('only this TV may use TV-Store'); }
     if (route === '/ping') return json(res, 200, { ok: true, service: 'tv-store', ownIp: ownIp(), logUrl: 'http://' + ownIp() + ':' + PORT + '/log.txt', signerReady: signer.ready, certReady: haveCerts(),
         certCount: haveCerts() ? loadCerts().certificates.length : 0, certNames: certs.names(loadCerts()), certificates: certs.summary(loadCerts()),
-        certFile: CERT_FILE, certError: CERT_ERROR, duid: DUID || null, node: process.version, verbose: VERBOSE, relay: relayStatus(), installer: installerStatus(), remembered: rememberedLevels(), selfUpdate: SELF_UPDATE,
+        certFile: CERT_FILE, certError: CERT_ERROR, duid: DUID || null, node: process.version, verbose: VERBOSE, relay: relayStatus(), installer: installerStatus(), remembered: rememberedLevels(), selfUpdate: SELF_UPDATE, bootStart: AUTO.boot,
         sources: SOURCES.map(publicSource), sourceOf: sourceOfPackage(), browser: browserStatus(), userSettings: usetKeys() });
     // The page has shown how the last self-update went (#41); { version } is what runs now.
     if (route === '/selfupdate/ack' && req.method === 'POST') return body(req, function (err, b) {
@@ -2152,7 +2164,7 @@ SERVER.on('listening', function () {
     if (RELAY_CFG.enabled) { log('relay: enabled, starting on port ' + RELAY_CFG.port); startRelay(); }
     if ((!RELAY_CFG.chosen && !RELAY_CFG.enabled) || !DUID) setTimeout(probeLoopback, 1000);
     // Nothing asked for anything by then: TV-Store is closed (#157).
-    setTimeout(function () { autoRound(1); }, AUTO_WAIT);
+    setTimeout(function () { noteBootStart(); autoRound(1); }, AUTO_WAIT);
 });
 listen();
 
