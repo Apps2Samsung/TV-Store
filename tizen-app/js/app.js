@@ -2993,11 +2993,21 @@
         var cur = document.activeElement, all = focusables();
         if (!cur || all.indexOf(cur) < 0) { if (all.length) focus(sheet ? (sheetEl.querySelector('[data-default]') || all[0]) : all[0]); return; }
         // On the TV page the panel on the right belongs to the selected row: right from a row goes to
-        // the panel's first button, left from the panel back to that row. By distance alone the search
-        // box at the top won from the first row (#29).
+        // the panel's first button, left from the panel's first button back to that row. By distance
+        // alone the search box at the top won from the first row (#29).
+        // Inside the panel the buttons are a line of their own (#126): left goes to the button
+        // before, and only from the first one to the row; up goes to the header and down nowhere.
+        // Left went to the row from every button, and up and down went to whichever row of the
+        // list stood nearest, which selected another app.
+        var inPanel = !sheet && view === 'tv' && !!closest(cur, 'tvpanel');
         if (!sheet && view === 'tv') {
-            if (dir === 'right' && closest(cur, 'tvlist')) { var pb = all.filter(function (el) { return closest(el, 'tvpanel'); }); if (pb.length) return focus(pb[0]); }
-            if (dir === 'left' && closest(cur, 'tvpanel') && tvSel) { var row = pageEl.querySelector('[data-k="tv:' + tvSel.key.replace(/"/g, '\\"') + '"]'); if (row) return focus(row); }
+            var pb = all.filter(function (el) { return closest(el, 'tvpanel'); }), upd = pageEl.querySelector('[data-k="updall"]');
+            if (dir === 'right' && closest(cur, 'tvlist') && pb.length) return focus(pb[0]);
+            // "Update all" stands right above the panel: up from any of the panel's buttons goes to
+            // it, and down from it to the panel's first button. By distance, up from a wide button
+            // passed it for the header, and down from it landed on Uninstall.
+            if (dir === 'up' && inPanel && upd && !upd.disabled) return focus(upd);
+            if (dir === 'down' && cur === upd && pb.length) return focus(pb[0]);
         }
         if (!sheet && (dir === 'left' || dir === 'right')) { var step = rowStep(cur, dir); if (step !== undefined) { if (step) focus(step); return; } }
         var a = cur.getBoundingClientRect(), ax = (a.left + a.right) / 2, ay = (a.top + a.bottom) / 2, best = null, bestScore = 1e9, curList = closest(cur, 'vscroll');
@@ -3005,6 +3015,7 @@
             // A card its row does not show is not a place to go to from outside that row: from
             // "Show all" the nearest thing to the right was such a card in another row (#126).
             if (el === cur || !inRow(el)) return;
+            if (inPanel && closest(el, 'tvlist')) return;
             var b = el.getBoundingClientRect(), bx = (b.left + b.right) / 2, by = (b.top + b.bottom) / 2, main, cross;
             // Left and right stay on their own line: by distance alone, right from the Settings
             // gear went down to a row's "Show all" and left from the first card of a grid went up
@@ -3023,6 +3034,7 @@
             if (score < bestScore) { bestScore = score; best = el; }
         });
         if (best) return focus(best);
+        if (inPanel && dir === 'left' && tvSel) { var row = pageEl.querySelector('[data-k="tv:' + tvSel.key.replace(/"/g, '\\"') + '"]'); if (row) return focus(row); }
         // Nothing left to move to: what follows may be text only (the tables and QR codes at the end
         // of Settings), so the list itself scrolls on. In a sheet only: under the last row of the
         // store there is nothing to read, and the row moved up a little for it (#126).

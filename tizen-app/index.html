@@ -22,6 +22,10 @@
      opacity on the header, the page and the footer, which has the TV draw the whole page again as
      one layer when a sheet opens and when it closes; on the flat ground the two look the same (#126). */
   .app.behind:before{content:"";position:absolute;left:0;top:0;right:0;bottom:0;background:rgba(13,27,42,.72);z-index:5}
+  /* The card that had the focus goes back to its size at once as a sheet opens (#126): shrinking
+     under the veil for 0.12 s it was a layer of its own for that long, and the veil over it with
+     it, which a Tizen 6 TV showed as the screen dimming twice. */
+  .app.behind .card{transition:none}
 
   /* focus: one look everywhere */
   .f{outline:none}
@@ -161,7 +165,7 @@
 
   /* C5: first run, until a head arms the TV */
   .welcome{display:flex;align-items:stretch;margin-bottom:34px}
-  .wmain{flex:1;min-width:0;background:linear-gradient(135deg,rgba(244,247,251,.10),rgba(244,247,251,.05));border:1px solid rgba(244,247,251,.12);border-radius:28px;padding:34px 40px;margin-right:28px}
+  .wmain{flex:1;min-width:0;background:rgba(244,247,251,.075);border:1px solid rgba(244,247,251,.12);border-radius:28px;padding:34px 40px;margin-right:28px}
   .wmain h1{font-size:46px;font-weight:700;letter-spacing:-.01em;line-height:1.1;margin:0 0 14px}
   .wmain p{font-size:22px;color:#9FB0C6;line-height:1.45;margin:0;max-width:900px}
   .steps{display:flex;margin-top:26px}
