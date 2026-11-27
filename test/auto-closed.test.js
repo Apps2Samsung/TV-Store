@@ -65,7 +65,7 @@ function installs() { return shells.filter(function (c) { return c.indexOf('vd_a
 function start(env, ask, cb) {
     var e = { HOME: dir, TMPDIR: dir, TMP: dir, TEMP: dir, PATH: process.env.PATH, A2S_SDB_PORT: String(SDB), A2S_CATALOG_URL: 'https://official.test/resolved.json.signed',
               A2S_CATALOG_KEY: path.join(R, 'keys', 'test.pub.pem'), A2S_RESOLVE: ['official.test', 'dl.test'].map(function (h) { return h + '=127.0.0.1:' + WEB; }).join(','),
-              A2S_AUTO_WAIT: '700', A2S_AUTO_RETRY: '200', A2S_RUNNING: 'none' };
+              A2S_AUTO_WAIT: '700', A2S_AUTO_RETRY: '200', A2S_RUNNING: 'none', A2S_BOOT_START: '0' };   // 0: this machine did not just start
     for (var k in env || {}) { if (env[k] === undefined) delete e[k]; else e[k] = env[k]; }
     child = cp.spawn(process.execPath, [path.join(__dirname, '..', 'tizen-app', 'service', 'index.js')], { env: e, stdio: ['ignore', 'ignore', 'pipe'] });
     child.stderr.on('data', function (d) { err += d; });
@@ -144,6 +144,28 @@ step('closed, the app runs: it is left alone', function (go) {
             if (!ok || installs()) fail('a running app');
             if (logged().slice(from).indexOf('auto: Probe waits: it is running') < 0) fail('the log says why');
             end(go);
+        });
+    });
+});
+step('started shortly after the TV with nobody asking: the TV started it (#158), written down and on /ping', function (go) {
+    var from = 0;   // the log starts again with every start of the service
+    if (kept().boot) fail('no start so far was the TV\u2019s: ' + kept().boot);
+    start({ A2S_RUNNING: 'ProbePkg01.App', A2S_AUTO_EVERY: '0', A2S_BOOT_START: '99999999999999' }, false, function () {
+        waitLog('auto: the TV started this service by itself', from, 15000, function (ok) {
+            var at = kept().boot;
+            if (!ok || !at || isNaN(Date.parse(at))) fail('the time is written down: ' + at);
+            end(function () {
+                // Asked right away: the screen started it. The time of the TV's own start stays.
+                start({ A2S_BOOT_START: '99999999999999' }, true, function () {
+                    call('GET', '/ping', null, function (e, code, j) {
+                        if (e || !j || j.bootStart !== at) fail('/ping gives the time: ' + (j && j.bootStart));
+                        setTimeout(function () {
+                            if (kept().boot !== at || logged().indexOf('the TV started this service by itself') >= 0) fail('a start the screen asked for is not the TV\u2019s');
+                            end(go);
+                        }, 1200);
+                    });
+                });
+            });
         });
     });
 });

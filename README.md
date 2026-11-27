@@ -546,7 +546,8 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
   another, without a sheet. The header says what is installing and a line at the bottom of the
   screen says how it went. It looks for as long as TV-Store is open (the catalog is read again
   every ten minutes), and starts only when the screen is free: no sheet open, nothing installing,
-  nobody typing. Nothing runs while TV-Store is closed. An app that needs a phone or PC, a
+  nobody typing. While TV-Store is closed nothing runs, unless **Update while TV-Store is closed**
+  is on (below). An app that needs a phone or PC, a
   certificate level the TV does not hold, its settings filled in, or a build picked by hand is
   left alone and keeps its **Update** under On the TV. A version is tried by itself once per start
   of TV-Store and three times in all (written down in `localStorage` under
@@ -555,8 +556,8 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
   version than the catalog does is not installed without end. What did not land waits under On
   the TV, where **Update** still works and says why, until the catalog has a newer version.
   **Update** and **Update all** pressed while such an update runs are lined up behind it.
-  **While TV-Store is closed** (#157, built, not switched on yet): the service can do the same
-  round without the screen. Which build of an app is on the TV is something only the screen
+  **While TV-Store is closed** (#157, switched on by **Update while TV-Store is closed** below):
+  the service can do the same round without the screen. Which build of an app is on the TV is something only the screen
   knows (the file TV-Store installed, the pinned builds, the certificate chosen per app, what the
   platform lists), so the screen hands the service a plan (`POST /auto/plan`, with its token,
   kept in `.a2s-auto.json`): one line per app it would update by itself, with the build and the
@@ -571,10 +572,24 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
   hours pass between two looks. Nothing is shown: the log says what happened, and the screen
   says it once when it is opened (`auto.landed` on `GET /uploads`, cleared by `POST /auto/seen`).
   A request to the service during the wait means TV-Store is open, and the round is the
-  screen's. The plan carries a third switch, "while closed", that no screen sets yet (#158), so
-  nothing of this runs on a TV today. The service does not stop itself after a round: on newer
+  screen's. The plan carries a third switch, "while closed", which is **Update while TV-Store is
+  closed**; with it off no round runs. The service does not stop itself after a round: on newer
   TVs its process may not be its own, and how the screen gets a service back that let go of its
   port is not proven on a TV.
+- **Update while TV-Store is closed (experiment)**: off by default (#158). On, and with one of
+  the two switches around it on, the service looks for updates when the TV starts it, without
+  anyone opening TV-Store, and installs them without a message (the round described above). For
+  that `config.xml` asks the TV to start the service when the TV starts (`on-boot`). Whether a TV
+  does so differs per model: some firmware drops the flag at install, and then this switch
+  changes nothing and updates land while TV-Store is open, as before. The hint under the switch
+  says which it is on this TV: "This TV last started TV-Store by itself on ..." or "This TV has
+  not started TV-Store by itself yet." The service writes that time down when it starts within
+  five minutes of the TV and nothing asks it anything for a minute (`boot` in `.a2s-auto.json`,
+  `bootStart` on `/ping`). **To know:** on a TV that keeps `on-boot`, the service runs from the
+  start of the TV on, with port 8077 open in the home network, also with every switch off. Before
+  0.3.45 that was only so once TV-Store had been opened. Not tested on a TV: whether the network
+  and `sdbd` can be reached that early, and whether the service sees which apps run, is what the
+  log (`auto: ...`) tells.
 - **Update TV-Store automatically**: off by default (#154). On, TV-Store installs its own update
   by itself when it is open and the catalog has a newer version: with its sheet, because TV-Store
   closes during the install. Open it again
@@ -876,8 +891,8 @@ gets one from the built-in palette. Both fields come through Apps2Samsung's `res
 
 The TV can stop TV-Store's background service while TV-Store stays open, as when the TV goes to
 sleep with the store on screen: the page came back and every action failed. `config.xml` asks the
-platform to restart the service (`auto-restart`, not `on-boot`: nothing needs it while TV-Store is
-closed), and the page starts it again itself, the way it does at start-up, when the TV wakes it up
+platform to restart the service (`auto-restart`; `on-boot` is there too since 0.3.45, for updates
+while TV-Store is closed), and the page starts it again itself, the way it does at start-up, when the TV wakes it up
 and the service does not answer, or when the service misses three checks in a row (about 9 s).
 Only when that start fails too does the page say "The TV-Store service stopped".
 
@@ -888,6 +903,7 @@ Only when that start fails too does the page say "The TV-Store service stopped".
 | Install through the TV's own `sdbd` | proven on a retail set |
 | Install through `wascmd` from the service, no Host PC IP (#57) | built against a fake `wascmd`, falls back to `sdbd` (0.3.16); its usage text in the log and a replace that stops with a reason when `sdbd` is out of reach (0.3.17); two Tizen 9 sets refuse the run with `EACCES` and the start-up probe took their service down (#67, #68), so nothing starts before the first install, the kernel is asked first, a run that died is remembered and Settings has a switch (0.3.18); a Tizen 5.0 set lets the service start it and the fork still takes the service down before anything is installed (0.3.19). Refused or fatal on every retail set tried, so off by default and opt-in through Settings (0.3.20); `sdbd` is the path that installs |
 | Signing on the TV | done, identical output to the Apps2Samsung signer |
+| Updates while TV-Store is closed (#157, #158) | built (0.3.45), an experiment behind a switch: `on-boot` in `config.xml`, a round in the service from the plan the screen handed over, a line in Settings that says whether the TV starts the service by itself; untested on a TV |
 | The service starting again after the TV slept with TV-Store open | built (0.3.26): `auto-restart` in `config.xml`, and the page starts it again on waking or after three missed checks; untested on a TV |
 | Arming from Apps2Samsung (phone, PC, CLI) | done |
 | The screens above | built (0.3.4); pins, developer search, your own .wgt or .tpk (0.3.10); finds itself under a renamed package id and sends you to Apps2Samsung to update it (0.3.11); Public or Partner certificate per app (0.3.13); the sdb relay switch (0.3.14); the relay's failure reasons under it (0.3.15); app icons from the signed catalog, hash-checked and cached by the service, once the Apps2Samsung snapshot publishes them (0.3.19, #66); Settings scrolls with the focus now that it is taller than the screen (0.3.20, #74); every signing certificate listed in Settings with its level, fingerprint, expiry and whether it covers this TV, a default to pick and a profile to remove (0.3.21, #78); the search box opens the keyboard only on OK (0.3.26); categories, their order, names and tile colours from the community catalog |

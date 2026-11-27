@@ -17,6 +17,9 @@ var appId = attr('tizen:application', 'id');
 if (appId.indexOf(pkg + '.') !== 0) fail('application id "' + appId + '" is not under package "' + pkg + '"');
 var serviceId = attr('tizen:service', 'id');
 if (serviceId.indexOf(pkg + '.') !== 0) fail('service id "' + serviceId + '" is not under package "' + pkg + '"');
+// The TV starts the service when it starts (#158) and again when it dies (0.3.26).
+if (attr('tizen:service', 'on-boot') !== 'true') fail('the service is not started with the TV (on-boot)');
+if (attr('tizen:service', 'auto-restart') !== 'true') fail('the service is not started again when it dies (auto-restart)');
 
 console.log('PASS');
 console.log('  package    :', pkg);

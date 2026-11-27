@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets"
-        id="https://github.com/Apps2Samsung/TV-Store" version="0.3.44" viewmodes="maximized">
+        id="https://github.com/Apps2Samsung/TV-Store" version="0.3.45" viewmodes="maximized">
     <name>Apps2Samsung TV-Store</name>
     <icon src="icon.png"/>
     <content src="index.html"/>
@@ -20,8 +20,10 @@
     <!-- productinfo: the DUID, to show whether each signing certificate covers this TV (#78). -->
     <tizen:privilege name="http://developer.samsung.com/privilege/productinfo"/>
     <!-- auto-restart: the TV starts the service again when it dies, as after a sleep with TV-Store open.
-         Not on-boot: nothing needs the service while TV-Store is closed. -->
-    <tizen:service id="A2STVStore.sdbservice" auto-restart="true">
+         on-boot: the TV starts the service when it starts, so updates can land without anyone opening
+         TV-Store (#158; only with the switch for it on). Some firmware drops this flag at install: the
+         line under that switch in Settings says whether this TV starts the service by itself. -->
+    <tizen:service id="A2STVStore.sdbservice" auto-restart="true" on-boot="true">
         <tizen:content src="service/index.js"/>
         <tizen:name>TV-Store service</tizen:name>
         <tizen:description>Downloads, signs and installs catalog packages via sdbd on this TV</tizen:description>
