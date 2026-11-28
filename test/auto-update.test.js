@@ -8,10 +8,9 @@
  *     has a newer one.
  *   - Update all pressed while such an update runs lines the rest up behind it, without the app
  *     that is installing, and what was lined up still installs when the automatic update fails.
- *   - "Only update the apps I choose": only the apps switched on in Settings are installed by
- *     themselves, none while none is picked, and TV-Store's own switch is not touched by it. The
- *     switch shows only with "Update apps automatically" on, and the list is a page of its own
- *     behind a line under the switch: RETURN there goes back to Settings.
+ *   - Choose the apps: a line under "Update apps automatically" opens a page with All, None and a
+ *     switch per app. All is every app; otherwise only the apps switched on are installed by
+ *     themselves, none while none is, and TV-Store's own switch is not touched by it.
  *   - "Update TV-Store automatically": TV-Store's own update goes first, with its sheet, as a
  *     self-update, once per version, and not while the remote is in use. */
 'use strict';
@@ -215,7 +214,7 @@ test('TV-Store itself: only with its own switch, and not while the remote is in 
     });
 });
 
-test('only the apps I choose: the picked ones, none while none is picked, TV-Store by its own switch', function (done) {
+test('choose the apps: the picked ones, none while none is picked, TV-Store by its own switch', function (done) {
     var st = {}; st[SETTINGS] = { autoUpdateApps: true, autoUpdateChosen: true, autoUpdateOnly: [T] };
     open({ storage: st }, function (p) {
         ticks(p, 5, function () {
@@ -231,51 +230,52 @@ test('only the apps I choose: the picked ones, none while none is picked, TV-Sto
     });
 });
 
-test('only the apps I choose: the switch and the list in Settings', function (done) {
+test('choose the apps: one line under the switch, a page with All, None and a switch per app', function (done) {
     open({}, function (p) {
         p.press('gear');
         p.settle(function () {
-            if (p.html('sheet').indexOf('data-opt="autoUpdateChosen"') >= 0) fail('the switch shows while apps are not updated by themselves');
+            var html = p.html('sheet');
+            if (html.indexOf('data-act="autoappsopen"') >= 0) fail('the line shows while apps are not updated by themselves');
             p.press('', { 'data-opt': 'autoUpdateApps' });
             p.settle(function () {
-                var html = p.html('sheet');
-                if (html.indexOf('data-opt="autoUpdateChosen"') < 0) fail('no switch with "Update apps automatically" on');
-                if (html.indexOf('data-opt="auto:') >= 0) fail('the list shows before its switch is on');
-                if (html.indexOf('data-act="autoappsopen"') >= 0) fail('the line to the list shows before its switch is on');
-                p.press('', { 'data-opt': 'autoUpdateChosen' });
-                p.settle(function () {
-                    html = p.html('sheet');
-                    if (html.indexOf('data-opt="auto:') >= 0) fail('the list stands between the switches of Settings');
-                    var at = function (k) { return html.indexOf('data-k="' + k + '"'); };
-                    if (!(at('opt:autoUpdateApps') < at('opt:autoUpdateChosen') && at('opt:autoUpdateChosen') < at('autoappsopen') && at('autoappsopen') < at('opt:autoUpdateSelf') && at('opt:autoUpdateSelf') < at('opt:autoUpdateClosed'))) fail('the switch and its line do not stand right under "Update apps automatically"');
-                    if (html.indexOf('None of the 3 apps on this TV is switched on') < 0) fail('the line does not say that nothing is picked');
-                    p.press('', { 'data-act': 'autoappsopen' });
-                    html = p.html('sheet');
-                    if (html.indexOf('data-opt="autoUpdateApps"') >= 0) fail('the list is not a page of its own');
-                    [M, T, 'p:litefin'].forEach(function (k) { if (html.indexOf('data-opt="auto:' + k + '"') < 0) fail('the list has no ' + k); });
-                    if (html.indexOf('data-opt="auto:' + S + '"') >= 0) fail('TV-Store is in the list of apps');
-                    eq(p.stored(SETTINGS).autoUpdateOnly, [], 'nothing is picked to start with');
-                    p.press('', { 'data-opt': 'auto:' + M });
+                html = p.html('sheet');
+                var at = function (k) { return html.indexOf('data-k="' + k + '"'); };
+                if (!(at('opt:autoUpdateApps') >= 0 && at('opt:autoUpdateApps') < at('autoappsopen') && at('autoappsopen') < at('opt:autoUpdateSelf') && at('opt:autoUpdateSelf') < at('opt:autoUpdateClosed'))) fail('the line does not stand right under "Update apps automatically"');
+                if (html.indexOf('data-opt="autoUpdateChosen"') >= 0) fail('a second switch stands under "Update apps automatically"');
+                if (html.indexOf('data-opt="auto:') >= 0) fail('the list stands between the switches of Settings');
+                if (html.indexOf('All 3 apps on this TV, and the ones you install later.') < 0) fail('the line does not say that it is all apps to start with');
+                p.press('', { 'data-act': 'autoappsopen' });
+                html = p.html('sheet');
+                if (html.indexOf('data-opt="autoUpdateApps"') >= 0) fail('the list is not a page of its own');
+                if (html.indexOf('data-act="autoall"') < 0 || html.indexOf('data-act="autonone"') < 0) fail('the page has no All and None');
+                [M, T, 'p:litefin'].forEach(function (k) { if (html.indexOf('data-opt="auto:' + k + '"') < 0) fail('the list has no ' + k); });
+                if (html.indexOf('data-opt="auto:' + S + '"') >= 0) fail('TV-Store is in the list of apps');
+                eq(html.split('class="sw on"').length - 1, 3, 'switches that are on under All');
+                // One app off, from All: the others that are on this TV stay on.
+                p.press('', { 'data-opt': 'auto:' + T });
+                eq([p.stored(SETTINGS).autoUpdateChosen, p.stored(SETTINGS).autoUpdateOnly.slice().sort()], [true, [M, 'p:litefin'].sort()], 'one app switched off');
+                p.key(10009);
+                html = p.html('sheet');
+                if (html.indexOf('data-opt="autoUpdateApps"') < 0) fail('RETURN on the list did not go back to Settings');
+                if (html.indexOf('2 of the 3 apps on this TV.') < 0) fail('the line does not count what is picked');
+                p.press('', { 'data-act': 'autoappsopen' });
+                p.press('', { 'data-act': 'autonone' });
+                eq([p.stored(SETTINGS).autoUpdateChosen, p.stored(SETTINGS).autoUpdateOnly], [true, []], 'None');
+                if (p.html('sheet').indexOf('class="sw on"') >= 0) fail('a switch is still on after None');
+                if (p.html('sheet').indexOf('None of the 3 apps on this TV') < 0) fail('the page does not say that nothing is picked');
+                p.press('', { 'data-opt': 'auto:' + M });
+                eq(p.stored(SETTINGS).autoUpdateOnly, [M], 'one app switched on after None');
+                p.key(10009); p.key(10009);
+                ticks(p, 5, function () {
+                    eq(pkgs(p), ['MoonPkg001'], 'what installs by itself with one app picked');
+                    p.press('gear');
                     p.settle(function () {
-                        eq(p.stored(SETTINGS).autoUpdateOnly, [M], 'the app that was switched on');
-                        if (p.html('sheet').indexOf('updated by itself') < 0) fail('its line does not say that it is updated by itself');
-                        p.key(10009);
-                        html = p.html('sheet');
-                        if (html.indexOf('data-opt="autoUpdateApps"') < 0) fail('RETURN on the list did not go back to Settings');
-                        if (html.indexOf('1 of the 3 apps on this TV is updated by itself.') < 0) fail('the line does not count what is picked');
-                        p.sent.length = 0;
-                        ticks(p, 1, function () {
-                            p.press('', { 'data-act': 'close' }); p.key(10009);
-                            ticks(p, 5, function () {
-                                eq(pkgs(p), ['MoonPkg001'], 'what installs by itself after that');
-                                p.press('gear');
-                                p.settle(function () {
-                                    p.press('', { 'data-act': 'autoappsopen' });
-                                    p.press('', { 'data-opt': 'auto:' + M });
-                                    p.settle(function () { eq(p.stored(SETTINGS).autoUpdateOnly, [], 'switched off again'); done(); });
-                                });
-                            });
-                        });
+                        p.press('', { 'data-act': 'autoappsopen' });
+                        p.press('', { 'data-act': 'autoall' });
+                        eq([p.stored(SETTINGS).autoUpdateChosen, p.stored(SETTINGS).autoUpdateOnly], [false, []], 'All');
+                        eq(p.html('sheet').split('class="sw on"').length - 1, 3, 'switches that are on after All');
+                        p.key(10009); p.key(10009);
+                        ticks(p, 5, function () { eq(pkgs(p), ['MoonPkg001', 'TubePkg001'], 'every update again after All'); done(); });
                     });
                 });
             });

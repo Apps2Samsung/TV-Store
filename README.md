@@ -590,19 +590,19 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
   0.3.45 that was only so once TV-Store had been opened. Not tested on a TV: whether the network
   and `sdbd` can be reached that early, and whether the service sees which apps run, is what the
   log (`auto: ...`) tells.
-- **Only update the apps I choose**: off by default; it shows right under **Update apps
-  automatically** once that is on, and does not need **Update while TV-Store is closed**. Off, every app on the TV that TV-Store can update is updated by itself. On, only the
-  apps that are switched on. A line under the switch, **Choose the apps**, says how many that
-  are and opens the list on a page of its own (RETURN goes back to Settings): the apps from the
-  catalog that are on this TV, each with its own switch, all off to start with. An app that is installed later stays off until it
-  is switched on there, so nothing is updated by itself that was not picked. For someone who
-  follows a few apps and wants only those to change without being asked. It holds while
-  TV-Store is open and while it is closed: an app that is not picked is not in the plan the
-  service gets, and the service installs nothing that is not in the plan. **Update** and
-  **Update all** under On the TV work for every app as before, and TV-Store itself goes by its
-  own switch. The picked apps are kept by their key in the catalog (`autoUpdateChosen` and
-  `autoUpdateOnly` in the settings in `localStorage`) and go into a backup with the other
-  settings.
+- **Choose the apps**: a line right under **Update apps automatically** once that is on. It
+  says which apps are updated by themselves and opens the list on a page of its own (RETURN goes
+  back to Settings): **All**, **None**, and the apps from the catalog that are on this TV, each
+  with its own switch. To start with it is All: every app TV-Store can update, also one that is
+  installed later. With an app switched off, or after None, only the apps that are switched on
+  are updated by themselves, and an app that is installed later stays off until it is switched
+  on there. For someone who follows a few apps and wants only those to change without being
+  asked. It does not need **Update while TV-Store is closed**, and it holds for both: an app
+  that is not picked is not in the plan the service gets, and the service installs nothing that
+  is not in the plan. **Update** and **Update all** under On the TV work for every app as
+  before, and TV-Store itself goes by its own switch. Kept in the settings in `localStorage`
+  (`autoUpdateChosen`: not All; `autoUpdateOnly`: the keys of the picked apps in the catalog),
+  and it goes into a backup with the other settings.
 - **Update TV-Store automatically**: off by default (#154). On, TV-Store installs its own update
   by itself when it is open and the catalog has a newer version: with its sheet, because TV-Store
   closes during the install. Open it again

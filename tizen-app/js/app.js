@@ -285,7 +285,7 @@
             // autoUpdateClosed (#158): the service looks for updates when the TV starts it, without this screen.
             if (typeof saved.autoUpdateClosed === 'boolean') s.autoUpdateClosed = saved.autoUpdateClosed;
             // autoUpdateChosen, autoUpdateOnly: only the apps the user picked are updated by
-            // themselves, by their key in the catalog. Off, every app is, as before.
+            // themselves, by their key in the catalog. Off, every app is (All under Choose the apps).
             if (typeof saved.autoUpdateChosen === 'boolean') s.autoUpdateChosen = saved.autoUpdateChosen;
             if (Array.isArray(saved.autoUpdateOnly)) s.autoUpdateOnly = saved.autoUpdateOnly.filter(function (k) { return typeof k === 'string' && k; });
         } catch (e) {}
@@ -2320,43 +2320,54 @@
         function two(n) { return (n < 10 ? '0' : '') + n; }
         return 'This TV last started TV-Store by itself on ' + at.getFullYear() + '-' + two(at.getMonth() + 1) + '-' + two(at.getDate()) + ' at ' + two(at.getHours()) + ':' + two(at.getMinutes()) + '.';
     }
-    // Which apps are updated by themselves: right under "Update apps automatically", which they
-    // belong to (after the switch for updates while closed they read as part of that one). A
-    // switch, and a line under it that opens the list on a
-    // page of its own. The list is every app from the catalog that is on this TV, so it has no
-    // place between the switches of Settings. Only with "Update apps automatically" on.
+    // Which apps are updated by themselves: a line right under "Update apps automatically", the one
+    // switch there is, that says which and opens the list on a page of its own (the list is every
+    // app from the catalog that is on this TV, so it has no place between the switches). There:
+    // All, None, and a switch per app. All is every app, also one that is installed later
+    // (autoUpdateChosen off). Anything else is the apps that are switched on and no other
+    // (autoUpdateChosen on, autoUpdateOnly their keys), so an app that comes later waits.
     function autoList() { return catalogApps.filter(function (x) { return !isSelf(x) && state(x).installed; }); }
-    function autoPicked(list) { return list.filter(function (x) { return settings.autoUpdateOnly.indexOf(x.key) >= 0; }).length; }
+    function autoPicked(list) { return list.filter(autoChosen).length; }
+    function autoSays(list) {
+        var n = autoPicked(list), m = list.length, apps = m === 1 ? ' app' : ' apps';
+        if (!settings.autoUpdateChosen) return m ? 'All ' + (m === 1 ? 'apps' : m + ' apps') + ' on this TV, and the ones you install later.' : 'All apps, also the ones you install later.';
+        if (!m) return 'No app from the catalog is on this TV yet; one you install stays off until you switch it on here.';
+        if (!n) return 'None of the ' + m + apps + ' on this TV, so nothing is updated by itself.';
+        return n + ' of the ' + m + apps + ' on this TV. An app you install later stays off until you switch it on here.';
+    }
     function autoRows() {
         if (!settings.autoUpdateApps) return '';
-        var h = '<div class="opt f" tabindex="0" data-k="opt:autoUpdateChosen" data-opt="autoUpdateChosen"><div class="ot"><div class="ont">Only update the apps I choose</div><div class="oh">'
-            + esc('Off: every app on this TV that TV-Store can update is updated by itself. On: only the apps you switch on under Choose the apps; an app you install later stays off until you switch it on there. It holds while TV-Store is open and while it is closed. TV-Store itself has its own switch below.')
-            + '</div></div><span class="sw' + (settings.autoUpdateChosen ? ' on' : '') + '"><i></i></span></div>';
-        if (!settings.autoUpdateChosen) return h;
-        var list = autoList(), n = autoPicked(list);
-        return h + '<div class="opt f" tabindex="0" data-k="autoappsopen" data-act="autoappsopen"><div class="ot"><div class="ont">Choose the apps</div><div class="oh">'
-            + esc(!list.length ? 'No app from the catalog is on this TV yet.' : n ? n + ' of the ' + list.length + (list.length === 1 ? ' app' : ' apps') + ' on this TV ' + (n === 1 ? 'is' : 'are') + ' updated by ' + (n === 1 ? 'itself.' : 'themselves.') : 'None of the ' + list.length + (list.length === 1 ? ' app' : ' apps') + ' on this TV is switched on, so nothing is updated by itself.')
-            + '</div></div>' + CHEV + '</div>';
+        return '<div class="opt f" tabindex="0" data-k="autoappsopen" data-act="autoappsopen"><div class="ot"><div class="ont">Choose the apps</div><div class="oh">'
+            + esc(autoSays(autoList())) + '</div></div>' + CHEV + '</div>';
     }
     function autoAppsHtml() {
-        var list = autoList(), n = autoPicked(list);
-        var h = '<div class="shd"><div style="min-width:0"><div class="nm">Choose the apps</div><div class="mt">' + esc(list.length ? n + ' of ' + list.length + ' updated by ' + (n === 1 ? 'itself' : 'themselves') : 'Updated by themselves') + '</div></div></div><div class="sbody vscroll">';
-        if (!list.length) return h + '<div class="notice info">' + esc('No app from the catalog is on this TV yet. Install one from the store and it is listed here.') + '</div></div>';
+        var list = autoList(), n = autoPicked(list), all = !settings.autoUpdateChosen, none = !all && !n;
+        var h = '<div class="shd"><div style="min-width:0"><div class="nm">Choose the apps</div><div class="mt">Updated by themselves</div></div></div><div class="sbody vscroll">'
+            + '<div class="btns" style="margin:12px 0 14px"><button class="btn' + (all ? ' primary' : '') + ' grow f" data-k="autoall" data-act="autoall">All</button>'
+            + '<button class="btn' + (none ? ' primary' : '') + ' grow f" data-k="autonone" data-act="autonone">None</button></div>'
+            + '<div class="hint" style="text-align:left;margin:0 0 16px">' + esc(autoSays(list)) + '</div>';
+        if (!list.length) return h + '</div>';
         h += '<div class="opts">';
         list.forEach(function (x) {
-            var st = state(x), on = settings.autoUpdateOnly.indexOf(x.key) >= 0;
+            var st = state(x), on = autoChosen(x);
             h += '<div class="opt f" tabindex="0" data-k="opt:auto:' + esc(x.key) + '" data-opt="auto:' + esc(x.key) + '"><div class="ot"><div class="ont">' + esc(x.name) + '</div><div class="oh">'
                 + esc((st.unknown ? 'On this TV' : 'v' + st.version + ' on this TV') + (on ? ', updated by itself.' : ', waits under On the TV until you press Update.'))
                 + '</div></div><span class="sw' + (on ? ' on' : '') + '"><i></i></span></div>';
         });
         return h + '</div></div>';
     }
-    function toggleAutoApp(key) {
-        var i = settings.autoUpdateOnly.indexOf(key);
-        if (i >= 0) settings.autoUpdateOnly.splice(i, 1); else settings.autoUpdateOnly.push(key);
+    function autoSet(chosen, only, focus) {
+        settings.autoUpdateChosen = chosen; settings.autoUpdateOnly = only;
         planDue = 0;
         saveSettings();
-        renderSheet(); focusKey('opt:auto:' + key);
+        renderSheet(); focusKey(focus);
+    }
+    function toggleAutoApp(key) {
+        // From All, one app switched off leaves the others that are on this TV.
+        var only = settings.autoUpdateChosen ? settings.autoUpdateOnly.slice() : autoList().map(function (x) { return x.key; });
+        var i = only.indexOf(key);
+        if (i >= 0) only.splice(i, 1); else only.push(key);
+        autoSet(true, only, 'opt:auto:' + key);
     }
     function settingsHtml() {
         function opt(key, title, hint) {
@@ -2585,8 +2596,8 @@
         var v = st.latest || '', r = autoRecord(x, v);
         return (autoNow.hasOwnProperty(x.key) && autoNow[x.key] === v) || !!(r && r.n >= AUTO_TRIES);
     }
-    // The apps that may be updated by themselves. With "Only update the apps I choose" on that is
-    // the list from Settings and nothing else, so an app that is installed later waits until it is
+    // The apps that may be updated by themselves. Unless it is all of them (Choose the apps in
+    // Settings) that is the list from there and nothing else, so an app that is installed later waits until it is
     // switched on there. It holds for the screen's own round and for the plan the service gets
     // (the service installs nothing that is not in the plan). TV-Store itself has its own switch.
     function autoChosen(x) { return !settings.autoUpdateChosen || settings.autoUpdateOnly.indexOf(x.key) >= 0; }
@@ -2907,6 +2918,8 @@
             case 'updall': updateAll(); return;
             case 'backupopen': openBackup(); return;
             case 'autoappsopen': sheet = { mode: 'autoapps' }; renderSheet(true); return;
+            case 'autoall': autoSet(false, [], 'autoall'); return;
+            case 'autonone': autoSet(true, [], 'autonone'); return;
             case 'backupnew': endBackupOffer(); openBackup(); return;
             case 'backupclose': backupToSettings(); return;
             case 'restoreyes': if (!el.disabled) answerRestore(true); return;

@@ -104,7 +104,7 @@ test('TV-Store itself is in the plan only when it may update itself; a switch se
     });
 });
 
-test('the plan with "Only update the apps I choose": the picked apps, and TV-Store by its own switch', function (done) {
+test('the plan with apps chosen: the picked apps, and TV-Store by its own switch', function (done) {
     open({ storage: storage({ autoUpdateApps: true, autoUpdateSelf: true, autoUpdateClosed: true, autoUpdateChosen: true, autoUpdateOnly: ['p:litefin'] }) }, function (p) {
         ticks(p, 2, function () {
             eq(p.plans.length, 1, 'plans sent');
