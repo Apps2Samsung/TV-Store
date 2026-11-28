@@ -58,10 +58,10 @@
   .page{position:relative;flex:1;min-height:0;overflow:hidden;margin:16px -16px 0;padding:10px 16px 0;display:flex;flex-direction:column}
   .page>*{flex:none}
   .page>.rows{flex:1 1 auto;min-height:0;overflow:hidden;margin:-10px -16px 0 -18px;padding:14px 16px 0 18px}
-  /* the rows fade out under the Selected card: a strip of the ground colour over their top edge. A mask
-     on the rows themselves made the TV repaint the whole list on every move of the focus. */
-  .page>.fade{position:relative;height:0;z-index:2;pointer-events:none}
-  .page>.fade:after{content:"";position:absolute;left:-18px;right:-16px;top:-10px;height:14px;background:-webkit-linear-gradient(top,#0D1B2A,rgba(13,27,42,0));background:linear-gradient(to bottom,#0D1B2A,rgba(13,27,42,0))}
+  /* Nothing lies over the top edge of the rows (#126). A strip that went from the ground colour to
+     clear stood there, for the rows to fade out under the Selected card. Since the list moves by
+     whole rows and whole lines nothing passes under it, and a Tizen 6 TV drew the strip itself: as
+     two lines across the screen, one of which went away under the veil of a sheet. */
   .page>.tvcols{flex:1 1 auto;min-height:0}
 
   /* C1: greeting + the selected app */

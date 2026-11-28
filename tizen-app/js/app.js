@@ -72,7 +72,7 @@
     // TV's current IP and loopback too, and keeps whichever answers.
     var BASE = 'http://127.0.0.1:8077';
     var KOFI = 'https://ko-fi.com/patrickst';
-    var VERSION = '0.3.45';
+    var VERSION = '0.3.46';
     var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13, RETURN: 10009, ESC: 27, BACK: 8, IME_DONE: 65376, IME_CANCEL: 65385 };
 
     // What the manifest providers are called; resolved.json carries only their ids.
@@ -1675,8 +1675,13 @@
     }
     // Where the rows stand, to put them back after the page is built again: an install that ends
     // changes a badge, and the row under the focus should not jump back to its first card for that.
+    // Only into the list they were taken from: rowsMode is the category and the search the page on
+    // screen was built for. Read from chip and query, which have changed by the time the page is
+    // built again, it always matched, and Show all from a row further down opened the category
+    // moved up by as much, through its first line of cards.
+    var rowsMode = '';
     function rowsPlace() {
-        var rows = $('rows'), at = { mode: chip + '|' + query, top: 0, strips: {} };
+        var rows = $('rows'), at = { mode: rowsMode, top: 0, strips: {} };
         if (!rows) return null;
         at.top = rows.scrollTop;
         Array.prototype.forEach.call(rows.querySelectorAll('.strip'), function (s) { var id = s.getAttribute('data-row'); if (id && s.scrollLeft) at.strips[id] = s.scrollLeft; });
@@ -1787,7 +1792,7 @@
             var cats = CATEGORY_ORDER.filter(function (c) { return apps.some(function (x) { return x.category === c; }); });
             h += '<div class="chips"><span class="chip f' + (chip === 'all' ? ' on' : '') + '" tabindex="0" data-k="chip:all" data-chip="all">All</span>'
                 + cats.map(function (c) { return '<span class="chip f' + (chip === c ? ' on' : '') + '" tabindex="0" data-k="chip:' + c + '" data-chip="' + c + '">' + esc(catName(c)) + '</span>'; }).join('') + '</div>';
-            var open = '<div class="fade"></div><div class="rows vscroll" id="rows">';
+            var open = '<div class="rows vscroll" id="rows">';
             h += srcChips();
             if (chip === 'all') {
                 h += open;
@@ -1809,7 +1814,7 @@
             var found = apps.filter(function (x) { return x.name.toLowerCase().indexOf(q) >= 0 || (x.description || '').toLowerCase().indexOf(q) >= 0 || (x.author || '').toLowerCase().indexOf(q) >= 0; });
             if (found.length && found.indexOf(hover) < 0) hover = found[0];
             h += '<div class="hero"><div class="greet"><h1>Search</h1><p>' + esc(found.length ? found.length + (found.length === 1 ? ' app matches' : ' apps match') + ' \u201c' + query + '\u201d, by name, description or developer.' : 'Nothing matches \u201c' + query + '\u201d.') + '</p></div>' + SEL + '</div>'
-                + (found.length ? shead('Results for “' + query + '”', found.length) : '') + '<div class="fade"></div><div class="rows vscroll" id="rows">';
+                + (found.length ? shead('Results for “' + query + '”', found.length) : '') + '<div class="rows vscroll" id="rows">';
             sel = selCard(found.length ? hover : null);
             // Apps the catalog took out (#87) answer too, after the results, without an install.
             var gq = goneMatches(q);
@@ -1830,6 +1835,7 @@
         pageEl.innerHTML = h.replace(SEL, function () { return sel; });
         fitRows();
         putRowsBack(at);
+        rowsMode = chip + '|' + query;
     }
 
     function goneCard(g) {

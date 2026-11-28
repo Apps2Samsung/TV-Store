@@ -1,6 +1,8 @@
 /* What the store page is built as (#126), against the real page script (see page-harness.js):
  *   - a notice stands where the greeting stands, not as a line above it that takes a row's room;
  *   - one category (Show all) has its heading above the list, and the list holds lines of cards only;
+ *   - the list is put back where it stood when the same list is built again, and not when another
+ *     list takes its place (Show all from a row further down opened the category moved up);
  *   - an app without an icon in the catalog shows the icon it has on the TV once it is installed,
  *     and so does an app on the TV that is not in the catalog. */
 'use strict';
@@ -41,9 +43,15 @@ p.settle(function () {
     if (lite.indexOf('/icon/' + new Array(65).join('b')) < 0 || lite.indexOf('file://') >= 0) fail('an app with a catalog icon must show that one: ' + lite);
     if (tube.indexOf('<img') >= 0) fail('an app that is not on the TV and has no catalog icon shows an image: ' + tube);
 
+    // Where the list stands: the harness keeps one element per id, so what the page writes to the
+    // list's scrollTop is what it puts back; a list that is new starts at 0 on a TV by itself.
+    var rowsEl = p.el('rows'), top = 262, put = [];
+    Object.defineProperty(rowsEl, 'scrollTop', { get: function () { return top; }, set: function (v) { put.push(v); top = v; } });
     p.press('', { 'data-act': 'selfack' });
     p.settle(function () {
         html = p.html('page');
+        if (put.length !== 1 || put[0] !== 262) fail('the same list built again was not put back where it stood: ' + JSON.stringify(put));
+        put.length = 0;
         if (html.indexOf('data-act="selfack"') >= 0) fail('Got it left the notice');
         if (!/Good (morning|afternoon|evening)/.test(html)) fail('the greeting did not come back after Got it');
 
@@ -56,6 +64,7 @@ p.settle(function () {
             if (!(head < rows && rows < lines)) fail('the heading of one category is not above its list');
             if (count(html, 'class="shead"') !== 1) fail('one category must have one heading, has ' + count(html, 'class="shead"'));
             if (html.indexOf('Media servers &amp; players</span><span class="n">2</span>') < 0) fail('the heading does not name the category and its count');
+            if (put.length) fail('one category was moved to where the rows stood: ' + JSON.stringify(put));
 
             // On the TV: an app that is not in the catalog shows its own icon too.
             p.press('tabTv');
@@ -71,6 +80,7 @@ p.settle(function () {
                 console.log('PASS');
                 console.log('  a notice stands in the greeting\'s place, and Got it brings the greeting back');
                 console.log('  one category has its heading above a list of lines of cards');
+                console.log('  a list built again stands where it stood, another list starts at its top');
                 console.log('  apps without a catalog icon show the one they have on the TV');
                 process.exit(0);
             });
