@@ -121,7 +121,9 @@ function pagePart(p) {
     if (!isObj(p)) return out;
     if (isObj(p.settings)) {
         out.settings = {};
-        ['showAdult', 'showNeedsHead', 'verboseLog', 'selfUpdate', 'autoUpdateApps', 'autoUpdateSelf', 'autoUpdateClosed'].forEach(function (k) { if (typeof p.settings[k] === 'boolean') out.settings[k] = p.settings[k]; });
+        ['showAdult', 'showNeedsHead', 'verboseLog', 'selfUpdate', 'autoUpdateApps', 'autoUpdateSelf', 'autoUpdateClosed', 'autoUpdateChosen'].forEach(function (k) { if (typeof p.settings[k] === 'boolean') out.settings[k] = p.settings[k]; });
+        // The apps picked for updates by themselves: their keys in the catalog.
+        if (Array.isArray(p.settings.autoUpdateOnly)) out.settings.autoUpdateOnly = p.settings.autoUpdateOnly.filter(function (k) { return typeof k === 'string' && k && k.length <= 200; }).slice(0, 500);
         if (typeof p.settings.hideSelfNotice === 'string') out.settings.hideSelfNotice = p.settings.hideSelfNotice.slice(0, 20);
     }
     if (Array.isArray(p.pins)) {

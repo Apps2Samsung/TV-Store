@@ -8,6 +8,9 @@
  *     has a newer one.
  *   - Update all pressed while such an update runs lines the rest up behind it, without the app
  *     that is installing, and what was lined up still installs when the automatic update fails.
+ *   - "Only update the apps I choose": only the apps switched on in Settings are installed by
+ *     themselves, none while none is picked, and TV-Store's own switch is not touched by it. The
+ *     switch and the list show only with "Update apps automatically" on.
  *   - "Update TV-Store automatically": TV-Store's own update goes first, with its sheet, as a
  *     self-update, once per version, and not while the remote is in use. */
 'use strict';
@@ -204,6 +207,61 @@ test('TV-Store itself: only with its own switch, and not while the remote is in 
                     var s = on(false, true); s[TRIED] = { 'p:tv-store': { v: '9.9.9', n: 3 } };
                     open({ storage: s }, function (p3) {
                         ticks(p3, 3, function () { eq(pkgs(p3), [], 'a version of TV-Store that was tried before'); done(); });
+                    });
+                });
+            });
+        });
+    });
+});
+
+test('only the apps I choose: the picked ones, none while none is picked, TV-Store by its own switch', function (done) {
+    var st = {}; st[SETTINGS] = { autoUpdateApps: true, autoUpdateChosen: true, autoUpdateOnly: [T] };
+    open({ storage: st }, function (p) {
+        ticks(p, 5, function () {
+            eq(pkgs(p), ['TubePkg001'], 'only the app that was picked');
+            var none = {}; none[SETTINGS] = { autoUpdateApps: true, autoUpdateSelf: true, autoUpdateChosen: true, autoUpdateOnly: [] };
+            open({ storage: none }, function (q) {
+                ticks(q, 5, function () {
+                    eq(pkgs(q), ['A2STVStore'], 'no app while none is picked, TV-Store by its own switch');
+                    done();
+                });
+            });
+        });
+    });
+});
+
+test('only the apps I choose: the switch and the list in Settings', function (done) {
+    open({}, function (p) {
+        p.press('gear');
+        p.settle(function () {
+            if (p.html('sheet').indexOf('data-opt="autoUpdateChosen"') >= 0) fail('the switch shows while apps are not updated by themselves');
+            p.press('', { 'data-opt': 'autoUpdateApps' });
+            p.settle(function () {
+                var html = p.html('sheet');
+                if (html.indexOf('data-opt="autoUpdateChosen"') < 0) fail('no switch with "Update apps automatically" on');
+                if (html.indexOf('data-opt="auto:') >= 0) fail('the list shows before its switch is on');
+                p.press('', { 'data-opt': 'autoUpdateChosen' });
+                p.settle(function () {
+                    html = p.html('sheet');
+                    [M, T, 'p:litefin'].forEach(function (k) { if (html.indexOf('data-opt="auto:' + k + '"') < 0) fail('the list has no ' + k); });
+                    if (html.indexOf('data-opt="auto:' + S + '"') >= 0) fail('TV-Store is in the list of apps');
+                    eq(p.stored(SETTINGS).autoUpdateOnly, [], 'nothing is picked to start with');
+                    p.press('', { 'data-opt': 'auto:' + M });
+                    p.settle(function () {
+                        eq(p.stored(SETTINGS).autoUpdateOnly, [M], 'the app that was switched on');
+                        if (p.html('sheet').indexOf('updated by itself') < 0) fail('its line does not say that it is updated by itself');
+                        p.sent.length = 0;
+                        ticks(p, 1, function () {
+                            p.press('', { 'data-act': 'close' }); p.key(10009);
+                            ticks(p, 5, function () {
+                                eq(pkgs(p), ['MoonPkg001'], 'what installs by itself after that');
+                                p.press('gear');
+                                p.settle(function () {
+                                    p.press('', { 'data-opt': 'auto:' + M });
+                                    p.settle(function () { eq(p.stored(SETTINGS).autoUpdateOnly, [], 'switched off again'); done(); });
+                                });
+                            });
+                        });
                     });
                 });
             });

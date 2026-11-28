@@ -104,6 +104,16 @@ test('TV-Store itself is in the plan only when it may update itself; a switch se
     });
 });
 
+test('the plan with "Only update the apps I choose": the picked apps, and TV-Store by its own switch', function (done) {
+    open({ storage: storage({ autoUpdateApps: true, autoUpdateSelf: true, autoUpdateClosed: true, autoUpdateChosen: true, autoUpdateOnly: ['p:litefin'] }) }, function (p) {
+        ticks(p, 2, function () {
+            eq(p.plans.length, 1, 'plans sent');
+            eq(p.plans[0].items.map(function (i) { return i.key; }).sort(), ['p:litefin', 'p:tv-store'], 'the apps in the plan');
+            done();
+        });
+    });
+});
+
 test('what the service installed while TV-Store was closed: written down, said once, not installed again', function (done) {
     var tv = onTv(); tv.MoonPkg001 = '1.1.0';   // the service updated both; Jellyfin's package says 0.1.0 as ever
     var w = {}; w[WEB] = { JellyPkg01: { key: 'p:jelly', file: 'Jellyfin.wgt', web: '10.10.7' } };

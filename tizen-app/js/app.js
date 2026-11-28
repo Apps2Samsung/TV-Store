@@ -72,7 +72,7 @@
     // TV's current IP and loopback too, and keeps whichever answers.
     var BASE = 'http://127.0.0.1:8077';
     var KOFI = 'https://ko-fi.com/patrickst';
-    var VERSION = '0.3.46';
+    var VERSION = '0.3.47';
     var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13, RETURN: 10009, ESC: 27, BACK: 8, IME_DONE: 65376, IME_CANCEL: 65385 };
 
     // What the manifest providers are called; resolved.json carries only their ids.
@@ -272,7 +272,7 @@
         // install by themselves (#154), both off by default. selfUpdate: the #41 switch, which
         // Settings no longer shows since autoUpdateSelf took its place. One that was on is kept
         // (Update under On the TV still works for TV-Store) until autoUpdateSelf is set either way.
-        var s = { showAdult: false, showNeedsHead: true, verboseLog: false, hideSelfNotice: '', selfUpdate: false, autoUpdateApps: false, autoUpdateSelf: false, autoUpdateClosed: false };
+        var s = { showAdult: false, showNeedsHead: true, verboseLog: false, hideSelfNotice: '', selfUpdate: false, autoUpdateApps: false, autoUpdateSelf: false, autoUpdateClosed: false, autoUpdateChosen: false, autoUpdateOnly: [] };
         try {
             var saved = JSON.parse(window.localStorage.getItem(SETTINGS_KEY) || '{}');
             if (typeof saved.showAdult === 'boolean') s.showAdult = saved.showAdult;
@@ -284,6 +284,10 @@
             if (typeof saved.autoUpdateSelf === 'boolean') s.autoUpdateSelf = saved.autoUpdateSelf;
             // autoUpdateClosed (#158): the service looks for updates when the TV starts it, without this screen.
             if (typeof saved.autoUpdateClosed === 'boolean') s.autoUpdateClosed = saved.autoUpdateClosed;
+            // autoUpdateChosen, autoUpdateOnly: only the apps the user picked are updated by
+            // themselves, by their key in the catalog. Off, every app is, as before.
+            if (typeof saved.autoUpdateChosen === 'boolean') s.autoUpdateChosen = saved.autoUpdateChosen;
+            if (Array.isArray(saved.autoUpdateOnly)) s.autoUpdateOnly = saved.autoUpdateOnly.filter(function (k) { return typeof k === 'string' && k; });
         } catch (e) {}
         return s;
     })();
@@ -2315,6 +2319,31 @@
         function two(n) { return (n < 10 ? '0' : '') + n; }
         return 'This TV last started TV-Store by itself on ' + at.getFullYear() + '-' + two(at.getMonth() + 1) + '-' + two(at.getDate()) + ' at ' + two(at.getHours()) + ':' + two(at.getMinutes()) + '.';
     }
+    // Which apps are updated by themselves: a switch, and under it the apps on this TV that
+    // TV-Store installed or can update, each with its own. Only with "Update apps automatically" on.
+    function autoRows() {
+        if (!settings.autoUpdateApps) return '';
+        var h = '<div class="opt f" tabindex="0" data-k="opt:autoUpdateChosen" data-opt="autoUpdateChosen"><div class="ot"><div class="ont">Only update the apps I choose</div><div class="oh">'
+            + esc('Off: every app on this TV that TV-Store can update is updated by itself. On: only the apps switched on below; an app you install later stays off until you switch it on here. TV-Store itself has its own switch above.')
+            + '</div></div><span class="sw' + (settings.autoUpdateChosen ? ' on' : '') + '"><i></i></span></div>';
+        if (!settings.autoUpdateChosen) return h;
+        var list = catalogApps.filter(function (x) { return !isSelf(x) && state(x).installed; });
+        if (!list.length) return h + '<div class="opt"><div class="ot"><div class="oh">' + esc('No app from the catalog is on this TV yet.') + '</div></div></div>';
+        list.forEach(function (x) {
+            var st = state(x), on = settings.autoUpdateOnly.indexOf(x.key) >= 0;
+            h += '<div class="opt f" tabindex="0" data-k="opt:auto:' + esc(x.key) + '" data-opt="auto:' + esc(x.key) + '"><div class="ot"><div class="ont">' + esc(x.name) + '</div><div class="oh">'
+                + esc((st.unknown ? 'On this TV' : 'v' + st.version + ' on this TV') + (on ? ', updated by itself.' : ', waits under On the TV until you press Update.'))
+                + '</div></div><span class="sw' + (on ? ' on' : '') + '"><i></i></span></div>';
+        });
+        return h;
+    }
+    function toggleAutoApp(key) {
+        var i = settings.autoUpdateOnly.indexOf(key);
+        if (i >= 0) settings.autoUpdateOnly.splice(i, 1); else settings.autoUpdateOnly.push(key);
+        planDue = 0;
+        saveSettings();
+        renderSheet(); focusKey('opt:auto:' + key);
+    }
     function settingsHtml() {
         function opt(key, title, hint) {
             return '<div class="opt f" tabindex="0" data-k="opt:' + key + '" data-opt="' + key + '"><div class="ot"><div class="ont">' + esc(title) + '</div><div class="oh">' + esc(hint) + '</div></div>'
@@ -2328,7 +2357,7 @@
             + browserRow() + relayRow() + devicesRows() + installerRow()
             + opt('autoUpdateApps', 'Update apps automatically', 'Off: updates wait under On the TV until you press Update. On: while TV-Store is open it installs the updates for the apps on this TV by itself, one after another. An app that needs a phone or PC, or a choice from you, still waits there.')
             + opt('autoUpdateSelf', 'Update TV-Store automatically', 'Off: TV-Store only says that a newer version is out; update it from Apps2Samsung on a phone or PC. On: when TV-Store is open and a newer version is out, it installs it by itself. It closes during the install; open it again after a minute and it says whether the update landed.')
-            + opt('autoUpdateClosed', 'Update while TV-Store is closed (experiment)', 'Off: updates are only installed while TV-Store is open. On: TV-Store also looks for updates when the TV starts, without being opened, and installs them without a message. It only does something when one of the two switches above is on. Whether a TV starts TV-Store by itself differs per model. ' + bootLine()) + '</div>' + browserNotice() + relayNotice() + installerNotice();
+            + opt('autoUpdateClosed', 'Update while TV-Store is closed (experiment)', 'Off: updates are only installed while TV-Store is open. On: TV-Store also looks for updates when the TV starts, without being opened, and installs them without a message. It only does something when one of the two switches above is on. Whether a TV starts TV-Store by itself differs per model. ' + bootLine()) + autoRows() + '</div>' + browserNotice() + relayNotice() + installerNotice();
         if (confirmingAdult) h += '<div class="notice">These apps are meant for adults only. Turn them on only if you are 18 or older.</div>'
             + '<div class="btns" style="margin-top:16px"><button class="btn primary grow f" data-k="adultyes" data-act="adultyes" data-default>I am 18 or older</button><button class="btn f" data-k="adultno" data-act="adultno">Cancel</button></div>';
         var certList = (ready && ready.certificates ? ready.certificates.map(function (c) { return c.name + (c.level === 'partner' || c.level === 'public' ? ' (' + levelName(c.level) + ')' : ''); }) : (ready && ready.certNames) || []);
@@ -2542,6 +2571,11 @@
         var v = st.latest || '', r = autoRecord(x, v);
         return (autoNow.hasOwnProperty(x.key) && autoNow[x.key] === v) || !!(r && r.n >= AUTO_TRIES);
     }
+    // The apps that may be updated by themselves. With "Only update the apps I choose" on that is
+    // the list from Settings and nothing else, so an app that is installed later waits until it is
+    // switched on there. It holds for the screen's own round and for the plan the service gets
+    // (the service installs nothing that is not in the plan). TV-Store itself has its own switch.
+    function autoChosen(x) { return !settings.autoUpdateChosen || settings.autoUpdateOnly.indexOf(x.key) >= 0; }
     function autoUpdate() {
         if (!settings.autoUpdateApps && !settings.autoUpdateSelf) return;
         if (!storeComplete || loading || problem || reviving || !armed() || sheet || (job && job.running) || queue.length || catalogChanged || document.hidden || typing() || tvAppsAsking) return;
@@ -2558,7 +2592,7 @@
             }
         }
         if (!settings.autoUpdateApps) return;
-        var next = updatable().filter(function (x) { var st = state(x); return fits(x.variants[st.variant]) && !autoWaits(x, st); })[0];
+        var next = updatable().filter(function (x) { var st = state(x); return autoChosen(x) && fits(x.variants[st.variant]) && !autoWaits(x, st); })[0];
         if (next) { var ns = state(next); autoMark(next, ns.latest); startInstall(next, ns.variant, { auto: true, quiet: true }); }
     }
 
@@ -2580,7 +2614,7 @@
             var st = state(x);
             if (!st.installed || !st.known || st.unknown) return;
             var v = x.variants[st.variant], me = isSelf(x);
-            if (v.upload || v.needsHead || !fits(v) || signPlan(v).missing || settingsBlock(x, v, st) || (me && !selfCan(x))) return;
+            if (v.upload || v.needsHead || !fits(v) || signPlan(v).missing || settingsBlock(x, v, st) || (me ? !selfCan(x) : !autoChosen(x))) return;
             items.push({ key: x.key, name: x.name, file: v.file, source: x.source || 'official', packageId: tvPkg(v), appId: tvAppId(v) || '', have: st.version || '', web: !!v.webVersion, certLevel: certChoiceOf(v), self: me });
         });
         return { settings: { apps: !!settings.autoUpdateApps, self: !!settings.autoUpdateSelf, closed: !!settings.autoUpdateClosed }, tizen: tvTizen, tvApps: tvNames, items: items };
@@ -2775,6 +2809,7 @@
     function toggle(key) {
         if (key === 'relay') { toggleRelay(); return; }
         if (key.indexOf('allow:') === 0) { toggleAllow(key.slice(6)); return; }
+        if (key.indexOf('auto:') === 0) { toggleAutoApp(key.slice(5)); return; }
         if (key === 'installer') { toggleInstaller(); return; }
         if (key === 'browser') { toggleBrowser(); return; }
         if (key === 'showAdult' && !settings.showAdult) { confirmingAdult = true; renderSheet(true); return; }
