@@ -10,7 +10,8 @@
  *     that is installing, and what was lined up still installs when the automatic update fails.
  *   - "Only update the apps I choose": only the apps switched on in Settings are installed by
  *     themselves, none while none is picked, and TV-Store's own switch is not touched by it. The
- *     switch and the list show only with "Update apps automatically" on.
+ *     switch shows only with "Update apps automatically" on, and the list is a page of its own
+ *     behind a line under the switch: RETURN there goes back to Settings.
  *   - "Update TV-Store automatically": TV-Store's own update goes first, with its sheet, as a
  *     self-update, once per version, and not while the remote is in use. */
 'use strict';
@@ -240,9 +241,17 @@ test('only the apps I choose: the switch and the list in Settings', function (do
                 var html = p.html('sheet');
                 if (html.indexOf('data-opt="autoUpdateChosen"') < 0) fail('no switch with "Update apps automatically" on');
                 if (html.indexOf('data-opt="auto:') >= 0) fail('the list shows before its switch is on');
+                if (html.indexOf('data-act="autoappsopen"') >= 0) fail('the line to the list shows before its switch is on');
                 p.press('', { 'data-opt': 'autoUpdateChosen' });
                 p.settle(function () {
                     html = p.html('sheet');
+                    if (html.indexOf('data-opt="auto:') >= 0) fail('the list stands between the switches of Settings');
+                    var at = function (k) { return html.indexOf('data-k="' + k + '"'); };
+                    if (!(at('opt:autoUpdateApps') < at('opt:autoUpdateChosen') && at('opt:autoUpdateChosen') < at('autoappsopen') && at('autoappsopen') < at('opt:autoUpdateSelf') && at('opt:autoUpdateSelf') < at('opt:autoUpdateClosed'))) fail('the switch and its line do not stand right under "Update apps automatically"');
+                    if (html.indexOf('None of the 3 apps on this TV is switched on') < 0) fail('the line does not say that nothing is picked');
+                    p.press('', { 'data-act': 'autoappsopen' });
+                    html = p.html('sheet');
+                    if (html.indexOf('data-opt="autoUpdateApps"') >= 0) fail('the list is not a page of its own');
                     [M, T, 'p:litefin'].forEach(function (k) { if (html.indexOf('data-opt="auto:' + k + '"') < 0) fail('the list has no ' + k); });
                     if (html.indexOf('data-opt="auto:' + S + '"') >= 0) fail('TV-Store is in the list of apps');
                     eq(p.stored(SETTINGS).autoUpdateOnly, [], 'nothing is picked to start with');
@@ -250,6 +259,10 @@ test('only the apps I choose: the switch and the list in Settings', function (do
                     p.settle(function () {
                         eq(p.stored(SETTINGS).autoUpdateOnly, [M], 'the app that was switched on');
                         if (p.html('sheet').indexOf('updated by itself') < 0) fail('its line does not say that it is updated by itself');
+                        p.key(10009);
+                        html = p.html('sheet');
+                        if (html.indexOf('data-opt="autoUpdateApps"') < 0) fail('RETURN on the list did not go back to Settings');
+                        if (html.indexOf('1 of the 3 apps on this TV is updated by itself.') < 0) fail('the line does not count what is picked');
                         p.sent.length = 0;
                         ticks(p, 1, function () {
                             p.press('', { 'data-act': 'close' }); p.key(10009);
@@ -257,6 +270,7 @@ test('only the apps I choose: the switch and the list in Settings', function (do
                                 eq(pkgs(p), ['MoonPkg001'], 'what installs by itself after that');
                                 p.press('gear');
                                 p.settle(function () {
+                                    p.press('', { 'data-act': 'autoappsopen' });
                                     p.press('', { 'data-opt': 'auto:' + M });
                                     p.settle(function () { eq(p.stored(SETTINGS).autoUpdateOnly, [], 'switched off again'); done(); });
                                 });

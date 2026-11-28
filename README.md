@@ -576,8 +576,8 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
   closed**; with it off no round runs. The service does not stop itself after a round: on newer
   TVs its process may not be its own, and how the screen gets a service back that let go of its
   port is not proven on a TV.
-- **Update while TV-Store is closed (experiment)**: off by default (#158). On, and with one of
-  the two switches around it on, the service looks for updates when the TV starts it, without
+- **Update while TV-Store is closed (experiment)**: off by default (#158). On, and with
+  **Update apps automatically** or **Update TV-Store automatically** on, the service looks for updates when the TV starts it, without
   anyone opening TV-Store, and installs them without a message (the round described above). For
   that `config.xml` asks the TV to start the service when the TV starts (`on-boot`). Whether a TV
   does so differs per model: some firmware drops the flag at install, and then this switch
@@ -590,10 +590,11 @@ Press **▲** at the top of the list to reach **Settings**. The switches are rem
   0.3.45 that was only so once TV-Store had been opened. Not tested on a TV: whether the network
   and `sdbd` can be reached that early, and whether the service sees which apps run, is what the
   log (`auto: ...`) tells.
-- **Only update the apps I choose**: off by default; it shows once **Update apps automatically**
-  is on. Off, every app on the TV that TV-Store can update is updated by itself. On, only the
-  apps switched on in the list under it: the apps from the catalog that are on this TV, each
-  with its own switch, all off to start with. An app that is installed later stays off until it
+- **Only update the apps I choose**: off by default; it shows right under **Update apps
+  automatically** once that is on, and does not need **Update while TV-Store is closed**. Off, every app on the TV that TV-Store can update is updated by itself. On, only the
+  apps that are switched on. A line under the switch, **Choose the apps**, says how many that
+  are and opens the list on a page of its own (RETURN goes back to Settings): the apps from the
+  catalog that are on this TV, each with its own switch, all off to start with. An app that is installed later stays off until it
   is switched on there, so nothing is updated by itself that was not picked. For someone who
   follows a few apps and wants only those to change without being asked. It holds while
   TV-Store is open and while it is closed: an app that is not picked is not in the plan the
